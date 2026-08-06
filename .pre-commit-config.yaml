@@ -48,3 +48,10 @@ repos:
         entry: scripts/gen-readme.py --check
         pass_filenames: false
         always_run: true
+
+      - id: python-tests
+        name: Python テスト (stdlib unittest)
+        language: system
+        entry: scripts/run-python-tests.py
+        pass_filenames: false
+        always_run: true
