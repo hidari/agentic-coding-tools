@@ -1,16 +1,19 @@
-# ~/.ssh/config — Windows VM 接続テンプレート
+# ~/.ssh/config — Windows VM 接続テンプレート (Parallels Desktop)
 #
-# <alias>         : 任意の SSH ホスト名エイリアス (例: winvm)
-# <vm>.vmwarevm   : VMware Fusion バンドル名 (拡張子 .vmwarevm)
-# <DOMAIN>\<user> : Windows のドメイン\ユーザー名 (または ローカルユーザー名)
+# <alias>  : 任意の SSH ホスト名エイリアス (例: winvm)
+# <vm>     : Parallels の VM 名または UUID (prlctl list -a で確認)
+# <user>   : Windows のローカルユーザー名
 # ~/.ssh/id_ed25519_winvm : VM へのログイン用秘密鍵
 
 Host <alias>
-    User <DOMAIN>\<user>
+    User <user>
     IdentityFile ~/.ssh/id_ed25519_winvm
     IdentitiesOnly yes
-    # NAT DHCP の IP を winvm resolve-ip で動的解決する
-    ProxyCommand sh -c 'exec nc "$(winvm resolve-ip --vmx "$HOME/Virtual Machines/<vm>.vmwarevm/<vm>.vmx")" 22'
+    # IP は winvm resolve-ip (prlctl 由来) で毎回解決する。
+    # Parallels は /etc/hosts に <vm名>.shared も書くが、そちらは Parallels が
+    # ホストの /etc/hosts を維持していることに依存する。prlctl を真実源にする方が
+    # 失敗したときの診断が明確になる (VM 未登録 / 停止中 / IP 未割当を区別できる)。
+    ProxyCommand sh -c 'exec nc "$(winvm resolve-ip --vm "<vm>")" 22'
     # HostKeyAlias で VM 再構築後の known_hosts ミスマッチを回避
     HostKeyAlias <alias>
     StrictHostKeyChecking accept-new

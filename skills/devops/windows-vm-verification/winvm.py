@@ -3,76 +3,370 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""windows-vm-verification: VMware Fusion 上の Windows VM を繋ぐ/直す/調べる/検証する generic CLI。"""
+"""windows-vm-verification: Parallels Desktop 上の Windows VM を繋ぐ/調べる/検証する generic CLI。"""
 from __future__ import annotations
 
 import argparse
+import ipaddress
+import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
-from datetime import datetime
+from dataclasses import dataclass
 from pathlib import Path
 
+# ---------------------------------------------------------------------------
+# prlctl の argv 組み立て
+# ---------------------------------------------------------------------------
 
-def extract_mac_from_vmx(vmx_text: str) -> str | None:
-    """`.vmx` 本文から NIC MAC を小文字で返す (generatedAddress 優先、無ければ address)。"""
-    for key in ("ethernet0.generatedAddress", "ethernet0.address"):
-        m = re.search(rf'^\s*{re.escape(key)}\s*=\s*"([^"]+)"', vmx_text, re.MULTILINE)
-        if m:
-            return m.group(1).strip().lower()
+
+def prlctl_list_argv() -> list[str]:
+    """全 VM を JSON で列挙する argv。
+
+    `-f` が無いと `ip_configured` フィールド自体が出ず、`-j` が無いと人間向けの
+    表形式になって text-parse に逆戻りする。両方必要。
+    """
+    return ["prlctl", "list", "-a", "-f", "-j"]
+
+
+def prlctl_info_argv(vm: str) -> list[str]:
+    """1 台の詳細情報を出す argv (JSON 出力は無いので text を parse する)。"""
+    return ["prlctl", "list", "-i", vm]
+
+
+def prlctl_exec_argv(vm: str, command: list[str]) -> list[str]:
+    """ゲスト内でコマンドを実行する argv。
+
+    コマンドはトークンを分割したまま渡す。1 つの文字列に連結して渡すと
+    exit 2 で無出力のまま黙って失敗する (Parallels Desktop 26.4.0 で実測)。
+    """
+    return ["prlctl", "exec", vm, *command]
+
+
+def run_capture(argv: list[str]) -> tuple[int, str, str]:
+    """argv を実行して (returncode, stdout, stderr) を返す。実行不能も戻り値で表す。"""
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True)
+    except OSError as e:
+        return 127, "", f"{argv[0]} を実行できません: {e}"
+    return p.returncode, p.stdout, p.stderr
+
+
+# ---------------------------------------------------------------------------
+# prlctl 出力の parse
+# ---------------------------------------------------------------------------
+
+
+def parse_vm_list(json_text: str) -> list[dict]:
+    """`prlctl list -a -f -j` の JSON をレコードのリストにする。
+
+    壊れた出力で例外を投げず「該当なし」に倒す。呼び出し側は必ず
+    「見つからなかった」経路を持つので、そこへ合流させる方が扱いが一様になる。
+    """
+    try:
+        data = json.loads(json_text)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [v for v in data if isinstance(v, dict)]
+
+
+def _normalize_uuid(value: str) -> str:
+    return value.strip().strip("{}").lower()
+
+
+def find_vm(vms: list[dict], identifier: str) -> dict | None:
+    """名前の完全一致、または UUID の一致 (大小無視・波括弧の有無を吸収) で VM を返す。
+
+    名前は部分一致させない。`prlctl` が受け付ける識別子と同じ集合に揃えることで、
+    このツールと `prlctl` を混ぜて使っても指す VM がずれない。
+    """
+    ident = (identifier or "").strip()
+    if not ident:
+        return None
+    for vm in vms:
+        if vm.get("name") == ident:
+            return vm
+    wanted = _normalize_uuid(ident)
+    for vm in vms:
+        if _normalize_uuid(str(vm.get("uuid", ""))) == wanted:
+            return vm
     return None
 
 
-def parse_latest_lease_ip(leases_text: str, mac: str) -> str | None:
-    """同一 MAC の最後の lease ブロックの IP を返す (lease は時系列追記、最後が現在値)。"""
-    mac = mac.lower()
-    current_ip: str | None = None
-    latest: str | None = None
-    for line in leases_text.splitlines():
-        s = line.strip()
-        if s.startswith("lease "):
-            current_ip = s.split()[1]
-        elif s.startswith("hardware ethernet"):
-            m = s.split()[2].rstrip(";").lower()
-            if m == mac:
-                latest = current_ip
-    return latest
+def pick_ipv4(ip_field: str) -> str | None:
+    """`ip_configured` フィールドから IPv4 を 1 つ返す。無ければ None。
+
+    このフィールドは形が 3 通りある (いずれも実測):
+      - 単一の IPv4              : "10.211.55.3"
+      - 停止中を表すダッシュ     : "-"
+      - `-o` 併用時の複数アドレス: "10.211.55.3  fdb2:... fe80::...   " (末尾に空白)
+    ダッシュや空白をそのまま IP として下流に渡さないことがこの関数の責務。
+    """
+    for token in (ip_field or "").split():
+        try:
+            ipaddress.IPv4Address(token)
+        except ValueError:
+            continue
+        return token
+    return None
 
 
-DEFAULT_LEASES = "/var/db/vmware/vmnet-dhcpd-vmnet8.leases"
+def parse_home_path(info_text: str) -> str | None:
+    """`prlctl list -i` の `Home:` 行からバンドルのパスを返す。
+
+    同じ出力に `Home path:` (= config.pvs のパス) が先に現れる。前方一致で
+    "Home" を拾うとそちらを掴むので、コロンまで含めて一致させる。
+    """
+    for line in info_text.splitlines():
+        if line.startswith("Home:"):
+            return line[len("Home:") :].strip()
+    return None
+
+
+_ISOLATED_RE = re.compile(r"<IsolatedVm>\s*([01])\s*</IsolatedVm>")
+
+
+def parse_isolated_flag(config_text: str) -> bool | None:
+    """config.pvs の `<IsolatedVm>` を bool で返す。要素が無ければ None。
+
+    「隔離されていない」と「読めなかった」を同じ値にしない。この区別を潰すと
+    診断が「未確認」を「健全」として報告してしまう。
+    """
+    m = _ISOLATED_RE.search(config_text)
+    if not m:
+        return None
+    return m.group(1) == "1"
+
+
+_TOOLS_RE = re.compile(r"^GuestTools:\s*state=(\S+)(?:\s+version=(\S+))?", re.MULTILINE)
+
+
+def parse_tools_state(info_text: str) -> tuple[str | None, str | None]:
+    """`prlctl list -i` の GuestTools 行から (state, version) を返す。"""
+    m = _TOOLS_RE.search(info_text)
+    if not m:
+        return None, None
+    return m.group(1), m.group(2)
+
+
+# ---------------------------------------------------------------------------
+# 共通
+# ---------------------------------------------------------------------------
 
 
 def _env_or(arg_value: str | None, env_key: str, default: str | None = None) -> str | None:
     return arg_value or os.environ.get(env_key) or default
 
 
-def cmd_resolve_ip(args: argparse.Namespace) -> int:
-    vmx = _env_or(args.vmx, "WINVM_VMX")
-    leases = _env_or(args.leases, "WINVM_LEASES", DEFAULT_LEASES)
-    if not vmx:
-        print("error: --vmx (または WINVM_VMX) が必要です", file=sys.stderr)
+def _load_vms(run) -> tuple[list[dict] | None, str | None]:
+    rc, out, err = run(prlctl_list_argv())
+    if rc != 0:
+        detail = err.strip() or out.strip() or f"rc={rc}"
+        return None, f"error: prlctl の VM 列挙に失敗しました: {detail}"
+    return parse_vm_list(out), None
+
+
+def _known_names(vms: list[dict]) -> str:
+    names = sorted(str(v.get("name", "")) for v in vms if v.get("name"))
+    return ", ".join(names) if names else "(登録済み VM なし)"
+
+
+# ---------------------------------------------------------------------------
+# resolve-ip
+# ---------------------------------------------------------------------------
+
+
+def cmd_resolve_ip(args: argparse.Namespace, *, run=run_capture) -> int:
+    vm_id = _env_or(args.vm, "WINVM_VM")
+    if not vm_id:
+        print("error: --vm (または WINVM_VM) が必要です", file=sys.stderr)
         return 2
-    try:
-        mac = extract_mac_from_vmx(Path(vmx).read_text(encoding="utf-8", errors="replace"))
-    except OSError as e:
-        print(f"error: {vmx} を開けません: {e}", file=sys.stderr)
+    vms, err = _load_vms(run)
+    if err:
+        print(err, file=sys.stderr)
         return 1
-    if not mac:
-        print(f"error: .vmx から MAC を導出できません: {vmx}", file=sys.stderr)
+    vm = find_vm(vms, vm_id)
+    if vm is None:
+        print(
+            f"error: VM が見つかりません: {vm_id} / 登録済み: {_known_names(vms)}",
+            file=sys.stderr,
+        )
         return 1
-    try:
-        ip = parse_latest_lease_ip(Path(leases).read_text(encoding="utf-8", errors="replace"), mac)
-    except OSError as e:
-        print(f"error: {leases} を開けません: {e}", file=sys.stderr)
-        return 1
-    if not ip:
-        print(f"error: MAC {mac} に一致する lease がありません (VM 未起動?)", file=sys.stderr)
+    status = str(vm.get("status", "unknown"))
+    ip = pick_ipv4(str(vm.get("ip_configured", "")))
+    if ip is None:
+        print(
+            f"error: IP を解決できません (status={status})。"
+            f'VM が起動していない場合は prlctl start "{vm.get("name", vm_id)}" で起動する',
+            file=sys.stderr,
+        )
         return 1
     print(ip)
     return 0
+
+
+# ---------------------------------------------------------------------------
+# doctor
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Check:
+    """診断 1 項目。`ok=None` は「確認できなかった」で、OK でも NG でもない。"""
+
+    label: str
+    observed: str
+    ok: bool | None = None
+    hint: str | None = None
+
+
+_MARK = {True: "[ OK ]", False: "[FAIL]", None: "[ -- ]"}
+
+
+def format_doctor_report(checks: list[Check]) -> str:
+    """各項目の観測値を必ず並べる。OK/NG だけの出力にしない。
+
+    「緑だから健全」ではなく「何をどう観測した結果その判定か」を読めるようにする。
+    """
+    width = max((len(c.label) for c in checks), default=0)
+    lines: list[str] = []
+    for c in checks:
+        lines.append(f"{_MARK[c.ok]} {c.label.ljust(width)} : {c.observed}")
+        if c.ok is False and c.hint:
+            lines.append(f"{' ' * 7}-> {c.hint}")
+    return "\n".join(lines)
+
+
+def doctor_exit_code(checks: list[Check]) -> int:
+    return 1 if any(c.ok is False for c in checks) else 0
+
+
+def _ssh_reachable(host: str) -> bool:
+    rc, _, _ = run_capture(
+        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, "exit"]
+    )
+    return rc == 0
+
+
+def collect_doctor_checks(
+    vm_id: str,
+    host: str | None = None,
+    *,
+    run=run_capture,
+    ssh_probe=_ssh_reachable,
+) -> list[Check]:
+    """VM が使える状態かをホスト側から観測する。各項目は観測値を持つ。"""
+    vms, err = _load_vms(run)
+    if err:
+        return [
+            Check(
+                "prlctl",
+                err.removeprefix("error: "),
+                False,
+                hint="Parallels Desktop が起動しているか、prlctl が PATH にあるか確認する",
+            )
+        ]
+    vm = find_vm(vms, vm_id)
+    if vm is None:
+        return [
+            Check(
+                "VM",
+                f"{vm_id} は未登録 / 登録済み: {_known_names(vms)}",
+                False,
+                hint="prlctl list -a で名前か UUID を確認する",
+            )
+        ]
+
+    name = str(vm.get("name", ""))
+    checks = [Check("VM", f"{name} ({vm.get('uuid', '')})", True)]
+
+    status = str(vm.get("status", "unknown"))
+    checks.append(Check("status", status, status == "running", hint=f'prlctl start "{name}"'))
+
+    ip = pick_ipv4(str(vm.get("ip_configured", "")))
+    checks.append(
+        Check(
+            "IP",
+            ip or "(未解決)",
+            ip is not None,
+            hint="VM を起動し Parallels Tools が動いているか確認する",
+        )
+    )
+
+    rc_info, info, _ = run(prlctl_info_argv(vm_id))
+    info = info if rc_info == 0 else ""
+
+    tools_state, tools_version = parse_tools_state(info)
+    checks.append(
+        Check(
+            "Parallels Tools",
+            " ".join(x for x in (tools_state, tools_version) if x) or "(未確認)",
+            None if tools_state is None else tools_state == "installed",
+            hint="Parallels のメニューから Parallels Tools を再インストールする",
+        )
+    )
+
+    isolated = _read_isolation(parse_home_path(info))
+    checks.append(
+        Check(
+            "host isolation",
+            {True: "on", False: "off", None: "(未確認)"}[isolated],
+            None if isolated is None else not isolated,
+            hint=f'prlctl set "{name}" --isolate-vm off',
+        )
+    )
+
+    rc_exec, out_exec, err_exec = run(prlctl_exec_argv(vm_id, ["cmd.exe", "/c", "ver"]))
+    checks.append(
+        Check(
+            "prlctl exec",
+            out_exec.strip() or err_exec.strip() or f"rc={rc_exec}",
+            rc_exec == 0,
+            hint="host isolation を off にし、Parallels Tools が動いているか確認する",
+        )
+    )
+
+    if host:
+        reachable = ssh_probe(host)
+        checks.append(
+            Check(
+                f"ssh {host}",
+                "到達" if reachable else "未到達",
+                reachable,
+                hint="sshd の稼働とファイアウォールの許可範囲を確認する",
+            )
+        )
+    return checks
+
+
+def _read_isolation(home: str | None) -> bool | None:
+    if not home:
+        return None
+    try:
+        text = (Path(home) / "config.pvs").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return parse_isolated_flag(text)
+
+
+def cmd_doctor(args: argparse.Namespace, *, run=run_capture, ssh_probe=_ssh_reachable) -> int:
+    vm_id = _env_or(args.vm, "WINVM_VM")
+    if not vm_id:
+        print("error: --vm (または WINVM_VM) が必要です", file=sys.stderr)
+        return 2
+    host = _env_or(args.host, "WINVM_HOST")
+    checks = collect_doctor_checks(vm_id, host, run=run, ssh_probe=ssh_probe)
+    print(format_doctor_report(checks))
+    return doctor_exit_code(checks)
+
+
+# ---------------------------------------------------------------------------
+# run (SSH ベース。ハイパーバイザに依存しない)
+# ---------------------------------------------------------------------------
 
 
 def files_to_sync(branch_delta: str, working_delta: str, untracked: str) -> list[str]:
@@ -87,11 +381,13 @@ def files_to_sync(branch_delta: str, working_delta: str, untracked: str) -> list
 
 
 def files_to_delete(branch_deleted: str, working_deleted: str) -> list[str]:
-    """diff_base..HEAD と working tree で削除されたファイルの和集合 (トリム/空行除去/重複排除/安定ソート)。
+    """diff_base..HEAD と working tree で削除されたファイルの和集合。
 
-    scp は追加/上書きしかできず、reset (`git checkout -- .`) は VM HEAD の tracked ファイルを
-    復元するため、ローカルで削除 (rename 含む) されたファイルは明示的に VM 側で消す必要がある。
-    消し漏れると VM 側 tsc/cargo が stale ファイルを拾い偽陰性になる。"""
+    scp は追加/上書きしかできず、reset (`git checkout -- .`) は VM HEAD の tracked
+    ファイルを復元するため、ローカルで削除 (rename 含む) されたファイルは明示的に
+    VM 側で消す必要がある。消し漏れると VM 側 tsc/cargo が stale ファイルを拾い
+    偽陰性になる。
+    """
     s: set[str] = set()
     for block in (branch_deleted, working_deleted):
         for line in block.splitlines():
@@ -113,8 +409,10 @@ def resolve_diff_base(vm_head: str, vm_head_known: bool, fallback: str) -> str:
 
 def parent_mkdir_commands(repo_win: str, files: list[str]) -> list[str]:
     """各ファイルの親ディレクトリを作る cmd コマンドのリストを返す (1 親 1 コマンド)。
-    cmd の `if ... & if ...` 連結は最初の if が偽だと連鎖全体が束縛され実行されないため、
-    親ごとに独立コマンドとして発行する (連結バグ回避)。"""
+
+    cmd の `if ... & if ...` 連結は最初の if が偽だと連鎖全体が束縛され実行されない
+    ため、親ごとに独立コマンドとして発行する (連結バグ回避)。
+    """
     parents: set[str] = set()
     for f in files:
         parent = str(Path(f).parent)
@@ -125,7 +423,9 @@ def parent_mkdir_commands(repo_win: str, files: list[str]) -> list[str]:
 
 def remote_delete_commands(repo_win: str, files: list[str]) -> list[str]:
     """削除ファイルを VM 側で消す cmd コマンドのリスト (1 ファイル 1 独立コマンド)。
-    parent_mkdir_commands と同じ理由で `&` 連結せず独立発行する。"""
+
+    parent_mkdir_commands と同じ理由で `&` 連結せず独立発行する。
+    """
     return [
         f'if exist "{repo_win}\\{to_windows_path(f)}" del /f /q "{repo_win}\\{to_windows_path(f)}"'
         for f in sorted(files)
@@ -183,7 +483,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     )
     diff_base = resolve_diff_base(vm_head, vm_head_known, base)
     if not vm_head_known:
-        print(f"警告: VM HEAD ({vm_head[:7]}) をローカル解決できず base={base} にフォールバック", file=sys.stderr)
+        print(
+            f"警告: VM HEAD ({vm_head[:7]}) をローカル解決できず base={base} にフォールバック",
+            file=sys.stderr,
+        )
 
     # --no-renames で rename を D+A に分解する (rename 検出されると --diff-filter=D が
     # 旧パスを拾えず、VM に stale ファイルが残って偽陰性になる)
@@ -229,8 +532,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0 if run_ssh(host, remote_exec_command(repo_win, remote_cmd)) else 1
 
 
+# ---------------------------------------------------------------------------
+# health (SSH ベース。ハイパーバイザに依存しない)
+# ---------------------------------------------------------------------------
+
+
 def build_health_powershell(check_tools: list[str], repo: str | None) -> str:
-    """ASCII ラベル + `[Console]::OutputEncoding=UTF8` を含み、指定 tool の `--version` チェック行を含む PowerShell 本文。"""
+    """ASCII ラベル + `[Console]::OutputEncoding=UTF8` を含む PowerShell 本文。"""
     tools = ", ".join(f"'{t}'" for t in check_tools)
     lines = [
         "$ErrorActionPreference = 'Continue'",
@@ -261,9 +569,11 @@ def build_health_powershell(check_tools: list[str], repo: str | None) -> str:
 
 def health_exec_command(remote: str) -> str:
     """転送した health .ps1 を pwsh(7) の -File で実行するコマンド。
+
     pwsh は RemoteSigned かつ scp 転送物には Mark-of-the-Web が付かないため
-    -ExecutionPolicy Bypass 無しで実行できる (WinPS 5.1 の Restricted を Bypass で
-    上書きする多層防御の穴を避ける。#119)。"""
+    `-ExecutionPolicy Bypass` 無しで実行できる。WinPS 5.1 は Restricted なので
+    同じスクリプトが弾かれる (実測)。Bypass で上書きすると多層防御に穴が空く。
+    """
     return f"pwsh -NoProfile -File {remote}"
 
 
@@ -274,7 +584,9 @@ def health_cleanup_command(remote: str) -> str:
 
 def pwsh_probe_command() -> str:
     """VM の PATH に pwsh(7) があるか判定する cmd.exe コマンド。
-    見つかれば exit 0、無ければ非 0。パス出力は抑制する。"""
+
+    見つかれば exit 0、無ければ非 0。パス出力は抑制する。
+    """
     return "where pwsh >nul 2>nul"
 
 
@@ -291,8 +603,8 @@ def cmd_health(args: argparse.Namespace, *, run=run_ssh) -> int:
         print(
             "error: VM 上で pwsh(7) を確認できませんでした "
             "(VM 未起動 / SSH 未到達、または pwsh 未導入の可能性)。"
-            "VM が起動していること・pwsh が PATH にあること "
-            "(winget install --id Microsoft.PowerShell) を確認してください",
+            "winvm doctor --vm <id> --host <alias> で切り分け、"
+            "pwsh が無ければ winget install --id Microsoft.PowerShell で導入する",
             file=sys.stderr,
         )
         return 1
@@ -314,61 +626,23 @@ def cmd_health(args: argparse.Namespace, *, run=run_ssh) -> int:
         Path(local).unlink(missing_ok=True)
 
 
-def find_stale_lock_dirs(bundle_dir: Path) -> list[Path]:
-    return sorted(p for p in bundle_dir.glob("*.lck") if p.is_dir())
-
-
-def _vmware_vmx_running() -> bool:
-    out = subprocess.run(["pgrep", "-f", "vmware-vmx"], capture_output=True, text=True)
-    return out.returncode == 0
-
-
-def cmd_recover(args: argparse.Namespace, *, vmware_running=_vmware_vmx_running) -> int:
-    vmx = _env_or(args.vmx, "WINVM_VMX")
-    if not vmx:
-        print("error: --vmx (または WINVM_VMX) が必要です", file=sys.stderr)
-        return 2
-    bundle = Path(vmx).parent
-    if vmware_running():
-        print("中止: vmware-vmx プロセスが稼働中です。VM を停止してから実行してください", file=sys.stderr)
-        return 1
-    locks = find_stale_lock_dirs(bundle)
-    if not locks:
-        print("stale ロックはありません")
-        return 0
-    # 既定は可逆 move。--delete 明示時のみ不可逆削除。
-    if args.delete:
-        for lk in locks:
-            if args.dry_run:
-                print(f"[dry-run] 削除対象: {lk}")
-                continue
-            shutil.rmtree(lk)
-            print(f"削除: {lk}")
-        return 0
-    backup_root = (
-        Path(args.backup)
-        if args.backup
-        else bundle / f".winvm-lck-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-    )
-    for lk in locks:
-        if args.dry_run:
-            print(f"[dry-run] 退避対象: {lk} -> {backup_root / lk.name}")
-            continue
-        backup_root.mkdir(parents=True, exist_ok=True)
-        dest = backup_root / lk.name
-        shutil.move(str(lk), str(dest))
-        print(f"退避: {lk} -> {dest}")
-    return 0
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="winvm", description="VMware Fusion Windows VM ops/verify")
+    p = argparse.ArgumentParser(prog="winvm", description="Parallels Windows VM ops/verify")
     sub = p.add_subparsers(dest="command", required=True)
 
-    sp = sub.add_parser("resolve-ip", help="VMware NAT lease から VM の現 IP を解決")
-    sp.add_argument("--vmx")
-    sp.add_argument("--leases")
+    sp = sub.add_parser("resolve-ip", help="prlctl から VM の現 IP を解決")
+    sp.add_argument("--vm", help="VM 名または UUID (env: WINVM_VM)")
     sp.set_defaults(func=cmd_resolve_ip)
+
+    dp = sub.add_parser("doctor", help="VM が使える状態かをホスト側から診断")
+    dp.add_argument("--vm", help="VM 名または UUID (env: WINVM_VM)")
+    dp.add_argument("--host", help="SSH 到達性も見る場合の ssh config エイリアス")
+    dp.set_defaults(func=cmd_doctor)
 
     rp = sub.add_parser("run", help="git 差分を scp 同期して remote コマンド実行")
     rp.add_argument("--host")
@@ -383,13 +657,6 @@ def build_parser() -> argparse.ArgumentParser:
     hp.add_argument("--repo")
     hp.add_argument("--check-tools", help="カンマ区切り (例: node,pnpm,cargo,rustc,git)")
     hp.set_defaults(func=cmd_health)
-
-    cp = sub.add_parser("recover", help="stale *.lck を除去し起動不能を解消")
-    cp.add_argument("--vmx")
-    cp.add_argument("--backup", help="退避先 (省略時はバンドル内の timestamp 付き .winvm-lck-backup-*)")
-    cp.add_argument("--delete", action="store_true", help="退避でなく不可逆削除")
-    cp.add_argument("--dry-run", action="store_true")
-    cp.set_defaults(func=cmd_recover)
 
     return p
 
