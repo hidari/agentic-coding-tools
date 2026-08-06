@@ -1,0 +1,25 @@
+# gitleaks 設定
+# 既定の secret 検出ルールを継承しつつ、macOS のローカルユーザー名を含む
+# 絶対パス (/Users/<name>) の漏洩を検出する custom ルールを追加する。
+# pre-commit (staged 検査) と CI の双方が本設定を使用する。
+# 既定ルールだけでは /Users/<name> は検査されないため、この custom ルールが必須である。
+title = "agentic-coding-tools gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "macos-user-path"
+description = "macOS のローカルユーザー名を含む絶対パス (/Users/<name>) の漏洩"
+regex = '''/Users/[a-z_][a-z0-9._-]*'''
+tags = ["pii", "path"]
+
+  # placeholder / 共有・CI 用のユーザー名は許可する。
+  # 境界 ([/."]|$) で /Users/user (許可) と /Users/userfoo (検出) を区別する。
+  [rules.allowlist]
+  description = "placeholder / 共有・CI 用パスは許可"
+  # secret==match (capture group 無し) だが、境界判定の意図を明示するため match を指定
+  regexTarget = "match"
+  regexes = [
+    '''/Users/(example|user|username|runner|shared)([/."]|$)''',
+  ]

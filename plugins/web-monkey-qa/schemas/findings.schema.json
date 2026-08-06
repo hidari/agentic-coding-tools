@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "web-monkey-qa findings",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["metadata", "findings", "statistics"],
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["date", "environment", "sections_run"],
+      "properties": {
+        "date": { "type": "string", "format": "date" },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "target"],
+          "properties": {
+            "kind": { "type": "string", "enum": ["local", "staging", "production"] },
+            "target": { "type": "string" }
+          }
+        },
+        "sections_run": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "fingerprint", "severity", "category", "url", "viewport", "signal", "repro_steps"],
+        "properties": {
+          "id": { "type": "string" },
+          "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{16}$" },
+          "severity": { "type": "string", "enum": ["High", "Medium", "Low"] },
+          "category": { "type": "string", "enum": ["console-error", "http-5xx", "http-4xx", "render-error", "layout-overflow", "broken-image", "dead-end"] },
+          "url": { "type": "string" },
+          "viewport": { "type": "string", "enum": ["desktop", "mobile"] },
+          "signal": { "type": "string" },
+          "repro_steps": { "type": "array", "items": { "type": "string" } },
+          "screenshot": { "type": "string" },
+          "issue_number": { "type": ["integer", "null"] }
+        }
+      }
+    },
+    "statistics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["high", "medium", "low"],
+      "properties": {
+        "high": { "type": "integer", "minimum": 0 },
+        "medium": { "type": "integer", "minimum": 0 },
+        "low": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

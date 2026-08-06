@@ -1,0 +1,16 @@
+# ~/.ssh/config — Windows VM 接続テンプレート
+#
+# <alias>         : 任意の SSH ホスト名エイリアス (例: winvm)
+# <vm>.vmwarevm   : VMware Fusion バンドル名 (拡張子 .vmwarevm)
+# <DOMAIN>\<user> : Windows のドメイン\ユーザー名 (または ローカルユーザー名)
+# ~/.ssh/id_ed25519_winvm : VM へのログイン用秘密鍵
+
+Host <alias>
+    User <DOMAIN>\<user>
+    IdentityFile ~/.ssh/id_ed25519_winvm
+    IdentitiesOnly yes
+    # NAT DHCP の IP を winvm resolve-ip で動的解決する
+    ProxyCommand sh -c 'exec nc "$(winvm resolve-ip --vmx "$HOME/Virtual Machines/<vm>.vmwarevm/<vm>.vmx")" 22'
+    # HostKeyAlias で VM 再構築後の known_hosts ミスマッチを回避
+    HostKeyAlias <alias>
+    StrictHostKeyChecking accept-new

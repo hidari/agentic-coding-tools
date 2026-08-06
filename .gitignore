@@ -1,0 +1,15 @@
+# 書き捨ての検証スクリプトと中間出力
+.cache/
+
+# Python の副産物 (skill が自前の venv を持つことがある)
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+
+# macOS
+.DS_Store
+
+# エディタ
+.idea/
+.vscode/

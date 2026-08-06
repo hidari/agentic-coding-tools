@@ -1,0 +1,11 @@
+{
+  "name": "dev-workflow",
+  "version": "0.2.0",
+  "description": "Hidari の個人開発ワークフロー skill バンドル (skills-only)。ブランチ運用 / in-repo issue 管理 / マージ前品質ゲート / 振り返りのルール化 / E2E 影響の静的検出 / コミットと PR 本文の作法 を集約。hooks/mcpServers/commands/agents を持たず install/runtime に自動実行コードを持たない。",
+  "author": {
+    "name": "Hidari"
+  },
+  "skills": [
+    "./skills"
+  ]
+}

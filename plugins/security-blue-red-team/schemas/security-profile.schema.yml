@@ -1,0 +1,193 @@
+---
+"$schema": "http://json-schema.org/draft-07/schema#"
+title: "Security Profile for security-blue-red-team plugin"
+type: object
+additionalProperties: true
+required:
+  - version
+  - product
+  - environment
+  - stack
+  - endpoints
+
+properties:
+  version:
+    type: string
+    pattern: "^[0-9]+\\.[0-9]+$"
+    description: "Profile schema version. Bumped on breaking changes."
+
+  product:
+    type: object
+    required: [name, repo]
+    properties:
+      name:
+        type: string
+        description: "Human-readable product name."
+      repo:
+        type: string
+        description: "Repository identifier (owner/name, URL, or local description)."
+      description:
+        type: string
+
+  environment:
+    type: object
+    required: [kind, allow_targets]
+    additionalProperties: true
+    properties:
+      kind:
+        type: string
+        enum: [local, staging, production]
+        description: "Environment classification. 'production' triggers immediate refusal in both agents."
+      allow_targets:
+        type: array
+        items: { type: string, format: uri }
+        description: "Allowlist of URLs the agent may send HTTP requests to. Empty array = no HTTP testing allowed."
+      deny_targets:
+        type: array
+        items: { type: string }
+        description: "Explicit denial list (advisory; kind/allow_targets is the enforced gate)."
+      basic_auth:
+        type: object
+        properties:
+          required_on:
+            type: array
+            items: { type: string, format: uri }
+          credential_source:
+            type: string
+            description: "Identifier for credential lookup (NOT the credential itself). e.g. '1password://...'."
+      rate_limits:
+        type: object
+        description: "INFORMATIONAL ONLY. The agent ignores these values and applies the immutable budget defined in its Safety constraints (20 req/test, 100ms interval, 5 concurrent, 10s timeout, 100 req/host total, 1 req/sec/host sustained). Listed here for profile authors to understand the enforced budget; modifying these values has no runtime effect."
+        properties:
+          max_requests_per_test: { type: integer, minimum: 1, default: 20 }
+          min_interval_ms:       { type: integer, minimum: 0, default: 100 }
+          max_concurrent:        { type: integer, minimum: 1, default: 5 }
+          per_request_timeout_seconds: { type: integer, minimum: 1, default: 10 }
+          max_requests_per_host: { type: integer, minimum: 1, default: 100 }
+          max_rate_per_host_rps: { type: integer, minimum: 1, default: 1 }
+      cleanup:
+        type: object
+        description: "Layer 3 cleanup command templates. Consumed by /security-cleanup to purge resources seeded during active testing. The agent never executes cleanup itself; it only records resolved commands into cleanup-queue.json. /security-cleanup re-validates environment.kind != production before executing any command."
+        required: [seed_id_prefix, commands]
+        additionalProperties: false
+        properties:
+          seed_id_prefix:
+            type: string
+            default: "security_redteam_"
+            description: "All seeded resource IDs MUST start with this prefix. Defense against accidental cleanup of non-test data."
+          commands:
+            type: object
+            description: "Map of seed_type → shell command template. Use '{seed_id}' as the placeholder; the agent substitutes it when recording cleanup-queue.json entries."
+            additionalProperties:
+              type: string
+
+  stack:
+    type: object
+    description: "Tech stack. Drives isolation check questions and threat intel queries. Free-form values; empty fields are skipped."
+    properties:
+      frontend:  { oneOf: [{ type: string }, { type: object }] }
+      backend:   { oneOf: [{ type: string }, { type: object }] }
+      database:  { oneOf: [{ type: string }, { type: object }] }
+      storage:   { oneOf: [{ type: string }, { type: object }] }
+      auth:      { oneOf: [{ type: string }, { type: object }] }
+      payments:  { oneOf: [{ type: string }, { type: object }] }
+      search:    { oneOf: [{ type: string }, { type: object }] }
+      cdn:       { oneOf: [{ type: string }, { type: object }] }
+
+  endpoints:
+    type: object
+    required: [auth_required, public]
+    additionalProperties: true
+    properties:
+      auth_required:
+        type: array
+        items: { oneOf: [{ type: string }, { type: object }] }
+      public:
+        type: array
+        items: { oneOf: [{ type: string }, { type: object }] }
+      webhook_signed:
+        type: array
+        items: { type: object }
+      internal_only:
+        type: array
+        items: { type: object }
+      discovery_hint:
+        type: object
+        description: "Hints (file paths) where router definitions live."
+
+  secrets_in_code_patterns:
+    type: array
+    items:
+      type: object
+      required: [id, regex, severity]
+      properties:
+        id:          { type: string }
+        regex:       { type: string }
+        severity:    { type: string, enum: [critical, high, medium, low, info] }
+        description: { type: string }
+        exclude_paths:
+          type: array
+          items: { type: string }
+
+  rls_tables:
+    oneOf:
+      - type: array
+        items: { type: string }
+      - type: object
+        properties:
+          source_of_truth: { type: string }
+          must_have_policy:
+            type: array
+            items: { type: string }
+          exempt:
+            type: array
+            items: { type: string }
+          verify_command: { type: string }
+
+  dependencies_audit_commands:
+    description: "Commands to run for dependency audit. Array (simple) or grouped object."
+    oneOf:
+      - type: array
+        items:
+          type: object
+          required: [name, command]
+          properties:
+            name:    { type: string }
+            command: { type: string }
+            cwd:     { type: string }
+            parse:   { type: string, description: "Parser hint: cargo_audit_json | pnpm_audit_json | text" }
+      - type: object
+        additionalProperties:
+          type: array
+
+  attack_surfaces_extra:
+    type: array
+    description: "Project-specific attack surfaces not covered by generic stack patterns."
+    items:
+      type: object
+      required: [id, title, layers]
+      properties:
+        id:    { type: string, pattern: "^[a-z0-9][a-z0-9-]*$" }
+        title: { type: string }
+        why_unique_to_this_product: { type: string }
+        attack_scenarios:
+          type: array
+          items: { type: string }
+        target_endpoints:
+          type: array
+          items: { type: object }
+        related_tables:
+          type: array
+          items: { type: string }
+        related_code_paths:
+          type: array
+          items: { type: string }
+        layers:
+          type: array
+          items: { type: integer, enum: [1, 2, 3, 4] }
+        check_hint: { type: string }
+
+  environment_isolation_checks:
+    type: object
+    description: "Pre-filled answers for isolation questions, keyed by stack subsystem (cloud_sql, supabase, etc.). Free-form; the agent reads .answer / .verify_command if present. Valid .answer values: 'separate' (staging is isolated from production) | 'shared' (staging shares state with production, agent will skip dependent layers) | 'unknown' (treated as 'unknown' status downstream). The agent maps these to isolation_check[].status as: separate→ok, shared→ng, unknown/missing→unknown."
+    additionalProperties: true

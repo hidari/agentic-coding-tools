@@ -1,0 +1,23 @@
+product: example-product
+environment:
+  kind: local            # local | staging | production (production は匿名 read-only を強制)
+  base_url_env: BASE_URL  # 値は op run 経由 env で注入 (YAML に URL/secret を書かない)
+  # http_auth:            # origin 全体が Basic 認証背後のとき (staging 等) のみ。値ではなく env 変数名を書く。Basic 認証が無い環境ではこのブロックごと省略する
+  #   username_env: BASIC_AUTH_USERNAME
+  #   password_env: BASIC_AUTH_PASSWORD
+auth:
+  mode: none              # none | seed_login
+  recipe: |
+    # seed_login の場合の製品固有ログイン手順 (explorer への自由記述指示) をここに書く
+  allowed_users: []
+safety:
+  denylist_texts: [削除, 退会, 解約, ログアウト, 支払い]
+  denylist_urls: [/billing, /payment, checkout.stripe.com]
+  submit_allowlist: [検索]   # ここに無いフォームは fill 可・submit 禁止
+budget:
+  agents: 3
+  pages_per_agent: 10
+  actions_per_page: 8
+sections:
+  - { name: public, entry_urls: ["/"], auth: none }
+output_dir: tmp/monkey-qa

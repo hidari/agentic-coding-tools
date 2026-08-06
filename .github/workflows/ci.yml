@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  leak-guard:
+    name: gitleaks (leak guard)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          gitleaks_version="8.30.1" # 開発機と揃える
+          # sha256 は展開前に内容を pin する堰。
+          # 再計算方法: curl で同じ URL を取得し sha256sum gitleaks_8.30.1_linux_x64.tar.gz を実行する。
+          expected_sha256="551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          "$GITHUB_WORKSPACE/scripts/ci/download-and-verify.sh" "https://github.com/gitleaks/gitleaks/releases/download/v${gitleaks_version}/gitleaks_${gitleaks_version}_linux_x64.tar.gz" "$expected_sha256" "$archive"
+          tar -xz -C "$RUNNER_TEMP" -f "$archive" gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      # 履歴は本リポジトリで新規に作るため、範囲を絞らず全履歴を走査する。
+      # 既定ルールだけでは /Users/<name> は検査されないので -c で custom ルールを渡す。
+      - name: Scan full history for leaks
+        run: gitleaks git --redact --no-banner -c .gitleaks.toml
+
+  package-shape:
+    name: パッケージの形と命名規約
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      # runner の python3 を使う。スクリプトは標準ライブラリのみで、
+      # setup-python を足すと pin すべき依存が 1 つ増えるため入れない。
+      - run: python3 scripts/check-package-shape.py
+
+  readme-drift:
+    name: README の drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - run: python3 scripts/gen-readme.py --check

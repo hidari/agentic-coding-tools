@@ -1,0 +1,100 @@
+# Security Profile Template
+#
+# Copy this file to <project>/.claude/security-profile.yml and fill in the values.
+# See schemas/security-profile.schema.yml for full validation rules.
+#
+# Key principles:
+# - environment.kind = "production" is REJECTED by the agent. Use local / staging only.
+# - environment.allow_targets is an ALLOWLIST. Anything not listed cannot be hit.
+# - All fields are free-form strings unless an enum is specified.
+# - Empty stack.* values are skipped (no isolation question / threat intel query for them).
+
+version: "1.0"
+
+product:
+  name: my-product
+  repo: org/my-product
+  description: One-line product description (optional)
+
+environment:
+  kind: staging                       # local | staging | production (production -> refused)
+  allow_targets:                      # URLs the agent MAY send HTTP requests to
+    - https://staging.example.com
+    - http://localhost:3000
+  deny_targets:                       # advisory only; the enforced gate is allow_targets
+    - https://example.com             # production
+  basic_auth:
+    required_on:
+      - https://staging.example.com
+    credential_source: 1password://YourVault/Staging - Basic Auth
+  rate_limits:                        # defaults applied if omitted
+    max_requests_per_test: 20
+    min_interval_ms: 100
+    max_concurrent: 5
+    per_request_timeout_seconds: 10
+
+stack:
+  frontend: nextjs                    # free string; "" or omit to skip
+  backend: nodejs/express
+  database: postgresql
+  storage: s3
+  auth: auth0
+  payments: stripe
+  search: ""
+  cdn: cloudflare
+
+endpoints:
+  auth_required:
+    - { method: GET, path: /api/me }
+  public:
+    - { method: GET, path: /api/health }
+  webhook_signed:
+    - { method: POST, path: /webhooks/stripe, signature_header: Stripe-Signature }
+  internal_only: []
+  discovery_hint:
+    backend_router: src/routes/index.ts
+    frontend_router: app/routes.ts
+
+secrets_in_code_patterns:
+  - id: example-secret
+    regex: 'sk_live_[A-Za-z0-9]{24,}'
+    severity: critical
+    description: Example live API key
+    exclude_paths:
+      - '**/*.test.ts'
+      - 'fixtures/**'
+
+rls_tables:
+  source_of_truth: db/migrations      # for static analysis grep root
+  must_have_policy:
+    - users
+    - orders
+  exempt:
+    - schema_migrations
+  verify_command: bash db/scripts/verify_rls.sh
+
+dependencies_audit_commands:
+  - { name: npm-audit,   command: 'npm audit --json',   cwd: '.', parse: text }
+
+attack_surfaces_extra:
+  - id: product-specific-surface-id
+    title: 短いタイトル
+    why_unique_to_this_product: なぜこの製品 / 業務固有の懸念か
+    attack_scenarios:
+      - シナリオ 1
+      - シナリオ 2
+    target_endpoints:
+      - { method: POST, path: /api/sensitive }
+    related_tables: [orders]
+    related_code_paths:
+      - src/handlers/sensitive*.ts
+    layers: [1, 3]
+    check_hint: 自由記述 — Agent への補足指示
+
+environment_isolation_checks:
+  database:
+    staging_instance: my-staging-db
+    production_instance: my-prod-db
+    answer: separate                  # separate | shared | unknown
+  auth:
+    answer: separate

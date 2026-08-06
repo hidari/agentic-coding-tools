@@ -1,0 +1,11 @@
+{
+  "name": "web-monkey-qa",
+  "version": "0.1.0",
+  "description": "Product-agnostic AI exploratory monkey testing for Claude Code. Wanders a web app with weighted-random actions to surface what humans would notice (console errors, unhandled rejections, 4xx/5xx, error boundaries, layout overflow, broken images, dead-end navigation). Profile-YAML driven with two-layer safety (dispatcher forces production to anonymous read-only + compiles a denylist; explorer matches every action against the denylist at runtime). Markdown + schema only, no hooks/mcpServers (local-first, zero auto-run code).",
+  "author": {
+    "name": "Hidari"
+  },
+  "skills": [
+    "./skills"
+  ]
+}

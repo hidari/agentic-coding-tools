@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Red Team Cleanup Queue",
+  "description": "Records resources seeded by Layer 3 active testing. Each entry must be consumed by the wrap layer (or /security-cleanup) to purge after the run.",
+  "type": "object",
+  "required": ["items", "metadata"],
+  "additionalProperties": false,
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["environment_kind", "seed_id_prefix"],
+      "properties": {
+        "date": { "type": "string", "format": "date" },
+        "environment_kind": {
+          "type": "string",
+          "enum": ["local", "staging"],
+          "description": "Mirrors metadata.environment.kind from findings.json. /security-cleanup re-validates this is not 'production' before executing."
+        },
+        "seed_id_prefix": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "description": "Copied from environment.cleanup.seed_id_prefix in the profile. /security-cleanup uses this to refuse cleanup of any seed_id that does not start with this prefix. Injection-safe charset only ([A-Za-z0-9_-]) — a prefix of a safe seed_id must itself be safe."
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["seed_type", "seed_id", "cleanup_command", "created_at", "layer"],
+        "additionalProperties": false,
+        "properties": {
+          "seed_type": {
+            "type": "string",
+            "description": "Resource category. Examples: user | artwork | stripe_customer | r2_object | supabase_user. Maps to environment.cleanup.commands.<seed_type> in the profile."
+          },
+          "seed_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "description": "Identifier of the seeded resource. Injection-safe charset only ([A-Za-z0-9_-]); shell metacharacters are rejected here so a tampered queue cannot smuggle commands via {seed_id} substitution. The prefix invariant (MUST start with environment.cleanup.seed_id_prefix, default 'security_redteam_') is enforced authoritatively by /security-cleanup against the profile, because the prefix is configurable per-profile."
+          },
+          "cleanup_command": {
+            "type": "string",
+            "description": "Resolved shell command that purges this resource. Template from environment.cleanup.commands.<seed_type> with '{seed_id}' substituted."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 UTC timestamp when the resource was seeded."
+          },
+          "layer": {
+            "type": "integer",
+            "enum": [3],
+            "description": "Only Layer 3 (active testing) seeds resources. Future layers may extend this enum."
+          },
+          "test_id": {
+            "type": "string",
+            "description": "Optional: the findings[].id that produced this seed, for traceability."
+          },
+          "attack_surface_id": {
+            "type": "string",
+            "description": "Optional: profile.attack_surfaces_extra[].id this seed belongs to."
+          }
+        }
+      }
+    }
+  }
+}

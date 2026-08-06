@@ -1,0 +1,70 @@
+$schema: "http://json-schema.org/draft-07/schema#"
+title: web-monkey-qa profile
+type: object
+additionalProperties: false
+required: [product, environment, auth, safety, budget, sections, output_dir]
+properties:
+  product: { type: string, minLength: 1 }
+  environment:
+    type: object
+    additionalProperties: false
+    required: [kind, base_url_env]
+    properties:
+      kind: { type: string, enum: [local, staging, production] }
+      base_url_env: { type: string, minLength: 1 }
+      http_auth:
+        type: object
+        description: >-
+          Optional HTTP Basic credentials for the whole origin (e.g. a staging site behind Basic auth).
+          Declares the NAMES of the environment variables holding the credentials, never the values.
+        required: [username_env, password_env]
+        additionalProperties: false
+        properties:
+          username_env:
+            type: string
+            pattern: '^[A-Z][A-Z0-9_]*$'
+          password_env:
+            type: string
+            pattern: '^[A-Z][A-Z0-9_]*$'
+  auth:
+    type: object
+    additionalProperties: false
+    required: [mode]
+    properties:
+      mode: { type: string, enum: [none, seed_login] }
+      recipe: { type: string }
+      allowed_users:
+        type: array
+        items: { type: string }
+  safety:
+    type: object
+    additionalProperties: false
+    required: [denylist_texts, denylist_urls, submit_allowlist]
+    properties:
+      denylist_texts: { type: array, items: { type: string } }
+      denylist_urls: { type: array, items: { type: string } }
+      submit_allowlist: { type: array, items: { type: string } }
+  budget:
+    type: object
+    additionalProperties: false
+    required: [agents, pages_per_agent, actions_per_page]
+    properties:
+      agents: { type: integer, minimum: 1, maximum: 10 }
+      pages_per_agent: { type: integer, minimum: 1, maximum: 50 }
+      actions_per_page: { type: integer, minimum: 1, maximum: 30 }
+  sections:
+    type: array
+    minItems: 1
+    items:
+      type: object
+      additionalProperties: false
+      required: [name, entry_urls, auth]
+      properties:
+        name: { type: string, minLength: 1 }
+        entry_urls:
+          type: array
+          minItems: 1
+          items: { type: string }
+        auth: { type: string, enum: [none, seed_login] }
+        viewport: { type: string, enum: [desktop, mobile] }
+  output_dir: { type: string, minLength: 1 }

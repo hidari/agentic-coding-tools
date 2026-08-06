@@ -1,0 +1,50 @@
+# pre-commit 設定
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# セットアップ:
+#   brew install pre-commit gitleaks
+#   pre-commit install
+#
+# - gitleaks で staged 差分の secret とユーザー名パス (/Users/<name>) の漏洩を弾く。
+#   既定ルールだけでは /Users/<name> は検査されないため .gitleaks.toml の custom ルールが要る。
+# - claude plugin validate --strict で plugin.json の妥当性を機械検証する。
+#   フィールド名を散文へ再掲しないための canonical な検証手段。
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-json
+      - id: check-yaml
+
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: gitleaks (secret / user-path leak guard)
+        language: system
+        entry: gitleaks git --staged --redact --no-banner -c .gitleaks.toml
+        pass_filenames: false
+        always_run: true
+
+      - id: plugin-validate
+        name: claude plugin validate --strict (plugin.json の妥当性)
+        language: system
+        entry: scripts/validate-plugins.sh
+        pass_filenames: false
+        always_run: true
+
+      - id: package-shape
+        name: パッケージの形と命名規約を検査する
+        language: system
+        entry: scripts/check-package-shape.py
+        pass_filenames: false
+        always_run: true
+
+      - id: readme-drift
+        name: README が frontmatter と一致しているか検査する
+        language: system
+        entry: scripts/gen-readme.py --check
+        pass_filenames: false
+        always_run: true

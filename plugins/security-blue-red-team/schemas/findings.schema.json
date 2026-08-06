@@ -1,0 +1,142 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Red Team Findings",
+  "type": "object",
+  "required": ["metadata", "findings", "statistics"],
+  "additionalProperties": false,
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "required": ["date", "environment", "layers_run"],
+      "additionalProperties": true,
+      "properties": {
+        "date": { "type": "string", "format": "date" },
+        "environment": {
+          "type": "object",
+          "required": ["kind", "target"],
+          "properties": {
+            "kind": { "type": "string", "enum": ["local", "staging"] },
+            "target": { "type": "string" },
+            "isolation_check": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["item", "status"],
+                "properties": {
+                  "item":   { "type": "string" },
+                  "status": { "type": "string", "enum": ["ok", "ng", "unknown"] },
+                  "note":   { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "layers_run": {
+          "type": "array",
+          "items": { "type": "integer", "enum": [1, 2, 3, 4] }
+        },
+        "threat_intel_queries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "query": { "type": "string" },
+              "new_vectors_found": { "type": "integer" }
+            }
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "fingerprint",
+          "severity",
+          "category",
+          "layer",
+          "title",
+          "attack_vector",
+          "expected",
+          "actual",
+          "impact",
+          "reproducibility"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable identifier within this report, e.g. F-001."
+          },
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{16}$",
+            "description": "Stable hash, exactly 16 hex chars: sha256(category + ':' + attack_surface_id + ':' + normalized_title)[:16]. Used for de-dup across reports and against issue tracker. Blue Team and any other consumer MUST use the same algorithm and truncation length (16) for deduplication to work. Changing this length is a breaking change."
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["Critical", "High", "Medium", "Low", "Info"]
+          },
+          "category": {
+            "type": "string",
+            "description": "Free-form. Examples: authn | authz | input-validation | config | dependency | secret | business-logic | file-upload | webhook | rls | gha-pin"
+          },
+          "layer": { "type": "integer", "enum": [1, 2, 3, 4] },
+          "title": { "type": "string" },
+          "attack_vector": { "type": "string" },
+          "verification_steps": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "expected": { "type": "string" },
+          "actual":   { "type": "string" },
+          "impact":   { "type": "string" },
+          "reproducibility": {
+            "type": "string",
+            "enum": ["always", "conditional", "static-only"]
+          },
+          "owasp_category": {
+            "type": "string",
+            "description": "e.g. A01:2021 (Broken Access Control)"
+          },
+          "references": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "evidence": {
+            "type": "object",
+            "description": "Optional raw evidence. Secret-like substrings MUST be redacted.",
+            "properties": {
+              "code_location":    { "type": "string", "description": "file:line" },
+              "request_excerpt":  { "type": "string" },
+              "response_excerpt": { "type": "string" }
+            }
+          },
+          "auto_fix_scope": {
+            "type": "string",
+            "enum": ["same-pr", "follow-up-issue"],
+            "description": "Hint for wrap layer: whether the wrap should attempt same-PR fix or file a follow-up issue."
+          },
+          "attack_surface_id": {
+            "type": "string",
+            "description": "Reference to profile.attack_surfaces_extra[].id when this finding maps to a declared surface."
+          }
+        }
+      }
+    },
+    "statistics": {
+      "type": "object",
+      "required": ["critical", "high", "medium", "low", "info"],
+      "additionalProperties": false,
+      "properties": {
+        "critical": { "type": "integer", "minimum": 0 },
+        "high":     { "type": "integer", "minimum": 0 },
+        "medium":   { "type": "integer", "minimum": 0 },
+        "low":      { "type": "integer", "minimum": 0 },
+        "info":     { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}
