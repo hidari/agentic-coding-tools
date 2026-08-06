@@ -662,6 +662,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # 子プロセス (ssh/scp/prlctl) は端末へ直接書くのに対し、こちらの print は
+    # 出力をファイルへリダイレクトするとブロックバッファされる。そのままだと
+    # 進捗メッセージが子プロセスの出力より後ろにずれてログの因果が逆に読める。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(line_buffering=True)
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)
