@@ -100,13 +100,11 @@ macOS 上のローカル変更を Windows VM に同期して remote コマンド
 
 `--base <ref>`: VM の HEAD をローカルで解決できないときのフォールバック差分基点（既定 `main`）。通常は VM の現在 HEAD を自動基点にするので指定不要。
 
+**制約**: `--` の後のリモートコマンドは argv を空白で連結して組み立てるため、クォートが落ちる。`|` や `&` を含めると cmd.exe 側のシェル演算子として解釈されるので、複雑なコマンドは `.ps1` にして `scp` で送り `pwsh -NoProfile -File` で実行する（`health` が使っている方法）。
+
 ## 接続セットアップ
 
-`~/.ssh/config` に `ProxyCommand` として `winvm resolve-ip` を組み込むと、SSH クライアントが接続のたびに現在の IP を解決する。最小形は次の 1 行（`<vm>` は VM 名か UUID に置換。`User` / `IdentityFile` / `HostKeyAlias` を含む完全形は `references/ssh-config.template`）:
-
-```
-ProxyCommand sh -c 'exec nc "$(winvm resolve-ip --vm "<vm>")" 22'
-```
+`~/.ssh/config` に Host エントリを 1 つ足す。IP は `ProxyCommand` から `winvm resolve-ip` を呼んで接続のたびに解決するので、IP が変わっても設定を直す必要がない。エントリの全体は `references/ssh-config.template` にある（そのまま写して `<alias>` / `<vm>` / `<user>` を置換する）。
 
 ### 初回セットアップ手順
 
@@ -123,9 +121,9 @@ ProxyCommand sh -c 'exec nc "$(winvm resolve-ip --vm "<vm>")" 22'
    ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_winvm -C "winvm"
    ```
 
-3. Windows 側を整える（下の「Windows 側のブートストラップ」）
+3. Windows 側を整える（`references/windows-bootstrap.md`。OpenSSH Server の導入・鍵の配置・ファイアウォール・pwsh(7) と git の導入まで、ホストの `prlctl exec` だけで完結する）
 
-4. `references/ssh-config.template` を参考に `~/.ssh/config` に Host エントリを追加
+4. `references/ssh-config.template` を写して `~/.ssh/config` に Host エントリを追加
 
 5. 接続確認
 
@@ -133,70 +131,6 @@ ProxyCommand sh -c 'exec nc "$(winvm resolve-ip --vm "<vm>")" 22'
    winvm doctor --vm "<vm>" --host <alias>
    ```
 
-## Windows 側のブートストラップ
-
-新しい Windows VM に SSH 経路を作る手順。ゲストに GUI で触らず、ホストの `prlctl exec` だけで完了する（Parallels Desktop 26.4.0 + Windows 11 ARM で実測）。
-
-`prlctl exec` は **NT AUTHORITY\SYSTEM** かつ Administrators として走るので、管理者権限が要る操作もそのまま通る。
-
-### 0. `prlctl exec` を通す
-
-隔離が有効だと `prlctl exec` は "Unable to open new session in this virtual machine" で失敗する。
-
-```bash
-prlctl set "<vm>" --isolate-vm off
-prlctl exec "<vm>" cmd.exe /c ver
-```
-
-**コマンドはトークンを分割して渡す。** `prlctl exec "<vm>" "cmd.exe /c ver"` のようにプログラム名まで 1 文字列に含めると、エラーも出さず exit 2 で無出力のまま失敗する。
-
-### 1. OpenSSH Server を導入して起動する
-
-```bash
-prlctl exec "<vm>" powershell -NoProfile -Command "Add-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0'"
-prlctl exec "<vm>" powershell -NoProfile -Command "Set-Service -Name sshd -StartupType Automatic; Start-Service sshd"
-```
-
-### 2. 公開鍵を置く
-
-ログインさせるユーザーが Administrators のメンバーなら、鍵は `~/.ssh/authorized_keys` ではなく `C:\ProgramData\ssh\administrators_authorized_keys` に置く（既定の `sshd_config` に `Match Group administrators` があるため）。ACL は SYSTEM と Administrators だけに絞る（他に書ける主体があると sshd がファイルを無視する）。
-
-```bash
-prlctl exec "<vm>" powershell -NoProfile -Command "[IO.File]::WriteAllText('C:\ProgramData\ssh\administrators_authorized_keys','<公開鍵1行>' + [Environment]::NewLine); icacls.exe 'C:\ProgramData\ssh\administrators_authorized_keys' /inheritance:r /grant '*S-1-5-32-544:F' /grant '*S-1-5-18:F'"
-```
-
-ACL は日本語 Windows でもグループ名がローカライズされうるので、名前ではなく SID (`*S-1-5-32-544` = Administrators、`*S-1-5-18` = SYSTEM) で指定する。
-
-### 3. ファイアウォールを開ける
-
-OpenSSH Server の導入で規則 `OpenSSH-Server-In-TCP` は作られるが、**Private プロファイル限定**で入る。Parallels の共有ネットワークは Windows から Public と判定されるため、そのままでは通らない。
-
-ネットワーク全体を Private に格下げすると探索や共有まで一括で緩むので、規則側だけを広げて送信元を Parallels のサブネットに限定する:
-
-```bash
-prlctl exec "<vm>" powershell -NoProfile -Command "Set-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -Profile Any -RemoteAddress '10.211.55.0/24'"
-```
-
-サブネットは `ifconfig | grep 10.211.55` などでホスト側のブリッジアドレスから確認する（既定は `10.211.55.0/24`、ホストは `.2`）。
-
-### 4. pwsh(7) を入れる
-
-`winvm health` は pwsh(7) を必須とする。
-
-```bash
-ssh <alias> "winget install --id Microsoft.PowerShell --source winget --accept-package-agreements --accept-source-agreements --silent --disable-interactivity"
-```
-
-Microsoft Store (MSIX) 版が入っている場合、実体は `C:\Program Files\WindowsApps\...` に置かれ `C:\Program Files\PowerShell\7\pwsh.exe` は存在しない。それでも `%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe` の alias 経由で SSH セッションからも起動できる（実測）。**`C:\Program Files\PowerShell` の有無で導入判定しない。**
-
-### 5. git を入れる
-
-`winvm run` は VM 側の git を使う。
-
-```bash
-ssh <alias> "winget install --id Git.Git --source winget --accept-package-agreements --accept-source-agreements --silent --disable-interactivity"
-```
-
 ## トラブルシューティング
 
-詳細は `references/troubleshooting.md` を参照。
+繋がらないときはまず `winvm doctor --vm <id> --host <alias>` を実行する。症状と対処の一覧は `references/troubleshooting.md` にある。

@@ -54,6 +54,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-      # 他ジョブと同じく runner の python3 を使う。テストは stdlib の unittest だけで
-      # 書いてあるので setup-python も pip install も要らない。
       - run: python3 scripts/run-python-tests.py

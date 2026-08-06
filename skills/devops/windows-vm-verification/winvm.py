@@ -16,6 +16,12 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from xml.etree import ElementTree
+
+# 対話プロンプトで無期限にブロックしないための共通 ssh オプション。
+# 診断だけに付けると「doctor は 10 秒で返るのに run と health は固まる」という
+# 逆転が起きるので、ssh を起動する経路すべてで同じものを使う。
+SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
 
 # ---------------------------------------------------------------------------
 # prlctl の argv 組み立て
@@ -23,17 +29,14 @@ from pathlib import Path
 
 
 def prlctl_list_argv() -> list[str]:
-    """全 VM を JSON で列挙する argv。
+    """全 VM の詳細を JSON で列挙する argv。
 
-    `-f` が無いと `ip_configured` フィールド自体が出ず、`-j` が無いと人間向けの
-    表形式になって text-parse に逆戻りする。両方必要。
+    `-i` (詳細) と `-j` (JSON) を併せると、状態・IP・Parallels Tools・バンドルの
+    パスが 1 回の呼び出しで構造化されて返る。`-f` + `-j` の要約形にすると IP が
+    `10.211.55.3` / `-` / 空白区切りの複数値という 3 通りの文字列になり、
+    ダッシュや空白を IP と取り違えないための解析をこちら側に持つことになる。
     """
-    return ["prlctl", "list", "-a", "-f", "-j"]
-
-
-def prlctl_info_argv(vm: str) -> list[str]:
-    """1 台の詳細情報を出す argv (JSON 出力は無いので text を parse する)。"""
-    return ["prlctl", "list", "-i", vm]
+    return ["prlctl", "list", "-a", "-i", "-j"]
 
 
 def prlctl_exec_argv(vm: str, command: list[str]) -> list[str]:
@@ -60,7 +63,7 @@ def run_capture(argv: list[str]) -> tuple[int, str, str]:
 
 
 def parse_vm_list(json_text: str) -> list[dict]:
-    """`prlctl list -a -f -j` の JSON をレコードのリストにする。
+    """`prlctl list -a -i -j` の JSON をレコードのリストにする。
 
     壊れた出力で例外を投げず「該当なし」に倒す。呼び出し側は必ず
     「見つからなかった」経路を持つので、そこへ合流させる方が扱いが一様になる。
@@ -88,74 +91,78 @@ def find_vm(vms: list[dict], identifier: str) -> dict | None:
     if not ident:
         return None
     for vm in vms:
-        if vm.get("name") == ident:
+        if vm.get("Name") == ident:
             return vm
     wanted = _normalize_uuid(ident)
     for vm in vms:
-        if _normalize_uuid(str(vm.get("uuid", ""))) == wanted:
+        if _normalize_uuid(str(vm.get("ID", ""))) == wanted:
             return vm
     return None
 
 
-def pick_ipv4(ip_field: str) -> str | None:
-    """`ip_configured` フィールドから IPv4 を 1 つ返す。無ければ None。
+def pick_ipv4(network: dict | None) -> str | None:
+    """`Network.ipAddresses` から IPv4 を 1 つ返す。無ければ None。
 
-    このフィールドは形が 3 通りある (いずれも実測):
-      - 単一の IPv4              : "10.211.55.3"
-      - 停止中を表すダッシュ     : "-"
-      - `-o` 併用時の複数アドレス: "10.211.55.3  fdb2:... fe80::...   " (末尾に空白)
-    ダッシュや空白をそのまま IP として下流に渡さないことがこの関数の責務。
+    エントリは `{"type": "ipv4"|"ipv6", "ip": "..."}` で、停止中の VM は空リストに
+    なる (実測)。`type` が正なので IPv6 と取り違える余地は無いが、値が壊れた
+    エントリを SSH の接続先へ素通しさせないため IPv4 として妥当かも確かめる。
     """
-    for token in (ip_field or "").split():
+    for entry in (network or {}).get("ipAddresses") or []:
+        if not isinstance(entry, dict) or entry.get("type") != "ipv4":
+            continue
+        ip = str(entry.get("ip", "")).strip()
         try:
-            ipaddress.IPv4Address(token)
+            ipaddress.IPv4Address(ip)
         except ValueError:
             continue
-        return token
+        return ip
     return None
 
 
-def parse_home_path(info_text: str) -> str | None:
-    """`prlctl list -i` の `Home:` 行からバンドルのパスを返す。
+def parse_tools(vm: dict) -> tuple[str | None, str | None]:
+    """レコードの `GuestTools` から (state, version) を返す。
 
-    同じ出力に `Home path:` (= config.pvs のパス) が先に現れる。前方一致で
-    "Home" を拾うとそちらを掴むので、コロンまで含めて一致させる。
+    未導入の VM は `{"state": "not_installed"}` で version キーごと欠ける (実測)。
     """
-    for line in info_text.splitlines():
-        if line.startswith("Home:"):
-            return line[len("Home:") :].strip()
-    return None
+    tools = vm.get("GuestTools")
+    if not isinstance(tools, dict):
+        return None, None
+    return tools.get("state"), tools.get("version")
 
 
-_ISOLATED_RE = re.compile(r"<IsolatedVm>\s*([01])\s*</IsolatedVm>")
+ISOLATION_PATH = "./Settings/Tools/IsolatedVm"
 
 
 def parse_isolated_flag(config_text: str) -> bool | None:
-    """config.pvs の `<IsolatedVm>` を bool で返す。要素が無ければ None。
+    """config.pvs の隔離フラグを bool で返す。読めなければ None。
+
+    隔離の状態を出す prlctl の口が無いので (`prlctl list -L` にフィールドが無く、
+    `-i` は text/JSON とも該当キーを持たない。バイナリにも `--isolate-vm` の
+    setter しか無い)、設定ファイルを直接読むしかない。
+
+    正規表現ではなく XML として `./Settings/Tools/IsolatedVm` を引く。要素名だけで
+    探すと、Parallels が別セクション (スナップショット等) に同名要素を増やしたとき
+    例外でも None でもなく「間違った bool」を静かに返す。それは tri-state を
+    作ってまで防ごうとしている失敗そのものになる。
 
     「隔離されていない」と「読めなかった」を同じ値にしない。この区別を潰すと
     診断が「未確認」を「健全」として報告してしまう。
     """
-    m = _ISOLATED_RE.search(config_text)
-    if not m:
+    try:
+        root = ElementTree.fromstring(config_text)
+    except ElementTree.ParseError:
         return None
-    return m.group(1) == "1"
-
-
-_TOOLS_RE = re.compile(r"^GuestTools:\s*state=(\S+)(?:\s+version=(\S+))?", re.MULTILINE)
-
-
-def parse_tools_state(info_text: str) -> tuple[str | None, str | None]:
-    """`prlctl list -i` の GuestTools 行から (state, version) を返す。"""
-    m = _TOOLS_RE.search(info_text)
-    if not m:
-        return None, None
-    return m.group(1), m.group(2)
+    node = root.find(ISOLATION_PATH)
+    if node is None or node.text is None:
+        return None
+    return node.text.strip() == "1"
 
 
 # ---------------------------------------------------------------------------
 # 共通
 # ---------------------------------------------------------------------------
+
+UNKNOWN = "(未確認)"
 
 
 def _env_or(arg_value: str | None, env_key: str, default: str | None = None) -> str | None:
@@ -163,15 +170,16 @@ def _env_or(arg_value: str | None, env_key: str, default: str | None = None) -> 
 
 
 def _load_vms(run) -> tuple[list[dict] | None, str | None]:
+    """(レコード一覧, 素のエラーメッセージ) を返す。表示用の接頭辞は呼び出し側で付ける。"""
     rc, out, err = run(prlctl_list_argv())
     if rc != 0:
         detail = err.strip() or out.strip() or f"rc={rc}"
-        return None, f"error: prlctl の VM 列挙に失敗しました: {detail}"
+        return None, f"prlctl の VM 列挙に失敗しました: {detail}"
     return parse_vm_list(out), None
 
 
 def _known_names(vms: list[dict]) -> str:
-    names = sorted(str(v.get("name", "")) for v in vms if v.get("name"))
+    names = sorted(str(v.get("Name", "")) for v in vms if v.get("Name"))
     return ", ".join(names) if names else "(登録済み VM なし)"
 
 
@@ -187,7 +195,7 @@ def cmd_resolve_ip(args: argparse.Namespace, *, run=run_capture) -> int:
         return 2
     vms, err = _load_vms(run)
     if err:
-        print(err, file=sys.stderr)
+        print(f"error: {err}", file=sys.stderr)
         return 1
     vm = find_vm(vms, vm_id)
     if vm is None:
@@ -196,12 +204,12 @@ def cmd_resolve_ip(args: argparse.Namespace, *, run=run_capture) -> int:
             file=sys.stderr,
         )
         return 1
-    status = str(vm.get("status", "unknown"))
-    ip = pick_ipv4(str(vm.get("ip_configured", "")))
+    status = str(vm.get("State", "unknown"))
+    ip = pick_ipv4(vm.get("Network"))
     if ip is None:
         print(
             f"error: IP を解決できません (status={status})。"
-            f'VM が起動していない場合は prlctl start "{vm.get("name", vm_id)}" で起動する',
+            f'VM が起動していない場合は prlctl start "{vm.get("Name", vm_id)}" で起動する',
             file=sys.stderr,
         )
         return 1
@@ -233,11 +241,12 @@ def format_doctor_report(checks: list[Check]) -> str:
     「緑だから健全」ではなく「何をどう観測した結果その判定か」を読めるようにする。
     """
     width = max((len(c.label) for c in checks), default=0)
+    indent = " " * (max(len(m) for m in _MARK.values()) + 1)
     lines: list[str] = []
     for c in checks:
         lines.append(f"{_MARK[c.ok]} {c.label.ljust(width)} : {c.observed}")
         if c.ok is False and c.hint:
-            lines.append(f"{' ' * 7}-> {c.hint}")
+            lines.append(f"{indent}-> {c.hint}")
     return "\n".join(lines)
 
 
@@ -246,9 +255,7 @@ def doctor_exit_code(checks: list[Check]) -> int:
 
 
 def _ssh_reachable(host: str) -> bool:
-    rc, _, _ = run_capture(
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, "exit"]
-    )
+    rc, _, _ = run_capture(["ssh", *SSH_OPTS, host, "exit"])
     return rc == 0
 
 
@@ -265,7 +272,7 @@ def collect_doctor_checks(
         return [
             Check(
                 "prlctl",
-                err.removeprefix("error: "),
+                err,
                 False,
                 hint="Parallels Desktop が起動しているか、prlctl が PATH にあるか確認する",
             )
@@ -281,46 +288,38 @@ def collect_doctor_checks(
             )
         ]
 
-    name = str(vm.get("name", ""))
-    checks = [Check("VM", f"{name} ({vm.get('uuid', '')})", True)]
+    # 以降の prlctl 呼び出しには解決済みの名前を渡す。find_vm は大文字 UUID や
+    # 波括弧付きも受けるが、prlctl が同じ集合を受けるかは確かめていない。
+    name = str(vm.get("Name", ""))
+    status = str(vm.get("State", "unknown"))
+    ip = pick_ipv4(vm.get("Network"))
+    tools_state, tools_version = parse_tools(vm)
+    isolated = _read_isolation(vm.get("Home"))
 
-    status = str(vm.get("status", "unknown"))
-    checks.append(Check("status", status, status == "running", hint=f'prlctl start "{name}"'))
-
-    ip = pick_ipv4(str(vm.get("ip_configured", "")))
-    checks.append(
+    checks = [
+        Check("VM", f"{name} ({vm.get('ID', '')})", True),
+        Check("status", status, status == "running", hint=f'prlctl start "{name}"'),
         Check(
             "IP",
-            ip or "(未解決)",
+            ip or UNKNOWN,
             ip is not None,
             hint="VM を起動し Parallels Tools が動いているか確認する",
-        )
-    )
-
-    rc_info, info, _ = run(prlctl_info_argv(vm_id))
-    info = info if rc_info == 0 else ""
-
-    tools_state, tools_version = parse_tools_state(info)
-    checks.append(
+        ),
         Check(
             "Parallels Tools",
-            " ".join(x for x in (tools_state, tools_version) if x) or "(未確認)",
+            " ".join(x for x in (tools_state, tools_version) if x) or UNKNOWN,
             None if tools_state is None else tools_state == "installed",
             hint="Parallels のメニューから Parallels Tools を再インストールする",
-        )
-    )
-
-    isolated = _read_isolation(parse_home_path(info))
-    checks.append(
+        ),
         Check(
             "host isolation",
-            {True: "on", False: "off", None: "(未確認)"}[isolated],
+            {True: "on", False: "off", None: UNKNOWN}[isolated],
             None if isolated is None else not isolated,
             hint=f'prlctl set "{name}" --isolate-vm off',
-        )
-    )
+        ),
+    ]
 
-    rc_exec, out_exec, err_exec = run(prlctl_exec_argv(vm_id, ["cmd.exe", "/c", "ver"]))
+    rc_exec, out_exec, err_exec = run(prlctl_exec_argv(name, ["cmd.exe", "/c", "ver"]))
     checks.append(
         Check(
             "prlctl exec",
@@ -343,8 +342,9 @@ def collect_doctor_checks(
     return checks
 
 
-def _read_isolation(home: str | None) -> bool | None:
-    if not home:
+def _read_isolation(home: object) -> bool | None:
+    """バンドルの `Home` から config.pvs を読んで隔離フラグを返す。読めなければ None。"""
+    if not isinstance(home, str) or not home:
         return None
     try:
         text = (Path(home) / "config.pvs").read_text(encoding="utf-8", errors="replace")
@@ -370,7 +370,7 @@ def cmd_doctor(args: argparse.Namespace, *, run=run_capture, ssh_probe=_ssh_reac
 
 
 def files_to_sync(branch_delta: str, working_delta: str, untracked: str) -> list[str]:
-    """行をトリム/空行除去/重複排除/安定ソート."""
+    """行をトリム/空行除去/重複排除/安定ソートする。"""
     s: set[str] = set()
     for block in (branch_delta, working_delta, untracked):
         for line in block.splitlines():
@@ -398,12 +398,10 @@ def files_to_delete(branch_deleted: str, working_deleted: str) -> list[str]:
 
 
 def to_windows_path(path: str) -> str:
-    r"""`/` を `\` に変換."""
     return path.replace("/", "\\")
 
 
 def resolve_diff_base(vm_head: str, vm_head_known: bool, fallback: str) -> str:
-    """vm_head_known なら vm_head を返す、さもなければ fallback を返す."""
     return vm_head if vm_head_known else fallback
 
 
@@ -448,19 +446,21 @@ def remote_command_from_args(remote: list[str]) -> str | None:
 
 
 def git_local(args: list[str]) -> str:
-    return subprocess.run(["git", *args], capture_output=True, text=True).stdout
+    return run_capture(["git", *args])[1]
 
 
 def ssh_capture(host: str, remote: str) -> str:
-    return subprocess.run(["ssh", host, remote], capture_output=True, text=True).stdout
+    return run_capture(["ssh", *SSH_OPTS, host, remote])[1]
 
 
+# run_ssh と scp は run_capture を使わない。remote コマンドの進捗とビルド出力を
+# 端末へそのまま流すのが目的で、捕捉すると完了までユーザに何も見えなくなる。
 def run_ssh(host: str, remote: str) -> bool:
-    return subprocess.run(["ssh", host, remote]).returncode == 0
+    return subprocess.run(["ssh", *SSH_OPTS, host, remote]).returncode == 0
 
 
 def scp(host: str, local: str, dest: str) -> bool:
-    return subprocess.run(["scp", "-q", local, f"{host}:{dest}"]).returncode == 0
+    return subprocess.run(["scp", *SSH_OPTS, "-q", local, f"{host}:{dest}"]).returncode == 0
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -478,8 +478,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 2
 
     vm_head = ssh_capture(host, f'cd /d "{repo_win}" && git rev-parse HEAD').strip()
+    # 出力を捕捉する。解決できないのは想定内 (VM 側が別履歴のときに起きる) で、
+    # git の "Not a valid object name" を端末へ出すと下の警告と二重に見える。
     vm_head_known = bool(vm_head) and (
-        subprocess.run(["git", "cat-file", "-e", f"{vm_head}^{{commit}}"]).returncode == 0
+        run_capture(["git", "cat-file", "-e", f"{vm_head}^{{commit}}"])[0] == 0
     )
     diff_base = resolve_diff_base(vm_head, vm_head_known, base)
     if not vm_head_known:
@@ -608,8 +610,10 @@ def cmd_health(args: argparse.Namespace, *, run=run_ssh) -> int:
             file=sys.stderr,
         )
         return 1
+    # `--check-tools "node, cargo"` のように空白を入れて書かれても拾えるようにする。
+    # strip しないと PowerShell 側が " cargo" を探して導入済みのツールを未導入と誤報する。
     tools = args.check_tools.split(",") if args.check_tools else []
-    ps = build_health_powershell([t for t in tools if t], repo)
+    ps = build_health_powershell([t.strip() for t in tools if t.strip()], repo)
 
     with tempfile.NamedTemporaryFile("w", suffix=".ps1", delete=False, encoding="utf-8") as fh:
         fh.write(ps)
