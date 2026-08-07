@@ -1,16 +1,16 @@
 ---
 name: windows-vm-verification
-description: VMware Fusion 上の Windows 検証 VM を繋ぐ/直す/調べる/検証する generic CLI (winvm)。起動不能 ("ディレクトリが空ではありません" = stale disk lock) の復旧、SSH 越しの NTFS/health 確認、cfg(windows) コードの remote 検証 (ローカル変更を scp 同期して remote コマンド実行)、NAT DHCP からの IP 解決を扱う。VMware Fusion の Windows VM を操作・検証する時に使う。
+description: Parallels Desktop 上の Windows 検証 VM を繋ぐ/調べる/検証する generic CLI (winvm)。SSH 越しの NTFS/health 確認、cfg(windows) コードの remote 検証 (ローカル変更を scp 同期して remote コマンド実行)、prlctl からの IP 解決、繋がらないときのホスト側診断 (doctor) を扱う。Parallels Desktop の Windows VM を操作・検証する時に使う。
 ---
 
 # Windows VM 検証スキル (winvm)
 
 ## いつ使うか
 
-- VMware Fusion で Windows VM が起動できない ("ディレクトリが空ではありません" エラー)
 - SSH 経由で VM の NTFS 健全性・開発ツールチェーンを確認したい
 - macOS 側の変更を Windows VM に同期して `cfg(windows)` コードを検証したい
-- NAT DHCP による IP 変化で SSH 接続先が不明になった
+- VM に繋がらず、原因がホスト側 (VM 未起動 / 隔離設定 / Tools) かゲスト側かを切り分けたい
+- IP が変わって SSH 接続先が不明になった
 
 ## winvm CLI 概要
 
@@ -18,58 +18,46 @@ description: VMware Fusion 上の Windows 検証 VM を繋ぐ/直す/調べる/�
 
 | 環境変数 | 対応引数 | 意味 |
 |---|---|---|
-| `WINVM_VMX` | `--vmx` | `.vmx` ファイルのパス |
+| `WINVM_VM` | `--vm` | Parallels の VM 名または UUID (`prlctl list -a` で確認) |
 | `WINVM_HOST` | `--host` | SSH ホスト名 (ssh config alias) |
 | `WINVM_REPO` | `--repo` | VM 上のリポジトリパス。`/` 区切りで可（内部で `\` に変換。例 `C:/Users/user/repo`） |
 | `WINVM_BASE` | `--base` | 差分基点ブランチ/コミット |
-| `WINVM_LEASES` | `--leases` | VMware DHCP leases ファイルパス |
+
+VM の指定は名前でも UUID でも通る。`prlctl` が受け付ける識別子と同じ集合に揃えてあるので、`winvm` と `prlctl` を混ぜて使っても指す VM がずれない。名前は完全一致で、部分一致はしない。
 
 ## サブコマンド
 
 ### `resolve-ip`
 
 ```
-winvm resolve-ip --vmx <bundle.vmx> [--leases <path>]
+winvm resolve-ip --vm <名前 or UUID>
 ```
 
-`.vmx` の `ethernet0.generatedAddress`（fallback: `ethernet0.address`）から MAC アドレスを取り出し、VMware NAT の DHCP leases ファイル（デフォルト: `/var/db/vmware/vmnet-dhcpd-vmnet8.leases`）で最新エントリを検索して IP を標準出力に出力する。マッチなしは非 0 終了。
+`prlctl list -a -f -j` の JSON から該当 VM の `ip_configured` を読み、IPv4 を標準出力に出す。解決できなければ非 0 終了。
 
-マッチする lease が無い（非 0 終了）場合は VM が未起動の可能性が高い。VMware Fusion で VM を起動してから再実行する（`Host is down` 等の詳細な切り分けは `references/troubleshooting.md`）。
+失敗時は理由を区別して出す（VM 未登録なら登録済みの名前一覧、停止中なら `status=stopped` と起動コマンド）。
 
-**ポイント**: MAC アドレスを `.vmx` から直接導出するため、VM を再構築しても IP 解決がドリフトしない。
-
-### `recover`
+### `doctor`
 
 ```
-winvm recover --vmx <bundle.vmx> [--backup <dir>] [--delete] [--dry-run]
+winvm doctor --vm <名前 or UUID> [--host <alias>]
 ```
 
-起動を阻む `*.lck` ロックディレクトリを除去して VM を復旧する。
+VM が使える状態かをホスト側から観測する。各項目は **判定だけでなく観測値**を出す（「緑だから健全」ではなく「何をどう観測してその判定か」を読めるようにするため）。
 
-- **デフォルト = 可逆 MOVE**: 各ロックをバンドル内の `.winvm-lck-backup-<timestamp>/` に移動（取り消し可能）
-- `--backup <dir>`: バックアップ先を明示指定
-- `--delete`: 不可逆削除（明示オプションが必要）
-- `--dry-run`: 実際には何もせず対象を表示のみ
+| 項目 | 見ているもの |
+|---|---|
+| `VM` | `prlctl list -a -f -j` に該当があるか。名前と UUID |
+| `status` | `running` かどうか |
+| `IP` | `ip_configured` から取れた IPv4 |
+| `Parallels Tools` | `prlctl list -i` の `GuestTools: state=... version=...` |
+| `host isolation` | バンドル内 `config.pvs` の `<IsolatedVm>`。**on だと `prlctl exec` が通らない** |
+| `prlctl exec` | 実際に `cmd.exe /c ver` をゲストで実行できるか |
+| `ssh <alias>` | `--host` 指定時のみ。SSH が張れるか |
 
-**安全機構**: `vmware-vmx` プロセスが実行中の場合は拒否する（多層防御）。
+`[ -- ]` は「確認できなかった」で、OK でも NG でもない。読めなかったことを「健全」に読み替えない。
 
-#### 手順: "ディレクトリが空ではありません" で VM が起動しない場合
-
-1. VM を VMware Fusion から停止済みにする
-2. `vmware-vmx` プロセスが残っていないことを確認（出力が空＝VM プロセス停止済みで recover 可。何か出れば VM はまだ稼働中なので停止する）
-
-   ```bash
-   pgrep -l vmware-vmx
-   ```
-
-3. `winvm recover` で stale ロックを除去（まず dry-run で確認）
-
-   ```bash
-   winvm recover --vmx ~/Virtual\ Machines/<vm>.vmwarevm/<vm>.vmx --dry-run
-   winvm recover --vmx ~/Virtual\ Machines/<vm>.vmwarevm/<vm>.vmx
-   ```
-
-4. VMware Fusion から VM を再起動
+FAIL があれば exit 1、無ければ exit 0。
 
 ### `health`
 
@@ -89,10 +77,10 @@ SSH 越しに以下を確認する:
 **実装の注意点**:
 
 - PowerShell スクリプトは `scp` で転送し pwsh(7) の `-File` で実行する。pwsh は RemoteSigned かつ scp 転送物に Mark-of-the-Web が付かないため `-ExecutionPolicy Bypass` 無しで実行できる（WinPS 5.1 の Restricted を Bypass で上書きする多層防御の穴を避ける）
-- pwsh は必須。VM に pwsh が無ければ `winvm health` はエラーで停止する（`winget install --id Microsoft.PowerShell` で導入して PATH を通す）
+- pwsh は必須。同じ `.ps1` を `powershell`(5.1) に渡すと ExecutionPolicy で弾かれる（実測）
 - `-EncodedCommand` は cmd.exe の 8191 文字制限に引っかかる長いコマンドで失敗するため使用しない
 - 出力文字化けを防ぐため `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` をスクリプト冒頭に設定する（SSH 越しの `OutputEncoding` は pwsh でも既定 shift_jis のため PS バージョン非依存で必要）
-- ラベルは ASCII にして cp932 モジュラリティの問題を回避する（pwsh は BOM 無し UTF-8 を正読するため必須ではないが、フォールバックの安全側として維持）
+- ラベルは ASCII にして cp932 の問題を回避する
 
 ### `run`
 
@@ -112,13 +100,11 @@ macOS 上のローカル変更を Windows VM に同期して remote コマンド
 
 `--base <ref>`: VM の HEAD をローカルで解決できないときのフォールバック差分基点（既定 `main`）。通常は VM の現在 HEAD を自動基点にするので指定不要。
 
+**制約**: `--` の後のリモートコマンドは argv を空白で連結して組み立てるため、クォートが落ちる。`|` や `&` を含めると cmd.exe 側のシェル演算子として解釈されるので、複雑なコマンドは `.ps1` にして `scp` で送り `pwsh -NoProfile -File` で実行する（`health` が使っている方法）。
+
 ## 接続セットアップ
 
-SSH 接続先の IP は VMware NAT DHCP で動的に変わる。`~/.ssh/config` に `ProxyCommand` として `winvm resolve-ip` を組み込むことで、SSH クライアントが自動的に現在の IP を解決する。最小形は次の 1 行（`<vm>` はバンドル名に置換。`User` / `IdentityFile` / `HostKeyAlias` を含む完全形は `references/ssh-config.template`）:
-
-```
-ProxyCommand sh -c 'exec nc "$(winvm resolve-ip --vmx "$HOME/Virtual Machines/<vm>.vmwarevm/<vm>.vmx")" 22'
-```
+`~/.ssh/config` に Host エントリを 1 つ足す。IP は `ProxyCommand` から `winvm resolve-ip` を呼んで接続のたびに解決するので、IP が変わっても設定を直す必要がない。エントリの全体は `references/ssh-config.template` にある（そのまま写して `<alias>` / `<vm>` / `<user>` を置換する）。
 
 ### 初回セットアップ手順
 
@@ -135,16 +121,16 @@ ProxyCommand sh -c 'exec nc "$(winvm resolve-ip --vmx "$HOME/Virtual Machines/<v
    ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_winvm -C "winvm"
    ```
 
-3. VM 上の `~/.ssh/authorized_keys` に公開鍵を登録
+3. Windows 側を整える（`references/windows-bootstrap.md`。OpenSSH Server の導入・鍵の配置・ファイアウォール・pwsh(7) と git の導入まで、ホストの `prlctl exec` だけで完結する）
 
-4. `references/ssh-config.template` を参考に `~/.ssh/config` に Host エントリを追加
+4. `references/ssh-config.template` を写して `~/.ssh/config` に Host エントリを追加
 
 5. 接続確認
 
    ```bash
-   ssh <alias> "hostname"
+   winvm doctor --vm "<vm>" --host <alias>
    ```
 
 ## トラブルシューティング
 
-詳細は `references/troubleshooting.md` を参照。
+繋がらないときはまず `winvm doctor --vm <id> --host <alias>` を実行する。症状と対処の一覧は `references/troubleshooting.md` にある。
