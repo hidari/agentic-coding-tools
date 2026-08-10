@@ -36,7 +36,7 @@ VM の指定は名前でも UUID でも通る。`prlctl` が受け付ける識�
 winvm resolve-ip --vm <名前 or UUID>
 ```
 
-`prlctl list -a -f -j` の JSON から該当 VM の `ip_configured` を読み、IPv4 を標準出力に出す。解決できなければ非 0 終了。
+`prlctl list -a -i -j` の JSON から該当 VM の `Network.ipAddresses` を読み、`type` が `ipv4` のエントリを標準出力に出す。解決できなければ非 0 終了。
 
 失敗時は理由を区別して出す（VM 未登録なら登録済みの名前一覧、停止中なら `status=stopped` と起動コマンド）。
 
@@ -50,10 +50,10 @@ VM が使える状態かをホスト側から観測する。各項目は **判�
 
 | 項目 | 見ているもの |
 |---|---|
-| `VM` | `prlctl list -a -f -j` に該当があるか。名前と UUID |
+| `VM` | `prlctl list -a -i -j` に該当があるか。名前と UUID |
 | `status` | `running` かどうか |
-| `IP` | `ip_configured` から取れた IPv4 |
-| `Parallels Tools` | `prlctl list -i` の `GuestTools: state=... version=...` |
+| `IP` | `Network.ipAddresses` の `type: ipv4` エントリ |
+| `Parallels Tools` | 同じレコードの `GuestTools: state=... version=...` |
 | `host isolation` | バンドル内 `config.pvs` の `<IsolatedVm>`。**on だと `prlctl exec` が通らない** |
 | `prlctl exec` | 実際に `cmd.exe /c ver` をゲストで実行できるか |
 | `ssh <alias>` | `--host` 指定時のみ。SSH が張れるか |
@@ -127,7 +127,7 @@ winvm pull --host <alias> <remote path> <local path>
 - リモートパスは `/` 区切りで書ける（`--repo` と同じ扱い。cmd.exe に渡す箇所だけ内部で `\` に変換）
 - 転送先の親ディレクトリ（push はリモート、pull はローカル）は自動作成
 - 転送後にサイズを照合し、一致しなければ非 0 終了（scp の rc 0 を「完了」と読み替えない）
-- リモートのサイズ問い合わせは不在を ASCII の目印 `WINVM_MISSING` に固定してある。素の `for %I ... %~zI` は対象不在で裸の `echo` に落ち、cmd が「ECHO は \<ON\> です。」を CP932 で返す（実測）ため、localized な出力を判定に混ぜない
+- リモートのサイズ問い合わせは不在を ASCII の目印に固定してある（値は `winvm.py` の `REMOTE_MISSING_MARK` が canonical）。素の `for %I ... %~zI` は対象不在で裸の `echo` に落ち、cmd が「ECHO は \<ON\> です。」を CP932 で返す（実測）ため、localized な出力を判定に混ぜない
 
 ### `exec`
 

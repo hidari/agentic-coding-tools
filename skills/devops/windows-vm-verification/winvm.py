@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from xml.etree import ElementTree
@@ -51,7 +52,7 @@ def prlctl_exec_argv(vm: str, command: list[str]) -> list[str]:
 def run_capture(argv: list[str]) -> tuple[int, str, str]:
     """argv を実行して (returncode, stdout, stderr) を返す。実行不能も戻り値で表す。
 
-    `errors="replace"` が要る (Issue #1)。ja-JP の VM は非対話出力を CP932 で書くため、
+    `errors="replace"` が要る。ja-JP の VM は非対話出力を CP932 で書くため、
     strict に decode すると VM が失敗を報告した瞬間に winvm 自身が UnicodeDecodeError で
     落ちる。判定に使う目印 (サイズの数字・WINVM_MISSING・SHA 等) は ASCII に保つ方針
     なので、化けるのは人間向けのエラー文だけで判定には影響しない。
@@ -519,7 +520,7 @@ def ssh_capture(host: str, remote: str) -> str:
     return run_capture(["ssh", *SSH_OPTS, host, remote])[1]
 
 
-# run_ssh と scp は run_capture を使わない。remote コマンドの進捗とビルド出力を
+# 以下の ssh / scp ラッパは run_capture を使わない。remote コマンドの進捗とビルド出力を
 # 端末へそのまま流すのが目的で、捕捉すると完了までユーザに何も見えなくなる。
 def run_ssh_code(host: str, remote: str) -> int:
     """remote コマンドの exit code をそのまま返す (ssh は remote の code を伝搬する)。"""
@@ -587,22 +588,22 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"同期対象なし。VM の現状で実行します ({diff_base}..HEAD)")
 
     if not run_ssh(host, remote_reset_command(repo_win)):
-        print("VM の reset に失敗しました", file=sys.stderr)
+        print("error: VM の reset に失敗しました", file=sys.stderr)
         return 1
     if deleted:
         print(f"削除を同期: {len(deleted)} ファイル")
         for rm in remote_delete_commands(repo_win, deleted):
             if not run_ssh(host, rm):
-                print("VM のファイル削除に失敗しました", file=sys.stderr)
+                print("error: VM のファイル削除に失敗しました", file=sys.stderr)
                 return 1
     if files:
         for mk in parent_mkdir_commands(repo_win, files):
             if not run_ssh(host, mk):
-                print("VM のディレクトリ作成に失敗しました", file=sys.stderr)
+                print("error: VM のディレクトリ作成に失敗しました", file=sys.stderr)
                 return 1
         for f in files:
             if not scp(host, f, f"{repo}/{f}"):
-                print(f"scp 失敗: {f}", file=sys.stderr)
+                print(f"error: scp 失敗: {f}", file=sys.stderr)
                 return 1
 
     print(f"=== VM で {remote_cmd} を実行 ===")
@@ -667,6 +668,22 @@ def pwsh_probe_command() -> str:
     return "where pwsh >nul 2>nul"
 
 
+def remote_ps1_path(kind: str) -> str:
+    """VM 上へ置く一時 .ps1 の絶対パス (health / exec 共用)。呼び出しごとに一意。
+
+    固定名にすると、同じ VM へ並列に winvm を撃ったとき scp と実行の間に相手が同じ
+    パスを上書きし、こちらのコマンドのつもりで相手のコマンドを実行して相手の結果を
+    自分の結果として返す。エージェント駆動で同一 VM を並列に触る使い方が前提なので、
+    起きうる競合ではなく起きる競合として扱う。
+
+    予測可能な名前を全ユーザー書き込み可能な C:/Users/Public に置くと、scp と実行の
+    間に差し替えられる窓も開く。一意名にすると両方まとめて閉じる。
+
+    kind は後始末に失敗して残ったときにどのサブコマンドの残骸か読むためのもの。
+    """
+    return f"C:/Users/Public/winvm_{kind}_{uuid.uuid4().hex}.ps1"
+
+
 # probe 失敗は pwsh 未導入とは限らず、SSH 未到達 (VM 未起動 / stale IP) でも起きる。
 # 両方の可能性を示し、pwsh 未導入と断定して誤誘導しない (health / exec 共用)。
 PWSH_PROBE_ERROR = (
@@ -677,7 +694,7 @@ PWSH_PROBE_ERROR = (
 )
 
 
-def cmd_health(args: argparse.Namespace, *, run=run_ssh) -> int:
+def cmd_health(args: argparse.Namespace, *, run=run_ssh, copy=scp) -> int:
     """.ps1 を scp して pwsh(7) の -File で実行、後始末。pwsh 必須 (不在ならエラー)。"""
     host = _env_or(args.host, "WINVM_HOST")
     repo = _env_or(args.repo, "WINVM_REPO")
@@ -695,14 +712,15 @@ def cmd_health(args: argparse.Namespace, *, run=run_ssh) -> int:
     with tempfile.NamedTemporaryFile("w", suffix=".ps1", delete=False, encoding="utf-8") as fh:
         fh.write(ps)
         local = fh.name
-    remote = "C:/Users/Public/winvm_health.ps1"
+    remote = remote_ps1_path("health")
     try:
-        if not scp(host, local, remote):
-            print("health スクリプトの scp に失敗しました", file=sys.stderr)
+        if not copy(host, local, remote):
+            print("error: health スクリプトの scp に失敗しました", file=sys.stderr)
             return 1
-        ok = run(host, pwsh_file_command(remote))
-        run(host, pwsh_cleanup_command(remote))
-        return 0 if ok else 1
+        try:
+            return 0 if run(host, pwsh_file_command(remote)) else 1
+        finally:
+            run(host, pwsh_cleanup_command(remote))
     finally:
         Path(local).unlink(missing_ok=True)
 
@@ -773,10 +791,10 @@ def cmd_push(args: argparse.Namespace, *, run=run_ssh, copy=scp, capture=ssh_cap
     remote = args.remote
     mk = remote_parent_mkdir_command(remote)
     if mk is not None and not run(host, mk):
-        print("VM のディレクトリ作成に失敗しました", file=sys.stderr)
+        print("error: VM のディレクトリ作成に失敗しました", file=sys.stderr)
         return 1
     if not copy(host, str(local), remote):
-        print(f"scp 失敗: {local}", file=sys.stderr)
+        print(f"error: scp 失敗: {local}", file=sys.stderr)
         return 1
     # scp の rc 0 を「完了」と読み替えない。実体のサイズで途中切れを検出する。
     local_size = local.stat().st_size
@@ -805,7 +823,7 @@ def cmd_pull(args: argparse.Namespace, *, copy=scp_pull, capture=ssh_capture) ->
         return 1
     local.parent.mkdir(parents=True, exist_ok=True)
     if not copy(host, remote, str(local)):
-        print(f"scp 失敗: {remote}", file=sys.stderr)
+        print(f"error: scp 失敗: {remote}", file=sys.stderr)
         return 1
     local_size = local.stat().st_size if local.is_file() else None
     if local_size != remote_size:
@@ -818,8 +836,6 @@ def cmd_pull(args: argparse.Namespace, *, copy=scp_pull, capture=ssh_capture) ->
 # ---------------------------------------------------------------------------
 # exec (SSH ベース。任意 pwsh コマンドを .ps1 転送で実行)
 # ---------------------------------------------------------------------------
-
-EXEC_REMOTE_PS1 = "C:/Users/Public/winvm_exec.ps1"
 
 
 def build_exec_powershell(command: str) -> str:
@@ -868,15 +884,15 @@ def cmd_exec(args: argparse.Namespace, *, run=run_ssh_code, copy=scp) -> int:
     with tempfile.NamedTemporaryFile("w", suffix=".ps1", delete=False, encoding="utf-8") as fh:
         fh.write(ps)
         local = fh.name
+    remote = remote_ps1_path("exec")
     try:
-        if not copy(host, local, EXEC_REMOTE_PS1):
-            print("exec スクリプトの scp に失敗しました", file=sys.stderr)
+        if not copy(host, local, remote):
+            print("error: exec スクリプトの scp に失敗しました", file=sys.stderr)
             return 1
         try:
-            return run(host, pwsh_file_command(EXEC_REMOTE_PS1))
+            return run(host, pwsh_file_command(remote))
         finally:
-            # 実行が失敗しても転送済みの一時 .ps1 は消す。
-            run(host, pwsh_cleanup_command(EXEC_REMOTE_PS1))
+            run(host, pwsh_cleanup_command(remote))
     finally:
         Path(local).unlink(missing_ok=True)
 
