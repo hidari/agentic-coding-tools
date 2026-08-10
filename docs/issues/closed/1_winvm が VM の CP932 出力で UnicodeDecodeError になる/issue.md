@@ -1,5 +1,5 @@
 ---
-status: open
+status: closed
 ---
 
 # fix: winvm が VM の CP932 出力で UnicodeDecodeError になる
