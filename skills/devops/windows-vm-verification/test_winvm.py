@@ -12,6 +12,7 @@ import argparse
 import io
 import os
 import re
+import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -686,6 +687,36 @@ class NoLegacyHypervisorResidue(unittest.TestCase):
         src = Path(winvm.__file__).read_text(encoding="utf-8").lower()
         residue = [t for t in ("vmx", "vmware", "winvm_leases", "dhcpd", ".lck") if t in src]
         self.assertEqual(residue, [])
+
+
+class RunCaptureDecoding(unittest.TestCase):
+    """Issue #1: ja-JP の VM は非対話出力を CP932 で書く。捕捉側が strict decode だと
+    VM が失敗を報告した瞬間に winvm 自身が UnicodeDecodeError で落ちる。
+
+    目印 (サイズの数字・WINVM_MISSING・コミット SHA 等) は ASCII に保つ方針なので、
+    日本語が化けることは許容し「落ちない」ことだけを仕様にする (Issue #1 の案 A)。
+    """
+
+    CP932_EMITTER = (
+        "import sys; sys.stdout.buffer.write('日本語'.encode('cp932')); "
+        "sys.stderr.buffer.write('エラー'.encode('cp932'))"
+    )
+
+    def test_cp932_bytes_do_not_raise(self):
+        rc, out, err = winvm.run_capture([sys.executable, "-c", self.CP932_EMITTER])
+        self.assertEqual(rc, 0)
+        # 化けてよいが、握り潰されて空になるのは別の故障。何かは返ること。
+        self.assertTrue(out)
+        self.assertTrue(err)
+
+    def test_ascii_marks_survive_between_cp932_noise(self):
+        # 判定に使う ASCII の目印は、CP932 のノイズに挟まれても原文のまま残ること。
+        emitter = (
+            "import sys; sys.stdout.buffer.write("
+            "'エラー'.encode('cp932') + b'WINVM_MISSING' + 'です'.encode('cp932'))"
+        )
+        _, out, _ = winvm.run_capture([sys.executable, "-c", emitter])
+        self.assertIn("WINVM_MISSING", out)
 
 
 if __name__ == "__main__":

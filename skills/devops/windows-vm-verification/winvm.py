@@ -49,9 +49,15 @@ def prlctl_exec_argv(vm: str, command: list[str]) -> list[str]:
 
 
 def run_capture(argv: list[str]) -> tuple[int, str, str]:
-    """argv を実行して (returncode, stdout, stderr) を返す。実行不能も戻り値で表す。"""
+    """argv を実行して (returncode, stdout, stderr) を返す。実行不能も戻り値で表す。
+
+    `errors="replace"` が要る (Issue #1)。ja-JP の VM は非対話出力を CP932 で書くため、
+    strict に decode すると VM が失敗を報告した瞬間に winvm 自身が UnicodeDecodeError で
+    落ちる。判定に使う目印 (サイズの数字・WINVM_MISSING・SHA 等) は ASCII に保つ方針
+    なので、化けるのは人間向けのエラー文だけで判定には影響しない。
+    """
     try:
-        p = subprocess.run(argv, capture_output=True, text=True)
+        p = subprocess.run(argv, capture_output=True, text=True, errors="replace")
     except OSError as e:
         return 127, "", f"{argv[0]} を実行できません: {e}"
     return p.returncode, p.stdout, p.stderr
