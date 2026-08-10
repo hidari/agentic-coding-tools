@@ -11,16 +11,16 @@ PR #3 のマージ前レビューで発見した。**実機で確認済み**。
 `winvm exec` と `winvm health` は `where pwsh >nul 2>nul` で pwsh(7) の有無を確かめてから
 `.ps1` を転送して実行する。この probe が通るのに、本実行が失敗する状態が存在する。
 
-### 実測 (2026-08-10、relay-winvm)
+### 実測 (2026-08-10、example-vm)
 
 ```
-$ ssh relay-winvm "where pwsh"
+$ ssh example-vm "where pwsh"
 C:\Users\<name>\AppData\Local\Microsoft\WindowsApps\pwsh.exe
 
-$ ssh relay-winvm 'pwsh -NoProfile -Command "Write-Output PWSHOK"'
+$ ssh example-vm 'pwsh -NoProfile -Command "Write-Output PWSHOK"'
 (CP932 28 バイト) -> 「アクセスが拒否されました。」
 
-$ ssh relay-winvm 'if exist "C:\Program Files\PowerShell\7\pwsh.exe" (echo FOUND) else (echo NOTFOUND)'
+$ ssh example-vm 'if exist "C:\Program Files\PowerShell\7\pwsh.exe" (echo FOUND) else (echo NOTFOUND)'
 NOTFOUND
 ```
 

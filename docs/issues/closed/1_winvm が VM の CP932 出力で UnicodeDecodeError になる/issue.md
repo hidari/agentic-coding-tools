@@ -6,7 +6,7 @@ status: closed
 
 ## 背景
 
-relay の Windows 検証 VM (ja-JP の Windows 11 ARM) を winvm で操作している最中に実際に踏んだ。
+Windows 検証 VM (ja-JP の Windows 11 ARM) を winvm で操作している最中に実際に踏んだ。
 
 Windows PowerShell 5.1 は非対話セッションの出力を OEM コードページで書く。ja-JP 環境では
 CP932 になる。winvm はそれを UTF-8 として decode するため、日本語を含むエラーが出た瞬間に
@@ -76,7 +76,7 @@ CP932 の日本語は化けるが、winvm は落ちない。winvm が VM 出力�
 `capture_output=True` のまま `text` を外し、`utf-8` → `cp932` → `replace` の順で試す。
 日本語のエラー文が読める形で残る。実装は増える。
 
-relay の Rust 側は同種の問題に案 A 相当 (`String::from_utf8_lossy`) で対処し、
+別プロジェクトの Rust 実装は同種の問題に案 A 相当 (`String::from_utf8_lossy`) で対処し、
 「目印は ASCII に保つ」という前提を明示している。同じ前提を winvm でも取るなら案 A で足りる。
 
 ## タスク
@@ -100,7 +100,7 @@ winvm への screenshot/push/pull/exec 追加作業で、push/pull のサイズ�
   decode は `run_capture` 内で起きるため、出力を捨てる `_ssh_reachable` 経路も同じテストが担う。
   ASCII の目印が CP932 ノイズに挟まれても原文で残ることも別テストで pin
 - 変異注入: `errors="replace"` を外すと `RunCaptureDecoding` の 2 件が赤くなることを確認
-- 実機: `winvm run --host relay-winvm --repo C:/no/such/winvm-smoke-repo -- echo hi` で
+- 実機: `winvm run --host <alias> --repo C:/no/such/winvm-smoke-repo -- echo hi` で
   ja-JP VM の cmd が「指定されたパスが見つかりません。」を CP932 で返す経路を踏んだ。
   修正前は `UnicodeDecodeError: 'utf-8' codec can't decode byte 0x8e` で落ち、修正後は
   警告 + 「VM の reset に失敗しました」の正常な失敗報告に落ちることを両方実測
@@ -112,5 +112,5 @@ UTF-8 設定済みの pwsh 経路で代替できる。
 
 - `skills/devops/windows-vm-verification/winvm.py` — `run_capture` (51 行)、`ssh_capture` (452 行)
 - 同ファイル 350 行 — 既に `errors="replace"` を使っている先例
-- relay PR [#588](https://github.com/HermitianHQ/relay/pull/588) — Rust 側で同種の問題に
-  `from_utf8_lossy` で対処し、目印を ASCII に保つ前提を明示している
+- 別プロジェクトの Rust 実装が同種の問題に `String::from_utf8_lossy` で対処し、目印を
+  ASCII に保つ前提を明示している。案 A はその前例に倣ったもの
