@@ -15,7 +15,7 @@ PR #3 のマージ前レビューで発見した。**実機で確認済み**。
 
 ```
 $ ssh relay-winvm "where pwsh"
-C:\Users\sho\AppData\Local\Microsoft\WindowsApps\pwsh.exe
+C:\Users\<name>\AppData\Local\Microsoft\WindowsApps\pwsh.exe
 
 $ ssh relay-winvm 'pwsh -NoProfile -Command "Write-Output PWSHOK"'
 (CP932 28 バイト) -> 「アクセスが拒否されました。」

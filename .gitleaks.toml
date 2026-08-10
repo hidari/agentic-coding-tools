@@ -1,8 +1,11 @@
 # gitleaks 設定
-# 既定の secret 検出ルールを継承しつつ、macOS のローカルユーザー名を含む
-# 絶対パス (/Users/<name>) の漏洩を検出する custom ルールを追加する。
-# pre-commit (staged 検査) と CI の双方が本設定を使用する。
-# 既定ルールだけでは /Users/<name> は検査されないため、この custom ルールが必須である。
+# 既定の secret 検出ルールを継承しつつ、ローカルユーザー名を含む絶対パスの漏洩を
+# 検出する custom ルールを追加する。pre-commit (staged 検査) と CI (全履歴) の双方が
+# 本設定を使用する。既定ルールだけではユーザー名を含むパスは検査されない。
+#
+# 対象は 2 系統ある。macOS だけを見ていると Windows 側が素通りする。このリポジトリは
+# Windows VM を扱う skill を配っているので C:\Users\<name> の方がむしろ出やすく、
+# 実際に docs/issues/ へ入ったまま macOS 専用ルールでは検出されなかった。
 title = "agentic-coding-tools gitleaks config"
 
 [extend]
@@ -11,15 +14,41 @@ useDefault = true
 [[rules]]
 id = "macos-user-path"
 description = "macOS のローカルユーザー名を含む絶対パス (/Users/<name>) の漏洩"
-regex = '''/Users/[a-z_][a-z0-9._-]*'''
+# (?i) が要る。Go の regexp は既定で case sensitive なので、これが無いと
+# /Users/Sho のように 1 文字でも大文字が混じった時点で素通りする。
+regex = '''(?i)/Users/[a-z_][a-z0-9._-]*'''
 tags = ["pii", "path"]
 
   # placeholder / 共有・CI 用のユーザー名は許可する。
   # 境界 ([/."]|$) で /Users/user (許可) と /Users/userfoo (検出) を区別する。
+  #
+  # Public / Default も許可する。このルールは C:/Users/Public のような Windows パスの
+  # 部分文字列にも一致してしまうためで、winvm が一時 .ps1 の置き場に使っている以上
+  # 許可しないとソースとテストが全部引っかかる。(?i) を付けるまでは Public が
+  # 大文字始まりで [a-z_] に弾かれ偶然無害だったが、今は明示的に許可が要る。
   [rules.allowlist]
-  description = "placeholder / 共有・CI 用パスは許可"
+  description = "placeholder / 共有・CI 用パスと Windows のシステム用ディレクトリは許可"
   # secret==match (capture group 無し) だが、境界判定の意図を明示するため match を指定
   regexTarget = "match"
   regexes = [
-    '''/Users/(example|user|username|runner|shared)([/."]|$)''',
+    '''(?i)/Users/(example|user|username|runner|shared|Public|Default|DefaultAppPool|All)([/."]|$)''',
+  ]
+
+[[rules]]
+id = "windows-user-path"
+description = "Windows のローカルユーザー名を含む絶対パス (C:\\Users\\<name>) の漏洩"
+# 区切りは \ と / の両方を受ける。winvm はリモートパスを / で書く経路を持つので、
+# どちらか一方だけを見ると半分が素通りする。
+regex = '''(?i)[a-z]:[\\/]Users[\\/][a-z0-9._-]+'''
+tags = ["pii", "path"]
+
+  # Public / Default は Windows 自身のディレクトリでユーザー名ではない。winvm は
+  # 一時 .ps1 の置き場に C:/Users/Public を使うので、ここを許可しないと自分の
+  # ソースとテストが全部引っかかる。
+  # All Users は空白を含むが区切り文字クラスに空白が無いので照合は All で止まる。
+  [rules.allowlist]
+  description = "Windows のシステム用ディレクトリと placeholder は許可"
+  regexTarget = "match"
+  regexes = [
+    '''(?i)[a-z]:[\\/]Users[\\/](Public|Default|DefaultAppPool|All|example|user|username|runner|shared)$''',
   ]
