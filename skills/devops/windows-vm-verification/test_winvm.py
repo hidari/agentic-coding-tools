@@ -478,25 +478,25 @@ class CollectDoctorChecks(unittest.TestCase):
 
     def test_ssh_probe_only_runs_when_host_given(self):
         without = winvm.collect_doctor_checks(RUNNING_VM, run=self._runner())
-        self.assertNotIn("ssh relay-winvm", [c.label for c in without])
+        self.assertNotIn("ssh example-vm", [c.label for c in without])
 
     def test_unreachable_ssh_is_a_failure(self):
         checks = winvm.collect_doctor_checks(
             RUNNING_VM,
-            host="relay-winvm",
+            host="example-vm",
             run=self._runner(),
             ssh_probe=lambda host: False,
         )
-        c = self._by_label(checks, "ssh relay-winvm")
+        c = self._by_label(checks, "ssh example-vm")
         self.assertIs(c.ok, False)
         self.assertEqual(c.observed, "未到達")
         self.assertEqual(winvm.doctor_exit_code(checks), 1)
 
     def test_reachable_ssh_passes(self):
         checks = winvm.collect_doctor_checks(
-            RUNNING_VM, host="relay-winvm", run=self._runner(), ssh_probe=lambda host: True
+            RUNNING_VM, host="example-vm", run=self._runner(), ssh_probe=lambda host: True
         )
-        c = self._by_label(checks, "ssh relay-winvm")
+        c = self._by_label(checks, "ssh example-vm")
         self.assertIs(c.ok, True)
         self.assertEqual(c.observed, "到達")
 
@@ -988,7 +988,7 @@ class CmdPush(unittest.TestCase):
         self.local.write_bytes(b"m" * 1234)
         self.remote = "C:/Users/Public/dist/app.msi"
 
-    def _push(self, *, host="relay-winvm", local=None, mkdir_ok=True, copy_ok=True, size="1234"):
+    def _push(self, *, host="example-vm", local=None, mkdir_ok=True, copy_ok=True, size="1234"):
         self.mkdirs: list[str] = []
         self.copies: list[tuple[str, str, str]] = []
         self.size_queries: list[str] = []
@@ -1011,7 +1011,7 @@ class CmdPush(unittest.TestCase):
     def test_pushes_and_verifies_the_size(self):
         rc, out, _ = self._push()
         self.assertEqual(rc, 0)
-        self.assertEqual(self.copies, [("relay-winvm", str(self.local), self.remote)])
+        self.assertEqual(self.copies, [("example-vm", str(self.local), self.remote)])
         self.assertEqual(
             self.mkdirs,
             ['if not exist "C:\\Users\\Public\\dist" mkdir "C:\\Users\\Public\\dist"'],
@@ -1058,7 +1058,7 @@ class CmdPush(unittest.TestCase):
         self.assertIn("取得できません", err)
 
     def test_env_var_supplies_host(self):
-        os.environ["WINVM_HOST"] = "relay-winvm"
+        os.environ["WINVM_HOST"] = "example-vm"
         rc, _, _ = self._push(host=None)
         self.assertEqual(rc, 0)
 
@@ -1073,7 +1073,7 @@ class CmdPull(unittest.TestCase):
         self.local = Path(tmp.name) / "in" / "got.msi"
         self.remote = "C:/Users/Public/dist/app.msi"
 
-    def _pull(self, *, host="relay-winvm", size="1234", copy_bytes: bytes | None = b"m" * 1234):
+    def _pull(self, *, host="example-vm", size="1234", copy_bytes: bytes | None = b"m" * 1234):
         self.copies: list[tuple[str, str, str]] = []
         self.size_queries: list[str] = []
 
@@ -1094,7 +1094,7 @@ class CmdPull(unittest.TestCase):
     def test_pulls_and_verifies_the_size(self):
         rc, out, _ = self._pull()
         self.assertEqual(rc, 0)
-        self.assertEqual(self.copies, [("relay-winvm", self.remote, str(self.local))])
+        self.assertEqual(self.copies, [("example-vm", self.remote, str(self.local))])
         self.assertEqual(self.local.read_bytes(), b"m" * 1234)
         self.assertIn("1234", out)
 

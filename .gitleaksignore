@@ -1,0 +1,15 @@
+# gitleaks が全履歴走査で拾う既知の検出を記録する。
+#
+# 追加してよいのは「既に push 済みの履歴に入っていて、内容としては修正済み」のものだけ。
+# 現在のツリーに残っている漏洩をここへ足して黙らせてはならない。
+#
+# 8227014: Windows のユーザー名を含む絶対パスを docs/issues/ へ書いた。当時の custom
+# ルールは macOS の /Users/<name> しか見ておらず、Windows 形式は検出できなかった。
+# ルールを区切り文字ベースの user-path へ作り直した結果、この履歴が引っかかるようになった。
+# ツリー側は placeholder へ置換済み。履歴の書き換えは PUBLIC リポジトリの main への
+# force-push になるので行わない (漏れたのはローカルアカウント名 1 語)。
+#
+# fingerprint は commit:file:ruleID:startLine 形式でルール id を含む。ルールを
+# 作り直すと id が変わって一致しなくなるが、そのときは CI が赤で教えてくれる
+# (fail-closed)。黙って無効化されることはない。
+8227014bed73fcba9d9997c27a88d439641de60a:docs/issues/4_VM の pwsh probe が偽陽性で exec と health が実機で動かない/issue.md:user-path:18
