@@ -14,8 +14,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import uuid
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from xml.etree import ElementTree
 
 # 対話プロンプトで無期限にブロックしないための共通 ssh オプション。
@@ -49,9 +50,15 @@ def prlctl_exec_argv(vm: str, command: list[str]) -> list[str]:
 
 
 def run_capture(argv: list[str]) -> tuple[int, str, str]:
-    """argv を実行して (returncode, stdout, stderr) を返す。実行不能も戻り値で表す。"""
+    """argv を実行して (returncode, stdout, stderr) を返す。実行不能も戻り値で表す。
+
+    `errors="replace"` が要る。ja-JP の VM は非対話出力を CP932 で書くため、
+    strict に decode すると VM が失敗を報告した瞬間に winvm 自身が UnicodeDecodeError で
+    落ちる。判定に使う目印 (サイズの数字・WINVM_MISSING・SHA 等) は ASCII に保つ方針
+    なので、化けるのは人間向けのエラー文だけで判定には影響しない。
+    """
     try:
-        p = subprocess.run(argv, capture_output=True, text=True)
+        p = subprocess.run(argv, capture_output=True, text=True, errors="replace")
     except OSError as e:
         return 127, "", f"{argv[0]} を実行できません: {e}"
     return p.returncode, p.stdout, p.stderr
@@ -365,6 +372,66 @@ def cmd_doctor(args: argparse.Namespace, *, run=run_capture, ssh_probe=_ssh_reac
 
 
 # ---------------------------------------------------------------------------
+# screenshot (prlctl ベース。SSH のセッション分離を回避する)
+# ---------------------------------------------------------------------------
+
+
+def prlctl_capture_argv(vm: str, file: str) -> list[str]:
+    """VM の画面をホスト側から PNG に撮る argv。
+
+    SSH 越しに PowerShell でキャプチャしない。Windows の SSH セッションは session 0 で、
+    対話ユーザーのデスクトップ (別セッション) が見えず黒画面になる。prlctl capture は
+    ホスト側から VM の画面を直接撮るのでセッション分離の影響を受けない
+    (`-f,--file` は prlctl 26.4.1 の capture --help で実測した唯一のオプション)。
+    """
+    return ["prlctl", "capture", vm, "--file", file]
+
+
+def cmd_screenshot(args: argparse.Namespace, *, run=run_capture) -> int:
+    vm_id = _env_or(args.vm, "WINVM_VM")
+    if not vm_id:
+        print("error: --vm (または WINVM_VM) が必要です", file=sys.stderr)
+        return 2
+    vms, err = _load_vms(run)
+    if err:
+        print(f"error: {err}", file=sys.stderr)
+        return 1
+    vm = find_vm(vms, vm_id)
+    if vm is None:
+        print(
+            f"error: VM が見つかりません: {vm_id} / 登録済み: {_known_names(vms)}",
+            file=sys.stderr,
+        )
+        return 1
+    name = str(vm.get("Name", vm_id))
+    status = str(vm.get("State", "unknown"))
+    if status != "running":
+        print(
+            f"error: スクリーンショットを撮れません (status={status})。"
+            f'VM が起動していない場合は prlctl start "{name}" で起動する',
+            file=sys.stderr,
+        )
+        return 1
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    rc, out_text, err_text = run(prlctl_capture_argv(name, str(out)))
+    if rc != 0:
+        detail = err_text.strip() or out_text.strip() or f"rc={rc}"
+        print(f"error: prlctl capture が失敗しました: {detail}", file=sys.stderr)
+        return 1
+    # rc 0 を成功と読み替えない。「撮れたつもりで空」を防ぐためファイルの実体を見る。
+    if not out.is_file():
+        print(f"error: prlctl capture は成功したがファイルがありません: {out}", file=sys.stderr)
+        return 1
+    size = out.stat().st_size
+    if size == 0:
+        print(f"error: スクリーンショットが空です (0 バイト): {out}", file=sys.stderr)
+        return 1
+    print(f"スクリーンショットを保存: {out} ({size} bytes)")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # run (SSH ベース。ハイパーバイザに依存しない)
 # ---------------------------------------------------------------------------
 
@@ -453,14 +520,23 @@ def ssh_capture(host: str, remote: str) -> str:
     return run_capture(["ssh", *SSH_OPTS, host, remote])[1]
 
 
-# run_ssh と scp は run_capture を使わない。remote コマンドの進捗とビルド出力を
+# 以下の ssh / scp ラッパは run_capture を使わない。remote コマンドの進捗とビルド出力を
 # 端末へそのまま流すのが目的で、捕捉すると完了までユーザに何も見えなくなる。
+def run_ssh_code(host: str, remote: str) -> int:
+    """remote コマンドの exit code をそのまま返す (ssh は remote の code を伝搬する)。"""
+    return subprocess.run(["ssh", *SSH_OPTS, host, remote]).returncode
+
+
 def run_ssh(host: str, remote: str) -> bool:
-    return subprocess.run(["ssh", *SSH_OPTS, host, remote]).returncode == 0
+    return run_ssh_code(host, remote) == 0
 
 
 def scp(host: str, local: str, dest: str) -> bool:
     return subprocess.run(["scp", *SSH_OPTS, "-q", local, f"{host}:{dest}"]).returncode == 0
+
+
+def scp_pull(host: str, remote: str, local: str) -> bool:
+    return subprocess.run(["scp", *SSH_OPTS, "-q", f"{host}:{remote}", local]).returncode == 0
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -512,22 +588,22 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"同期対象なし。VM の現状で実行します ({diff_base}..HEAD)")
 
     if not run_ssh(host, remote_reset_command(repo_win)):
-        print("VM の reset に失敗しました", file=sys.stderr)
+        print("error: VM の reset に失敗しました", file=sys.stderr)
         return 1
     if deleted:
         print(f"削除を同期: {len(deleted)} ファイル")
         for rm in remote_delete_commands(repo_win, deleted):
             if not run_ssh(host, rm):
-                print("VM のファイル削除に失敗しました", file=sys.stderr)
+                print("error: VM のファイル削除に失敗しました", file=sys.stderr)
                 return 1
     if files:
         for mk in parent_mkdir_commands(repo_win, files):
             if not run_ssh(host, mk):
-                print("VM のディレクトリ作成に失敗しました", file=sys.stderr)
+                print("error: VM のディレクトリ作成に失敗しました", file=sys.stderr)
                 return 1
         for f in files:
             if not scp(host, f, f"{repo}/{f}"):
-                print(f"scp 失敗: {f}", file=sys.stderr)
+                print(f"error: scp 失敗: {f}", file=sys.stderr)
                 return 1
 
     print(f"=== VM で {remote_cmd} を実行 ===")
@@ -569,8 +645,8 @@ def build_health_powershell(check_tools: list[str], repo: str | None) -> str:
     return "\n".join(lines) + "\n"
 
 
-def health_exec_command(remote: str) -> str:
-    """転送した health .ps1 を pwsh(7) の -File で実行するコマンド。
+def pwsh_file_command(remote: str) -> str:
+    """転送した .ps1 を pwsh(7) の -File で実行するコマンド (health / exec 共用)。
 
     pwsh は RemoteSigned かつ scp 転送物には Mark-of-the-Web が付かないため
     `-ExecutionPolicy Bypass` 無しで実行できる。WinPS 5.1 は Restricted なので
@@ -579,8 +655,8 @@ def health_exec_command(remote: str) -> str:
     return f"pwsh -NoProfile -File {remote}"
 
 
-def health_cleanup_command(remote: str) -> str:
-    """転送した health .ps1 を削除する後始末コマンド (実行系と同じ pwsh に揃える)。"""
+def pwsh_cleanup_command(remote: str) -> str:
+    """転送した .ps1 を削除する後始末コマンド (実行系と同じ pwsh に揃える)。"""
     return f"pwsh -NoProfile -Command Remove-Item -Force {remote}"
 
 
@@ -592,7 +668,33 @@ def pwsh_probe_command() -> str:
     return "where pwsh >nul 2>nul"
 
 
-def cmd_health(args: argparse.Namespace, *, run=run_ssh) -> int:
+def remote_ps1_path(kind: str) -> str:
+    """VM 上へ置く一時 .ps1 の絶対パス (health / exec 共用)。呼び出しごとに一意。
+
+    固定名にすると、同じ VM へ並列に winvm を撃ったとき scp と実行の間に相手が同じ
+    パスを上書きし、こちらのコマンドのつもりで相手のコマンドを実行して相手の結果を
+    自分の結果として返す。エージェント駆動で同一 VM を並列に触る使い方が前提なので、
+    起きうる競合ではなく起きる競合として扱う。
+
+    予測可能な名前を全ユーザー書き込み可能な C:/Users/Public に置くと、scp と実行の
+    間に差し替えられる窓も開く。一意名にすると両方まとめて閉じる。
+
+    kind は後始末に失敗して残ったときにどのサブコマンドの残骸か読むためのもの。
+    """
+    return f"C:/Users/Public/winvm_{kind}_{uuid.uuid4().hex}.ps1"
+
+
+# probe 失敗は pwsh 未導入とは限らず、SSH 未到達 (VM 未起動 / stale IP) でも起きる。
+# 両方の可能性を示し、pwsh 未導入と断定して誤誘導しない (health / exec 共用)。
+PWSH_PROBE_ERROR = (
+    "error: VM 上で pwsh(7) を確認できませんでした "
+    "(VM 未起動 / SSH 未到達、または pwsh 未導入の可能性)。"
+    "winvm doctor --vm <id> --host <alias> で切り分け、"
+    "pwsh が無ければ winget install --id Microsoft.PowerShell で導入する"
+)
+
+
+def cmd_health(args: argparse.Namespace, *, run=run_ssh, copy=scp) -> int:
     """.ps1 を scp して pwsh(7) の -File で実行、後始末。pwsh 必須 (不在ならエラー)。"""
     host = _env_or(args.host, "WINVM_HOST")
     repo = _env_or(args.repo, "WINVM_REPO")
@@ -600,15 +702,7 @@ def cmd_health(args: argparse.Namespace, *, run=run_ssh) -> int:
         print("error: --host (または WINVM_HOST) が必要です", file=sys.stderr)
         return 2
     if not run(host, pwsh_probe_command()):
-        # probe 失敗は pwsh 未導入とは限らず、SSH 未到達 (VM 未起動 / stale IP) でも起きる。
-        # 両方の可能性を示し、pwsh 未導入と断定して誤誘導しない。
-        print(
-            "error: VM 上で pwsh(7) を確認できませんでした "
-            "(VM 未起動 / SSH 未到達、または pwsh 未導入の可能性)。"
-            "winvm doctor --vm <id> --host <alias> で切り分け、"
-            "pwsh が無ければ winget install --id Microsoft.PowerShell で導入する",
-            file=sys.stderr,
-        )
+        print(PWSH_PROBE_ERROR, file=sys.stderr)
         return 1
     # `--check-tools "node, cargo"` のように空白を入れて書かれても拾えるようにする。
     # strip しないと PowerShell 側が " cargo" を探して導入済みのツールを未導入と誤報する。
@@ -618,14 +712,187 @@ def cmd_health(args: argparse.Namespace, *, run=run_ssh) -> int:
     with tempfile.NamedTemporaryFile("w", suffix=".ps1", delete=False, encoding="utf-8") as fh:
         fh.write(ps)
         local = fh.name
-    remote = "C:/Users/Public/winvm_health.ps1"
+    remote = remote_ps1_path("health")
     try:
-        if not scp(host, local, remote):
-            print("health スクリプトの scp に失敗しました", file=sys.stderr)
+        if not copy(host, local, remote):
+            print("error: health スクリプトの scp に失敗しました", file=sys.stderr)
             return 1
-        ok = run(host, health_exec_command(remote))
-        run(host, health_cleanup_command(remote))
-        return 0 if ok else 1
+        try:
+            return 0 if run(host, pwsh_file_command(remote)) else 1
+        finally:
+            run(host, pwsh_cleanup_command(remote))
+    finally:
+        Path(local).unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# push / pull (SSH ベース。任意ファイル 1 個の転送 + サイズ照合)
+# ---------------------------------------------------------------------------
+
+# リモートファイル不在を表す ASCII の目印。localized な cmd 出力を判定に混ぜない。
+REMOTE_MISSING_MARK = "WINVM_MISSING"
+
+
+def remote_size_command(remote_win: str) -> str:
+    """リモートファイルのサイズをバイト数で echo する cmd.exe コマンド。
+
+    素の `for %I ... do @echo %~zI` は対象が無いと `%~zI` が空展開されて裸の `echo`
+    になり、cmd が「ECHO は <ON> です。」を CP932 で返す (実測)。数字でもエラーでも
+    ない localized な出力を判定に混ぜないため、if exist で分岐して不在は ASCII の
+    目印に固定する。
+    """
+    return (
+        f'if exist "{remote_win}" (for %I in ("{remote_win}") do @echo %~zI) '
+        f"else (echo {REMOTE_MISSING_MARK})"
+    )
+
+
+def parse_remote_size(output: str) -> int | None:
+    """remote_size_command の出力をバイト数にする。数字以外は等しく None。
+
+    不在の目印も想定外の localized 出力も「サイズは得られなかった」に倒す。
+    呼び出し側は None を照合失敗として扱う。
+    """
+    t = output.strip()
+    return int(t) if t.isdigit() else None
+
+
+def remote_parent_mkdir_command(remote_posix: str) -> str | None:
+    """remote パス (/ 区切り) の親ディレクトリを作る cmd コマンド。不要なら None。
+
+    ドライブ直下 (`C:/x`) の親 `C:` には発行しない。cmd の mkdir はドライブ名だけを
+    渡すと失敗するし、そもそも作る必要が無い。
+    """
+    parent = str(PurePosixPath(remote_posix).parent)
+    if parent in (".", "/") or re.fullmatch(r"[A-Za-z]:", parent):
+        return None
+    parent_win = to_windows_path(parent)
+    return f'if not exist "{parent_win}" mkdir "{parent_win}"'
+
+
+def _report_size_mismatch(expected: int, actual: int | None) -> None:
+    actual_text = str(actual) if actual is not None else "取得できません"
+    print(
+        f"error: 転送後のサイズが一致しません (期待={expected} 実測={actual_text})。"
+        "転送が途中で切れた可能性",
+        file=sys.stderr,
+    )
+
+
+def cmd_push(args: argparse.Namespace, *, run=run_ssh, copy=scp, capture=ssh_capture) -> int:
+    host = _env_or(args.host, "WINVM_HOST")
+    if not host:
+        print("error: --host (または WINVM_HOST) が必要です", file=sys.stderr)
+        return 2
+    local = Path(args.local)
+    if not local.is_file():
+        print(f"error: ローカルファイルがありません: {local}", file=sys.stderr)
+        return 1
+    remote = args.remote
+    mk = remote_parent_mkdir_command(remote)
+    if mk is not None and not run(host, mk):
+        print("error: VM のディレクトリ作成に失敗しました", file=sys.stderr)
+        return 1
+    if not copy(host, str(local), remote):
+        print(f"error: scp 失敗: {local}", file=sys.stderr)
+        return 1
+    # scp の rc 0 を「完了」と読み替えない。実体のサイズで途中切れを検出する。
+    local_size = local.stat().st_size
+    remote_size = parse_remote_size(capture(host, remote_size_command(to_windows_path(remote))))
+    if remote_size != local_size:
+        _report_size_mismatch(local_size, remote_size)
+        return 1
+    print(f"転送完了: {local} -> {host}:{remote} ({local_size} bytes)")
+    return 0
+
+
+def cmd_pull(args: argparse.Namespace, *, copy=scp_pull, capture=ssh_capture) -> int:
+    host = _env_or(args.host, "WINVM_HOST")
+    if not host:
+        print("error: --host (または WINVM_HOST) が必要です", file=sys.stderr)
+        return 2
+    remote = args.remote
+    local = Path(args.local)
+    # 不在を後段のサイズ照合の失敗に化けさせず、転送前に明示して止める。
+    remote_size = parse_remote_size(capture(host, remote_size_command(to_windows_path(remote))))
+    if remote_size is None:
+        print(
+            f"error: リモートファイルのサイズを取得できません (不在の可能性): {host}:{remote}",
+            file=sys.stderr,
+        )
+        return 1
+    local.parent.mkdir(parents=True, exist_ok=True)
+    if not copy(host, remote, str(local)):
+        print(f"error: scp 失敗: {remote}", file=sys.stderr)
+        return 1
+    local_size = local.stat().st_size if local.is_file() else None
+    if local_size != remote_size:
+        _report_size_mismatch(remote_size, local_size)
+        return 1
+    print(f"転送完了: {host}:{remote} -> {local} ({local_size} bytes)")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# exec (SSH ベース。任意 pwsh コマンドを .ps1 転送で実行)
+# ---------------------------------------------------------------------------
+
+
+def build_exec_powershell(command: str) -> str:
+    """任意コマンドを包む PowerShell 本文。
+
+    コマンドはシェルを経由せずファイルへ書かれるので、run の「argv を空白連結する
+    のでクォートが落ちる」制約が無く、パイプも cmd.exe に解釈されない。
+
+    末尾の exit 伝搬が要る: pwsh -File はスクリプトが exit しないと native コマンド
+    の失敗を 0 に潰す。native の $LASTEXITCODE を優先しつつ、cmdlet の失敗
+    ($? が偽で $LASTEXITCODE が無い/0 の場合) も非 0 へ倒す。
+    """
+    return (
+        "\n".join(
+            [
+                "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}",
+                command,
+                "$winvmOk = $?",
+                "if (-not $winvmOk) { if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0)"
+                " { exit $LASTEXITCODE } else { exit 1 } }",
+                "if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }",
+                "exit 0",
+            ]
+        )
+        + "\n"
+    )
+
+
+def cmd_exec(args: argparse.Namespace, *, run=run_ssh_code, copy=scp) -> int:
+    """コマンドを .ps1 に書いて scp し pwsh -File で実行、後始末 (health と同じ経路)。
+
+    exit code はリモートの値をそのまま winvm の exit code にする (成否を握り潰さない)。
+    """
+    host = _env_or(args.host, "WINVM_HOST")
+    if not host:
+        print("error: --host (または WINVM_HOST) が必要です", file=sys.stderr)
+        return 2
+    command = remote_command_from_args(args.remote)
+    if command is None:
+        print("error: exec には -- の後に pwsh コマンドが必要です", file=sys.stderr)
+        return 2
+    if run(host, pwsh_probe_command()) != 0:
+        print(PWSH_PROBE_ERROR, file=sys.stderr)
+        return 1
+    ps = build_exec_powershell(command)
+    with tempfile.NamedTemporaryFile("w", suffix=".ps1", delete=False, encoding="utf-8") as fh:
+        fh.write(ps)
+        local = fh.name
+    remote = remote_ps1_path("exec")
+    try:
+        if not copy(host, local, remote):
+            print("error: exec スクリプトの scp に失敗しました", file=sys.stderr)
+            return 1
+        try:
+            return run(host, pwsh_file_command(remote))
+        finally:
+            run(host, pwsh_cleanup_command(remote))
     finally:
         Path(local).unlink(missing_ok=True)
 
@@ -661,6 +928,28 @@ def build_parser() -> argparse.ArgumentParser:
     hp.add_argument("--repo")
     hp.add_argument("--check-tools", help="カンマ区切り (例: node,pnpm,cargo,rustc,git)")
     hp.set_defaults(func=cmd_health)
+
+    cp = sub.add_parser("screenshot", help="prlctl でホスト側から VM 画面を PNG に撮る")
+    cp.add_argument("--vm", help="VM 名または UUID (env: WINVM_VM)")
+    cp.add_argument("--out", required=True, help="保存先 (macOS 側のパス)")
+    cp.set_defaults(func=cmd_screenshot)
+
+    pp = sub.add_parser("push", help="ローカルファイルを VM へ転送 (サイズ照合つき)")
+    pp.add_argument("--host", help="ssh config エイリアス (env: WINVM_HOST)")
+    pp.add_argument("local", help="ローカルのファイルパス")
+    pp.add_argument("remote", help="VM 側の保存先ファイルパス (/ 区切り可。例 C:/Users/Public/app.msi)")
+    pp.set_defaults(func=cmd_push)
+
+    lp = sub.add_parser("pull", help="VM のファイルをローカルへ転送 (サイズ照合つき)")
+    lp.add_argument("--host", help="ssh config エイリアス (env: WINVM_HOST)")
+    lp.add_argument("remote", help="VM 側のファイルパス (/ 区切り可)")
+    lp.add_argument("local", help="ローカルの保存先ファイルパス")
+    lp.set_defaults(func=cmd_pull)
+
+    ep = sub.add_parser("exec", help="任意の pwsh コマンドを .ps1 転送で実行 (クォート/パイプ安全)")
+    ep.add_argument("--host", help="ssh config エイリアス (env: WINVM_HOST)")
+    ep.add_argument("remote", nargs=argparse.REMAINDER, help="-- の後に pwsh コマンド")
+    ep.set_defaults(func=cmd_exec)
 
     return p
 

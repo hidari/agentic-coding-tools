@@ -12,6 +12,7 @@ import argparse
 import io
 import os
 import re
+import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -613,15 +614,15 @@ class HealthPowershell(unittest.TestCase):
         # WinPS 5.1 の Restricted を -ExecutionPolicy Bypass で上書きせず、
         # RemoteSigned の pwsh(7) に scp 転送物 (Mark-of-the-Web 無し) を渡す。
         remote = "C:/Users/Public/winvm_health.ps1"
-        cmd = winvm.health_exec_command(remote)
+        cmd = winvm.pwsh_file_command(remote)
         self.assertEqual(cmd, f"pwsh -NoProfile -File {remote}")
         self.assertNotIn("-ExecutionPolicy Bypass", cmd)
         self.assertNotIn("powershell", cmd)  # pwsh(7) であって WinPS 5.1 ではない
-        self.assertEqual(winvm.health_exec_command("D:/x.ps1"), "pwsh -NoProfile -File D:/x.ps1")
+        self.assertEqual(winvm.pwsh_file_command("D:/x.ps1"), "pwsh -NoProfile -File D:/x.ps1")
 
     def test_cleanup_command_uses_pwsh(self):
         remote = "C:/Users/Public/winvm_health.ps1"
-        cmd = winvm.health_cleanup_command(remote)
+        cmd = winvm.pwsh_cleanup_command(remote)
         self.assertEqual(cmd, f"pwsh -NoProfile -Command Remove-Item -Force {remote}")
         self.assertNotIn("-ExecutionPolicy Bypass", cmd)
 
@@ -632,11 +633,40 @@ class HealthPowershell(unittest.TestCase):
 class CmdHealth(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.dict(os.environ))
-        os.environ.pop("WINVM_HOST", None)
+        # cmd_health が読む env は全部落とす。WINVM_REPO を残すと、export している
+        # 開発機だけ repo セクション付きの .ps1 が生成され CI と違うものを検証する。
+        for key in ("WINVM_HOST", "WINVM_REPO"):
+            os.environ.pop(key, None)
 
-    def _health(self, run_remote, *, host="vm"):
+    def _health(self, run_remote, *, host="vm", copy=lambda h, local, dest: True):
+        # copy の既定はフェイク。本物の scp を既定に残すと、probe ガードが将来壊れた
+        # ときにユニットテストが実際に ssh/scp を撃つ (高速テストの前提が静かに崩れる)。
         args = argparse.Namespace(host=host, repo=None, check_tools=None)
-        return capture_io(lambda: winvm.cmd_health(args, run=run_remote))
+        return capture_io(lambda: winvm.cmd_health(args, run=run_remote, copy=copy))
+
+    def _spy(self, *, script_ok=True, copy_ok=True, script_raises=False):
+        """probe → scp → 実行 → 後始末 の経路を観測する。exec 側の _exec と同型。"""
+        self.run_calls: list[str] = []
+        self.copy_dests: list[str] = []
+
+        def run(host, cmd):
+            self.run_calls.append(cmd)
+            if cmd == winvm.pwsh_probe_command():
+                return True
+            dest = self.copy_dests[-1] if self.copy_dests else None
+            if dest is not None and cmd == winvm.pwsh_file_command(dest):
+                if script_raises:
+                    raise RuntimeError("SSH が切れた")
+                return script_ok
+            if dest is not None and cmd == winvm.pwsh_cleanup_command(dest):
+                return True
+            raise AssertionError(f"想定外の remote コマンド: {cmd}")
+
+        def copy(host, local, dest):
+            self.copy_dests.append(dest)
+            return copy_ok
+
+        return run, copy
 
     def test_errors_when_pwsh_absent_and_does_not_transfer(self):
         calls: list[str] = []
@@ -649,6 +679,48 @@ class CmdHealth(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertEqual(calls, [winvm.pwsh_probe_command()])  # probe だけ、scp/exec は走らない
         self.assertIn("pwsh", err)
+
+    def test_transfers_a_ps1_and_cleans_up(self):
+        run, copy = self._spy()
+        rc, _, _ = self._health(run, copy=copy)
+        self.assertEqual(rc, 0)
+        dest = self.copy_dests[0]
+        self.assertEqual(
+            self.run_calls,
+            [
+                winvm.pwsh_probe_command(),
+                winvm.pwsh_file_command(dest),
+                winvm.pwsh_cleanup_command(dest),
+            ],
+        )
+
+    def test_scp_failure_is_exit_1_without_running_the_script(self):
+        run, copy = self._spy(copy_ok=False)
+        rc, _, err = self._health(run, copy=copy)
+        self.assertEqual(rc, 1)
+        self.assertIn("scp", err)
+        self.assertEqual(self.run_calls, [winvm.pwsh_probe_command()])
+
+    def test_cleanup_runs_even_when_the_script_reports_failure(self):
+        run, copy = self._spy(script_ok=False)
+        rc, _, _ = self._health(run, copy=copy)
+        self.assertEqual(rc, 1)
+        self.assertIn(winvm.pwsh_cleanup_command(self.copy_dests[0]), self.run_calls)
+
+    def test_cleanup_runs_even_when_the_script_raises(self):
+        # run が例外で抜けても VM 上へ .ps1 を残さない。try/finally が無いと残る。
+        run, copy = self._spy(script_raises=True)
+        with self.assertRaises(RuntimeError):
+            self._health(run, copy=copy)
+        self.assertIn(winvm.pwsh_cleanup_command(self.copy_dests[0]), self.run_calls)
+
+    def test_two_invocations_do_not_share_a_remote_path(self):
+        run, copy = self._spy()
+        self._health(run, copy=copy)
+        first = self.copy_dests[0]
+        run, copy = self._spy()
+        self._health(run, copy=copy)
+        self.assertNotEqual(first, self.copy_dests[0])
 
     def test_probe_error_message_names_both_causes(self):
         # probe 失敗は SSH 未到達 (VM 未起動 / stale IP) でも起きる。pwsh 未導入と断定しない。
@@ -664,10 +736,18 @@ class CmdHealth(unittest.TestCase):
 
 
 class ParserSurface(unittest.TestCase):
-    def test_subcommands_are_exactly_the_four_supported(self):
+    def test_subcommands_are_exactly_the_supported_set(self):
         parser = winvm.build_parser()
         names = {c for a in parser._actions if getattr(a, "choices", None) for c in a.choices}
-        self.assertEqual(names, {"resolve-ip", "run", "health", "doctor"})
+        self.assertEqual(
+            names,
+            {"resolve-ip", "run", "health", "doctor", "screenshot", "push", "pull", "exec"},
+        )
+
+    def test_screenshot_requires_out(self):
+        # --out に env フォールバックは無いので argparse 自身に必須を守らせる。
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            winvm.build_parser().parse_args(["screenshot", "--vm", "x"])
 
     def test_resolve_ip_rejects_the_legacy_identifier_flag(self):
         # argparse は拒否時に usage を stderr へ書くので、テスト出力を汚さないよう捨てる。
@@ -686,6 +766,512 @@ class NoLegacyHypervisorResidue(unittest.TestCase):
         src = Path(winvm.__file__).read_text(encoding="utf-8").lower()
         residue = [t for t in ("vmx", "vmware", "winvm_leases", "dhcpd", ".lck") if t in src]
         self.assertEqual(residue, [])
+
+
+class StderrMessagePrefix(unittest.TestCase):
+    """stderr へ出す診断は error: か 警告: で始める。
+
+    接頭辞を手で付ける運用は、次に print を足した人が落とす。実際この規約は一度
+    崩れていて (終端エラーなのに接頭辞が無い print が 8 つあった)、手で直した。
+    同じことが起きないようソース走査で pin する。error: は終端する失敗、警告: は
+    処理を続ける通知で、この 2 つ以外は認めない。
+    """
+
+    # print( から file=sys.stderr までを取るが、途中に別の print( を挟まない
+    # (stdout 向けの print から跨いで拾うと、検査対象でない文字列を判定してしまう)。
+    STDERR_PRINT = re.compile(r"print\(((?:(?!print\().)*?)file=sys\.stderr", re.S)
+
+    def test_every_stderr_message_is_prefixed(self):
+        src = Path(winvm.__file__).read_text(encoding="utf-8")
+        blocks = self.STDERR_PRINT.findall(src)
+        # 走査が空振りしていないことの対照。0 件は「全部合格」ではなく「見ていない」。
+        self.assertGreaterEqual(len(blocks), 20, "stderr print の走査が空振りしている")
+
+        unprefixed = []
+        for block in blocks:
+            head = block.strip().rstrip(",").strip()
+            # f-string 接頭辞と開きクォートを剥がして本文の先頭を見る。
+            literal = head.lstrip("f").lstrip("\"'")
+            if literal.startswith(("error:", "警告:")):
+                continue
+            # 定数を渡している経路 (PWSH_PROBE_ERROR 等) は値を見に行く。
+            if str(getattr(winvm, head, "")).startswith(("error:", "警告:")):
+                continue
+            unprefixed.append(head[:60])
+        self.assertEqual(unprefixed, [])
+
+
+class RunCaptureDecoding(unittest.TestCase):
+    """ja-JP の VM は非対話出力を CP932 で書く。捕捉側が strict decode だと
+    VM が失敗を報告した瞬間に winvm 自身が UnicodeDecodeError で落ちる。
+
+    目印 (サイズの数字・WINVM_MISSING・コミット SHA 等) は ASCII に保つ方針なので、
+    日本語が化けることは許容し「落ちない」ことだけを仕様にする。
+    """
+
+    CP932_EMITTER = (
+        "import sys; sys.stdout.buffer.write('日本語'.encode('cp932')); "
+        "sys.stderr.buffer.write('エラー'.encode('cp932'))"
+    )
+
+    def test_cp932_bytes_do_not_raise(self):
+        rc, out, err = winvm.run_capture([sys.executable, "-c", self.CP932_EMITTER])
+        self.assertEqual(rc, 0)
+        # 化けてよいが、握り潰されて空になるのは別の故障。何かは返ること。
+        self.assertTrue(out)
+        self.assertTrue(err)
+
+    def test_ascii_marks_survive_between_cp932_noise(self):
+        # 判定に使う ASCII の目印は、CP932 のノイズに挟まれても原文のまま残ること。
+        emitter = (
+            "import sys; sys.stdout.buffer.write("
+            "'エラー'.encode('cp932') + b'WINVM_MISSING' + 'です'.encode('cp932'))"
+        )
+        _, out, _ = winvm.run_capture([sys.executable, "-c", emitter])
+        self.assertIn("WINVM_MISSING", out)
+
+
+class PrlctlCaptureArgv(unittest.TestCase):
+    def test_capture_argv_uses_the_file_flag(self):
+        # `-f,--file` は prlctl 26.4.1 の capture --help で実測した唯一のオプション。
+        self.assertEqual(
+            winvm.prlctl_capture_argv(RUNNING_VM, "/tmp/shot.png"),
+            ["prlctl", "capture", RUNNING_VM, "--file", "/tmp/shot.png"],
+        )
+
+
+class CmdScreenshot(unittest.TestCase):
+    """screenshot は SSH ではなく prlctl でホスト側から撮る。
+
+    SSH 越しのキャプチャは Windows のセッション分離 (SSH は session 0、対話ユーザーの
+    デスクトップは別セッション) で黒画面になるため、経路そのものを pin する。
+    """
+
+    def setUp(self):
+        self.enterContext(patch.dict(os.environ))
+        os.environ.pop("WINVM_VM", None)
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        # 親ディレクトリ (shots/) は事前に存在しない。作られること自体が仕様。
+        self.out = Path(tmp.name) / "shots" / "screen.png"
+
+    def _shoot(self, vm, *, capture_bytes: bytes | None = b"\x89PNG...", capture_rc=0):
+        """list には実機 JSON を、capture にはファイル書き込みを応答するランナーで呼ぶ。"""
+        self.run_argvs: list[tuple[str, ...]] = []
+        capture_argv = tuple(winvm.prlctl_capture_argv(RUNNING_VM, str(self.out)))
+
+        def run(argv):
+            self.run_argvs.append(tuple(argv))
+            if tuple(argv) == tuple(winvm.prlctl_list_argv()):
+                return 0, PRLCTL_LIST_JSON, ""
+            if tuple(argv) == capture_argv:
+                if capture_bytes is not None:
+                    self.out.write_bytes(capture_bytes)
+                return capture_rc, "Capture the VM screen...", ""
+            raise AssertionError(f"想定外の argv: {argv}")
+
+        args = argparse.Namespace(vm=vm, out=str(self.out))
+        return capture_io(lambda: winvm.cmd_screenshot(args, run=run))
+
+    def test_captures_running_vm_and_reports_path_and_size(self):
+        rc, out, _ = self._shoot(RUNNING_VM)
+        self.assertEqual(rc, 0)
+        # 「撮れたつもりで空」を防ぐため、保存先とサイズの両方を報告に出す。
+        self.assertIn(str(self.out), out)
+        self.assertIn(str(len(b"\x89PNG...")), out)
+
+    def test_creates_the_missing_parent_directory(self):
+        self.assertFalse(self.out.parent.exists())
+        rc, _, _ = self._shoot(RUNNING_VM)
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.out.parent.is_dir())
+
+    def test_stopped_vm_is_exit_1_with_status_and_start_hint(self):
+        # capture へ進む前に止める (FakeRunner 相当: 想定外 argv は raise で捕まる)。
+        rc, _, err = self._shoot(STOPPED_VM)
+        self.assertEqual(rc, 1)
+        self.assertIn("status=stopped", err)
+        self.assertIn("prlctl start", err)
+
+    def test_unknown_vm_is_exit_1_and_lists_known_names(self):
+        rc, _, err = self._shoot("no-such-vm")
+        self.assertEqual(rc, 1)
+        self.assertIn(RUNNING_VM, err)
+
+    def test_missing_identifier_is_exit_2(self):
+        rc, _, err = self._shoot(None)
+        self.assertEqual(rc, 2)
+        self.assertIn("--vm", err)
+
+    def test_env_var_supplies_identifier(self):
+        os.environ["WINVM_VM"] = RUNNING_VM
+        rc, _, _ = self._shoot(None)
+        self.assertEqual(rc, 0)
+
+    def test_uuid_is_resolved_to_the_name_before_capture(self):
+        # prlctl capture へ渡すのは解決後の Name。UUID をそのまま渡すと撮れない。
+        # 名前に空白が入る (Staccato - Windows 11 ARM) ので argv 分割の崩れもここで出る。
+        rc, _, _ = self._shoot("4eb49f98-7f09-4b43-a3f1-35f285ad4d26")
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            self.run_argvs[-1],
+            tuple(winvm.prlctl_capture_argv(RUNNING_VM, str(self.out))),
+        )
+
+    def test_capture_failure_is_exit_1(self):
+        rc, _, err = self._shoot(RUNNING_VM, capture_bytes=None, capture_rc=1)
+        self.assertEqual(rc, 1)
+        self.assertIn("prlctl capture", err)
+
+    def test_rc_zero_without_a_file_is_exit_1(self):
+        # rc 0 を成功と読み替えない。ファイルの実在まで見る。
+        rc, _, err = self._shoot(RUNNING_VM, capture_bytes=None)
+        self.assertEqual(rc, 1)
+        self.assertIn(str(self.out), err)
+
+    def test_zero_byte_capture_is_exit_1(self):
+        rc, _, err = self._shoot(RUNNING_VM, capture_bytes=b"")
+        self.assertEqual(rc, 1)
+        self.assertIn("0 バイト", err)
+
+
+class RemoteSizeProtocol(unittest.TestCase):
+    """push/pull のサイズ照合プロトコル。応答は必ず ASCII に固定する。
+
+    素の `for %I ... do @echo %~zI` は対象が無いと裸の `echo` に落ち、cmd が
+    「ECHO は <ON> です。」を CP932 で返す (実測)。localized な出力を判定に
+    混ぜないため、if exist で分岐して不在は ASCII の目印にする。
+    """
+
+    def test_command_guards_missing_file_with_an_ascii_mark(self):
+        self.assertEqual(
+            winvm.remote_size_command("C:\\Users\\Public\\app.msi"),
+            'if exist "C:\\Users\\Public\\app.msi" '
+            '(for %I in ("C:\\Users\\Public\\app.msi") do @echo %~zI) '
+            "else (echo WINVM_MISSING)",
+        )
+
+    def test_parse_reads_a_size_with_crlf(self):
+        self.assertEqual(winvm.parse_remote_size("327168\r\n"), 327168)
+
+    def test_parse_rejects_the_missing_mark(self):
+        self.assertIsNone(winvm.parse_remote_size("WINVM_MISSING\r\n"))
+
+    def test_parse_rejects_localized_noise_and_empty(self):
+        # 裸の echo に落ちた場合の CP932 出力 (UTF-8 decode 後は置換文字になる)。
+        self.assertIsNone(winvm.parse_remote_size("ECHO \ufffd\ufffd <ON> \ufffd\ufffdB\r\n"))
+        self.assertIsNone(winvm.parse_remote_size(""))
+
+
+class RemoteParentMkdirCommand(unittest.TestCase):
+    def test_builds_windows_mkdir_for_the_parent(self):
+        self.assertEqual(
+            winvm.remote_parent_mkdir_command("C:/Users/Public/dist/app.msi"),
+            'if not exist "C:\\Users\\Public\\dist" mkdir "C:\\Users\\Public\\dist"',
+        )
+
+    def test_drive_root_needs_no_mkdir(self):
+        # `C:` へ mkdir を発行しない。cmd の mkdir はドライブ名だけだと失敗する。
+        self.assertIsNone(winvm.remote_parent_mkdir_command("C:/app.msi"))
+
+    def test_bare_filename_needs_no_mkdir(self):
+        self.assertIsNone(winvm.remote_parent_mkdir_command("app.msi"))
+
+
+class CmdPush(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.dict(os.environ))
+        os.environ.pop("WINVM_HOST", None)
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.local = Path(tmp.name) / "app.msi"
+        self.local.write_bytes(b"m" * 1234)
+        self.remote = "C:/Users/Public/dist/app.msi"
+
+    def _push(self, *, host="relay-winvm", local=None, mkdir_ok=True, copy_ok=True, size="1234"):
+        self.mkdirs: list[str] = []
+        self.copies: list[tuple[str, str, str]] = []
+        self.size_queries: list[str] = []
+
+        def run(h, cmd):
+            self.mkdirs.append(cmd)
+            return mkdir_ok
+
+        def copy(h, src, dest):
+            self.copies.append((h, src, dest))
+            return copy_ok
+
+        def capture(h, cmd):
+            self.size_queries.append(cmd)
+            return f"{size}\r\n"
+
+        args = argparse.Namespace(host=host, local=str(local or self.local), remote=self.remote)
+        return capture_io(lambda: winvm.cmd_push(args, run=run, copy=copy, capture=capture))
+
+    def test_pushes_and_verifies_the_size(self):
+        rc, out, _ = self._push()
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.copies, [("relay-winvm", str(self.local), self.remote)])
+        self.assertEqual(
+            self.mkdirs,
+            ['if not exist "C:\\Users\\Public\\dist" mkdir "C:\\Users\\Public\\dist"'],
+        )
+        self.assertEqual(
+            self.size_queries,
+            [winvm.remote_size_command("C:\\Users\\Public\\dist\\app.msi")],
+        )
+        self.assertIn("1234", out)
+
+    def test_missing_host_is_exit_2(self):
+        rc, _, err = self._push(host=None)
+        self.assertEqual(rc, 2)
+        self.assertIn("--host", err)
+
+    def test_missing_local_file_is_exit_1_before_any_ssh(self):
+        rc, _, err = self._push(local=self.local.with_name("no-such.msi"))
+        self.assertEqual(rc, 1)
+        self.assertIn("no-such.msi", err)
+        self.assertEqual(self.mkdirs, [])
+        self.assertEqual(self.copies, [])
+
+    def test_mkdir_failure_is_exit_1_before_scp(self):
+        rc, _, _ = self._push(mkdir_ok=False)
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.copies, [])
+
+    def test_scp_failure_is_exit_1_without_a_size_check(self):
+        rc, _, err = self._push(copy_ok=False)
+        self.assertEqual(rc, 1)
+        self.assertIn("scp", err)
+        self.assertEqual(self.size_queries, [])
+
+    def test_size_mismatch_is_exit_1_showing_both_sizes(self):
+        # 途中で切れた転送を「完了」と報告しない。両方の実測値を出す。
+        rc, _, err = self._push(size="999")
+        self.assertEqual(rc, 1)
+        self.assertIn("1234", err)
+        self.assertIn("999", err)
+
+    def test_vanished_remote_after_push_is_exit_1(self):
+        rc, _, err = self._push(size="WINVM_MISSING")
+        self.assertEqual(rc, 1)
+        self.assertIn("取得できません", err)
+
+    def test_env_var_supplies_host(self):
+        os.environ["WINVM_HOST"] = "relay-winvm"
+        rc, _, _ = self._push(host=None)
+        self.assertEqual(rc, 0)
+
+
+class CmdPull(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.dict(os.environ))
+        os.environ.pop("WINVM_HOST", None)
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        # 親ディレクトリ (in/) は事前に存在しない。作られること自体が仕様。
+        self.local = Path(tmp.name) / "in" / "got.msi"
+        self.remote = "C:/Users/Public/dist/app.msi"
+
+    def _pull(self, *, host="relay-winvm", size="1234", copy_bytes: bytes | None = b"m" * 1234):
+        self.copies: list[tuple[str, str, str]] = []
+        self.size_queries: list[str] = []
+
+        def copy(h, remote, local):
+            self.copies.append((h, remote, local))
+            if copy_bytes is None:
+                return False
+            Path(local).write_bytes(copy_bytes)
+            return True
+
+        def capture(h, cmd):
+            self.size_queries.append(cmd)
+            return f"{size}\r\n"
+
+        args = argparse.Namespace(host=host, remote=self.remote, local=str(self.local))
+        return capture_io(lambda: winvm.cmd_pull(args, copy=copy, capture=capture))
+
+    def test_pulls_and_verifies_the_size(self):
+        rc, out, _ = self._pull()
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.copies, [("relay-winvm", self.remote, str(self.local))])
+        self.assertEqual(self.local.read_bytes(), b"m" * 1234)
+        self.assertIn("1234", out)
+
+    def test_creates_the_missing_local_parent_directory(self):
+        self.assertFalse(self.local.parent.exists())
+        rc, _, _ = self._pull()
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.local.parent.is_dir())
+
+    def test_missing_host_is_exit_2(self):
+        rc, _, err = self._pull(host=None)
+        self.assertEqual(rc, 2)
+        self.assertIn("--host", err)
+
+    def test_missing_remote_aborts_before_scp(self):
+        # 不在をサイズ照合の失敗として後置きせず、転送前に明示して止める。
+        rc, _, err = self._pull(size="WINVM_MISSING")
+        self.assertEqual(rc, 1)
+        self.assertIn(self.remote, err)
+        self.assertEqual(self.copies, [])
+
+    def test_scp_failure_is_exit_1(self):
+        rc, _, err = self._pull(copy_bytes=None)
+        self.assertEqual(rc, 1)
+        self.assertIn("scp", err)
+
+    def test_size_mismatch_is_exit_1_showing_both_sizes(self):
+        rc, _, err = self._pull(copy_bytes=b"m" * 999)
+        self.assertEqual(rc, 1)
+        self.assertIn("1234", err)
+        self.assertIn("999", err)
+
+
+class BuildExecPowershell(unittest.TestCase):
+    def test_preserves_pipes_and_quotes_verbatim(self):
+        # コマンドはシェルを経由せずファイルへ書かれるので、加工ゼロで残ること。
+        cmd = "Get-ChildItem C:\\ -Directory | Select-Object -First 3 -ExpandProperty Name"
+        self.assertIn(cmd, winvm.build_exec_powershell(cmd))
+
+    def test_sets_utf8_before_the_command(self):
+        ps = winvm.build_exec_powershell("Get-Date")
+        utf8 = ps.index("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8")
+        self.assertLess(utf8, ps.index("Get-Date"))
+
+    def test_tail_propagates_the_exit_code(self):
+        # pwsh -File はスクリプトが exit しないと native コマンドの失敗を 0 に潰す。
+        # native の $LASTEXITCODE を優先しつつ、cmdlet の失敗 ($? が偽) も非 0 にする。
+        self.assertEqual(
+            winvm.build_exec_powershell("Get-Date").splitlines()[-4:],
+            [
+                "$winvmOk = $?",
+                "if (-not $winvmOk) { if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0)"
+                " { exit $LASTEXITCODE } else { exit 1 } }",
+                "if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }",
+                "exit 0",
+            ],
+        )
+
+
+class RemotePs1Path(unittest.TestCase):
+    """VM 上へ置く一時 .ps1 のパスは呼び出しごとに一意でなければならない。
+
+    固定名だと、同じ VM へ並列に winvm を撃ったとき scp と実行の間に相手が同じパスを
+    上書きし、こちらのコマンドのつもりで相手のコマンドを実行して相手の結果を自分の
+    結果として返す。エージェント駆動で同一 VM を並列に触る使い方が前提なので、
+    「稀に起きる」ではなく「起きる」前提で設計する。
+    """
+
+    def test_every_call_returns_a_distinct_path(self):
+        paths = {winvm.remote_ps1_path("exec") for _ in range(32)}
+        self.assertEqual(len(paths), 32)
+
+    def test_kind_appears_in_the_name_so_leftovers_are_attributable(self):
+        # 後始末に失敗して VM 上へ残ったとき、どのサブコマンドの残骸か読めること。
+        self.assertIn("exec", Path(winvm.remote_ps1_path("exec")).name)
+        self.assertIn("health", Path(winvm.remote_ps1_path("health")).name)
+
+    def test_path_shape_is_a_ps1_under_public(self):
+        path = winvm.remote_ps1_path("exec")
+        self.assertTrue(path.startswith("C:/Users/Public/winvm_"), path)
+        self.assertTrue(path.endswith(".ps1"), path)
+        # pwsh_file_command は空白でトークンを切るので、パスに空白が入ると壊れる。
+        self.assertNotIn(" ", path)
+
+
+class CmdExec(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.dict(os.environ))
+        os.environ.pop("WINVM_HOST", None)
+
+    def _exec(self, remote_args, *, host="vm", probe_rc=0, exec_rc=0, copy_ok=True):
+        self.run_calls: list[str] = []
+        self.script_texts: list[str] = []
+        self.copy_dests: list[str] = []
+        self.local_scripts: list[Path] = []
+
+        def run(h, cmd):
+            self.run_calls.append(cmd)
+            if cmd == winvm.pwsh_probe_command():
+                return probe_rc
+            # 転送先は呼び出しごとに変わるので、実際に scp された宛先と突き合わせる。
+            dest = self.copy_dests[-1] if self.copy_dests else None
+            if dest is not None and cmd == winvm.pwsh_file_command(dest):
+                return exec_rc
+            if dest is not None and cmd == winvm.pwsh_cleanup_command(dest):
+                return 0
+            raise AssertionError(f"想定外の remote コマンド: {cmd}")
+
+        def copy(h, local, dest):
+            self.local_scripts.append(Path(local))
+            self.script_texts.append(Path(local).read_text(encoding="utf-8"))
+            self.copy_dests.append(dest)
+            return copy_ok
+
+        args = argparse.Namespace(host=host, remote=remote_args)
+        return capture_io(lambda: winvm.cmd_exec(args, run=run, copy=copy))
+
+    def test_transfers_a_ps1_and_runs_it_with_pwsh_file(self):
+        rc, _, _ = self._exec(["--", "Get-Date"])
+        self.assertEqual(rc, 0)
+        dest = self.copy_dests[0]
+        self.assertIn("Get-Date", self.script_texts[0])
+        self.assertEqual(
+            self.run_calls,
+            [
+                winvm.pwsh_probe_command(),
+                winvm.pwsh_file_command(dest),
+                winvm.pwsh_cleanup_command(dest),
+            ],
+        )
+
+    def test_two_invocations_do_not_share_a_remote_path(self):
+        # 並列実行で取り違えが起きない条件。scp 先が毎回変わることを cmd 経由で pin する。
+        self._exec(["--", "Get-Date"])
+        first = self.copy_dests[0]
+        self._exec(["--", "Get-Date"])
+        self.assertNotEqual(first, self.copy_dests[0])
+
+    def test_pipe_survives_the_argv_join(self):
+        # run の「argv を空白連結するのでクォートが落ちる」制約の解消そのもの。
+        self._exec(["--", "Get-ChildItem", "C:\\", "|", "Select-Object", "-First", "3"])
+        self.assertIn("Get-ChildItem C:\\ | Select-Object -First 3", self.script_texts[0])
+
+    def test_returns_the_remote_exit_code(self):
+        # 成否を bool に潰さない。リモートの exit code がそのまま winvm の exit code。
+        rc, _, _ = self._exec(["--", "cmd", "/c", "exit 7"], exec_rc=7)
+        self.assertEqual(rc, 7)
+
+    def test_cleanup_runs_even_when_the_command_fails(self):
+        self._exec(["--", "Get-Date"], exec_rc=1)
+        self.assertIn(winvm.pwsh_cleanup_command(self.copy_dests[0]), self.run_calls)
+
+    def test_local_temp_script_is_removed(self):
+        self._exec(["--", "Get-Date"])
+        self.assertFalse(self.local_scripts[0].exists())
+
+    def test_probe_failure_is_exit_1_without_a_transfer(self):
+        rc, _, err = self._exec(["--", "Get-Date"], probe_rc=1)
+        self.assertEqual(rc, 1)
+        self.assertIn("pwsh", err)
+        self.assertEqual(self.script_texts, [])
+
+    def test_scp_failure_is_exit_1_without_an_exec(self):
+        rc, _, err = self._exec(["--", "Get-Date"], copy_ok=False)
+        self.assertEqual(rc, 1)
+        self.assertIn("scp", err)
+        self.assertEqual(self.run_calls, [winvm.pwsh_probe_command()])
+
+    def test_missing_command_is_exit_2(self):
+        rc, _, err = self._exec(["--"])
+        self.assertEqual(rc, 2)
+        self.assertIn("pwsh コマンド", err)
+
+    def test_missing_host_is_exit_2(self):
+        rc, _, err = self._exec(["--", "Get-Date"], host=None)
+        self.assertEqual(rc, 2)
+        self.assertIn("--host", err)
 
 
 if __name__ == "__main__":

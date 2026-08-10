@@ -1,5 +1,5 @@
 ---
-status: open
+status: closed
 ---
 
 # fix: winvm が VM の CP932 出力で UnicodeDecodeError になる
@@ -81,12 +81,32 @@ relay の Rust 側は同種の問題に案 A 相当 (`String::from_utf8_lossy`) 
 
 ## タスク
 
-- [ ] 案 A / 案 B を決める (目印が ASCII に保たれている前提が成り立つか確認してから)
-- [ ] `run_capture` を修正する
-- [ ] CP932 のバイト列を stdout / stderr に出すダミーコマンドで、例外にならないことをテストする
-- [ ] 変異注入で確認する: `errors` の指定を外すとそのテストが赤くなること
-- [ ] `_ssh_reachable` のように出力を捨てる経路でも落ちないことをテストに含める
-- [ ] 実機 (ja-JP の Windows VM) で、日本語のエラーを出すコマンドを `winvm run` 経由で踏む
+- [x] 案 A / 案 B を決める (目印が ASCII に保たれている前提が成り立つか確認してから)
+- [x] `run_capture` を修正する
+- [x] CP932 のバイト列を stdout / stderr に出すダミーコマンドで、例外にならないことをテストする
+- [x] 変異注入で確認する: `errors` の指定を外すとそのテストが赤くなること
+- [x] `_ssh_reachable` のように出力を捨てる経路でも落ちないことをテストに含める
+- [x] 実機 (ja-JP の Windows VM) で、日本語のエラーを出すコマンドを `winvm run` 経由で踏む
+
+## 対応記録 (2026-08-10)
+
+winvm への screenshot/push/pull/exec 追加作業で、push/pull のサイズ照合が同じ捕捉経路
+(`ssh_capture` → `run_capture`) を踏むため、この Issue を併せて対応した。
+
+- 案 A を採用。winvm が判定に使う目印 (サイズの数字・`WINVM_MISSING`・コミット SHA) は
+  すべて ASCII であることを確認した。目印を ASCII に保つ前提は `run_capture` の docstring と
+  `test_winvm.py` の `RunCaptureDecoding` に明記
+- テストは `sys.executable` で CP932 バイト列を stdout / stderr の両方へ出すダミーを使う。
+  decode は `run_capture` 内で起きるため、出力を捨てる `_ssh_reachable` 経路も同じテストが担う。
+  ASCII の目印が CP932 ノイズに挟まれても原文で残ることも別テストで pin
+- 変異注入: `errors="replace"` を外すと `RunCaptureDecoding` の 2 件が赤くなることを確認
+- 実機: `winvm run --host relay-winvm --repo C:/no/such/winvm-smoke-repo -- echo hi` で
+  ja-JP VM の cmd が「指定されたパスが見つかりません。」を CP932 で返す経路を踏んだ。
+  修正前は `UnicodeDecodeError: 'utf-8' codec can't decode byte 0x8e` で落ち、修正後は
+  警告 + 「VM の reset に失敗しました」の正常な失敗報告に落ちることを両方実測
+
+日本語エラー文はモジバケする (案 B は不採用)。読める形が要る場面は `winvm exec` が
+UTF-8 設定済みの pwsh 経路で代替できる。
 
 ## 関連
 
