@@ -3,52 +3,48 @@
 # 検出する custom ルールを追加する。pre-commit (staged 検査) と CI (全履歴) の双方が
 # 本設定を使用する。既定ルールだけではユーザー名を含むパスは検査されない。
 #
-# 対象は 2 系統ある。macOS だけを見ていると Windows 側が素通りする。このリポジトリは
-# Windows VM を扱う skill を配っているので C:\Users\<name> の方がむしろ出やすく、
-# 実際に docs/issues/ へ入ったまま macOS 専用ルールでは検出されなかった。
+# ルールは OS 別ではなく 1 本にしてある。OS で割ると、どちらの形にも当てはまらない
+# 書かれ方 (UNC・ドライブ省略・エスケープ済み) が両方の網から落ちるため。
+# 実際に macOS 専用ルールしか無かった時期に C:\Users\<name> が素通りして履歴へ入った。
 title = "agentic-coding-tools gitleaks config"
 
 [extend]
 useDefault = true
 
 [[rules]]
-id = "macos-user-path"
-description = "macOS のローカルユーザー名を含む絶対パス (/Users/<name>) の漏洩"
-# (?i) が要る。Go の regexp は既定で case sensitive なので、これが無いと
-# /Users/Sho のように 1 文字でも大文字が混じった時点で素通りする。
-regex = '''(?i)/Users/[a-z_][a-z0-9._-]*'''
+id = "user-path"
+description = "ローカルユーザー名を含む絶対パスの漏洩 (/Users/<name> と C:\\Users\\<name> の両方)"
+
+# 区切りは / と \ の両方を、1 個以上受ける。押さえている書かれ方:
+#
+#   /Users/name                        macOS
+#   C:\Users\name  C:/Users/name       Windows (winvm はリモートパスを / で書く経路を持つ)
+#   C:\\Users\\name                    JSON / Python repr / JS 文字列リテラル
+#   \\Mac\AllFiles\Users\name          UNC。Parallels の共有フォルダは VM 側からこう見える
+#   \Users\name                        ドライブ省略 (%SystemDrive%\Users\name など)
+#   /mnt/c/Users/name                  WSL
+#
+# 区切りを 1 文字に固定すると 2 連バックスラッシュで照合が止まり、ドライブレターを
+# 必須にすると UNC とドライブ省略形が落ちる。どちらも「コマンド出力を貼る」経路で
+# 実際に出る形なので、区切りだけを手がかりにする。
+#
+# (?i) の位置が効く。ここより前は case sensitive なので、パス要素の Users は大文字 U を
+# 要求したまま、ユーザー名だけを大小無視にできる。全体に (?i) を掛けると REST API の
+# /api/users/<id> のような小文字パスまで拾って誤検出する (実測)。
+regex = '''[\\/]+Users[\\/]+(?i)[a-z_][a-z0-9._-]*'''
 tags = ["pii", "path"]
 
-  # placeholder / 共有・CI 用のユーザー名は許可する。
-  # 境界 ([/."]|$) で /Users/user (許可) と /Users/userfoo (検出) を区別する。
+  # placeholder / 共有・CI 用のユーザー名と、Windows 自身のディレクトリを許可する。
+  # Public は winvm が一時 .ps1 の置き場に使っているので、許可しないとソースと
+  # テストが全部引っかかる。
   #
-  # Public / Default も許可する。このルールは C:/Users/Public のような Windows パスの
-  # 部分文字列にも一致してしまうためで、winvm が一時 .ps1 の置き場に使っている以上
-  # 許可しないとソースとテストが全部引っかかる。(?i) を付けるまでは Public が
-  # 大文字始まりで [a-z_] に弾かれ偶然無害だったが、今は明示的に許可が要る。
+  # 境界 ([\\/."]|$) が要る。ルール本体の文字クラスが . を含むため、文末ピリオドが
+  # match に取り込まれて Public$ が外れ誤検出になる (実測)。
+  # All Users は空白を含むが区切り文字クラスに空白が無いので照合は All で止まる。
   [rules.allowlist]
   description = "placeholder / 共有・CI 用パスと Windows のシステム用ディレクトリは許可"
   # secret==match (capture group 無し) だが、境界判定の意図を明示するため match を指定
   regexTarget = "match"
   regexes = [
-    '''(?i)/Users/(example|user|username|runner|shared|Public|Default|DefaultAppPool|All)([/."]|$)''',
-  ]
-
-[[rules]]
-id = "windows-user-path"
-description = "Windows のローカルユーザー名を含む絶対パス (C:\\Users\\<name>) の漏洩"
-# 区切りは \ と / の両方を受ける。winvm はリモートパスを / で書く経路を持つので、
-# どちらか一方だけを見ると半分が素通りする。
-regex = '''(?i)[a-z]:[\\/]Users[\\/][a-z0-9._-]+'''
-tags = ["pii", "path"]
-
-  # Public / Default は Windows 自身のディレクトリでユーザー名ではない。winvm は
-  # 一時 .ps1 の置き場に C:/Users/Public を使うので、ここを許可しないと自分の
-  # ソースとテストが全部引っかかる。
-  # All Users は空白を含むが区切り文字クラスに空白が無いので照合は All で止まる。
-  [rules.allowlist]
-  description = "Windows のシステム用ディレクトリと placeholder は許可"
-  regexTarget = "match"
-  regexes = [
-    '''(?i)[a-z]:[\\/]Users[\\/](Public|Default|DefaultAppPool|All|example|user|username|runner|shared)$''',
+    '''[\\/]+Users[\\/]+(?i)(example|user|username|runner|shared|Public|Default|DefaultAppPool|All)([\\/."]|$)''',
   ]
