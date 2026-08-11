@@ -125,7 +125,7 @@ localized な文字列を判定に混ぜると環境依存で壊れる。
 
 ## Issue 管理
 
-`docs/issues/<NNN>_<title>/issue.md` の in-repo Markdown で管理する。起票・更新・
+- `docs/issues/<NNN>_<title>/issue.md` の in-repo Markdown で管理する。起票・更新・
 クローズ・reopen の手順は skill `dev-workflow:in-repo-issue` が canonical。
-
-PR 本文には `Closes [Issue #NNN](../../docs/issues/...)` 形式で相対リンクを書く。
+- PR 本文には `Closes [Issue #NNN](../../docs/issues/...)` 形式で相対リンクを書く。
+- superpowers の spec / plan は Issue ディレクトリ配下へ `<NNN>-spec.md` / `<NNN>-plan.md` として置く（規約と手順の canonical は `dev-workflow:issue-scoped-artifacts` skill）
