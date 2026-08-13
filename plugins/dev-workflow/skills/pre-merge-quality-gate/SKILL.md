@@ -49,7 +49,7 @@ simplify / code-reviewer / boy-scout-sweep / dev-workflow:e2e-scenario-impact-ch
 1. **`Skill` tool で `simplify` を起動**
    - args: 変更概要 + 変更ファイルのリスト
    - 変更ファイルは `git diff <base>..HEAD --name-only` で抽出
-   - `simplify` 自体が code reuse / quality / efficiency の 3 並列内部実行を行う
+   - `simplify` 自体が reuse / simplification / efficiency / altitude の 4 並列内部実行を行う
 
 2. **`Agent` tool で `feature-dev:code-reviewer` を起動** (subagent_type=feature-dev:code-reviewer)
    - prompt: 変更概要 + 全 diff の取得方法 (`git diff <base>..HEAD`) + レビュー観点 (CLAUDE.md 由来: バグ / セキュリティ / a11y / 関数型 / DRY / テスト網羅性) + 「confidence-based filtering で本当に修正したい指摘のみ返してほしい」
@@ -93,7 +93,17 @@ simplify / code-reviewer / boy-scout-sweep / dev-workflow:e2e-scenario-impact-ch
 | **Nice-to-have** (簡素化 / dead code 除去 / テスト fixture) | スコープに余裕があれば修正、なければ follow-up issue を起票 |
 | **False positive / 過剰抽象化** | スキップ。短い理由を明記 |
 
-CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度の重複は定数化を強制しない。`simplify` の Code Quality agent が enum 化を提案しても、Code Reuse agent が「premature」と判断していたら後者を優先するなど、提案間の矛盾は明示的に解決する。
+CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度の重複は定数化を強制しない。
+
+#### 観点どうしが正面衝突したときの裁定
+
+並列レビューは観点ごとに独立して走るので、同じ箇所に正反対の結論が返ることがある。これは並列化の産物であって失敗ではない。片方だけを読んで従うと単一レビュアーと同じ盲点に戻るため、必ず両方の根拠を読んでから裁定し、採らなかった側は理由を記録する。
+
+裁定は印象や confidence の大小ではなく **その変更で検証力が増えるか減るか** で決める。既定は「pin が 1 本減るなら採らない」。
+
+実例: `simplification` が「全行が同じ値のタプルは平坦化しろ (YAGNI)」、`altitude` が「将来の分岐余地として残せ」と正反対を返した。どちらも confidence 80 台で印象では決められなかったが、平坦化すると分類表と実装の食い違いを突合していたテストがその能力を失う (pin を 1 本失う) と分かって決着した。
+
+`simplify` の指摘には挙動を変える提案が混ざる。マージ直前のブランチでは、挙動を変える提案は既定で別 issue へ回す。`simplify` は品質の改善であって仕様変更の場ではない。
 
 ### Phase 3: 修正反映 + 再検証
 
@@ -125,7 +135,7 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 | 「小さな変更だから simplify は不要」 | 小さい変更ほど a11y や境界条件のバグが隠れやすい。例: 1 行の `aria-describedby` 追加でスクリーンリーダー読み上げが二重化 |
 | 「マージ後に simplify すれば良い」 | follow-up PR の摩擦は大きい (新ブランチ / 新 PR / 再レビュー / 再マージ + Reviewer の手間) |
 | 「CLAUDE.md に書いてあるから覚えてる」 | タスク完了モードでは MUST ルールが認知から落ちやすい。skill 化で構造的に防ぐ |
-| 「simplify は表面的な改善だけ」 | simplify は 3 並列で code reuse / quality / efficiency を見る。dead code、leaky abstraction、hot path bloat、redundant state も検出される |
+| 「simplify は表面的な改善だけ」 | simplify は 4 並列で reuse / simplification / efficiency / altitude を見る。dead code、leaky abstraction、hot path bloat、redundant state に加え、特殊ケースの積み重ねや集合の二重管理といった構造の問題も検出される |
 | 「テストが pass してるから OK」 | テスト pass は仕様通り動くことの証明だが、a11y バグ・UX 問題はテストで検出されにくい |
 | 「ボーイスカウト確認はユーザーに毎回聞けば良い」 | NG。CLAUDE.md MUST ルール「ボーイスカウト」を skill 内で構造化するためにこの skill がある。Phase 1 の Boy Scout Sweep を毎回必ず動かす |
 | 「Boy Scout Sweep は触ったファイルだけで充分」 | 触ったファイルの **同 directory 隣接ファイル** も対象。empty state パターンの不統一など、隣接ファイルとの一貫性は touched files だけ見ても気付けない |
@@ -153,7 +163,7 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 ## 関連
 
 - `dev-workflow:commit-and-pr-message` (sibling skill): コミット本文と PR 本文の書き方と渡し方。Phase 4 で `gh pr create` する直前に使う
-- `simplify` (built-in skill): 3 並列レビューと修正適用
+- `simplify` (built-in skill): 4 並列レビューと修正適用
 - `feature-dev:code-reviewer` (subagent): バグ・logic・security の confidence-based filtering
 - `dev-workflow:e2e-scenario-impact-check` (sibling skill): フロント変更が E2E シナリオテストを壊す可能性を静的検出。Phase 1 の 4 つ目並列タスク
 - `verification-before-completion` (superpowers): 完了主張前の検証
