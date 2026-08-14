@@ -18,6 +18,33 @@
 | `C:\Program Files\PowerShell` が無いのに winget は「導入済み」と言う | Microsoft Store (MSIX) 版が入っている | 実体は `C:\Program Files\WindowsApps\Microsoft.PowerShell_<ver>_arm64__8wekyb3d8bbwe\`。`%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe` の alias 経由で SSH からも起動できるので MSI を入れ直す必要はない。パスの有無で導入判定しないこと |
 | cmd.exe の `for %C in (...) do @(... >nul 2>nul && ...)` が全件「見つからない」を返す | 括弧内でリダイレクトの解釈が変わり `where` の stderr が漏れている | 検査には PowerShell の `Get-Command` を使う。あるいは 1 コマンドずつ実行する。必ず見つかるはずの対照 (`powershell` など) を混ぜておくと、検査自体の故障に気づける |
 
+## VM が APIPA になる (DHCP 応答なし)
+
+`winvm doctor` の IP が `169.254.x.x` を返したら DHCP に失敗している。この帯は DHCP から応答が無かったときに OS が自分で振る自己割り当てアドレスで、値が取れていてもネットワークは無い。疑うのは VM 内部ではなくホスト側の Parallels の NAT/DHCP。
+
+実際に踏んだときの原因は、NAT/DHCP デーモン `prl_naptd` がソケットを 1 つも持たないまま生き続けていたこと。プロセス自体は生きているので `ps` には見え、watchdog (`watchdog start 60 20 ... prl_naptd start`) もプロセスの生死しか見ないため、壊れた状態が安定して維持され続けた (実測で 2 日間)。
+
+```bash
+# UDP:67 を誰も listen していないことを確かめる
+sudo lsof -nP -p <prl_naptd の pid>
+
+# 対照。正常なら mDNSResponder が返る
+sudo lsof -nP -iUDP:5353
+```
+
+対照は必ず並べること。`sudo` 無しでは他ユーザのソケットが見えず必ず空になるので、対照が無いと「壊れている」と「そもそも見えていない」を区別できない。
+
+復旧は `sudo kill <pid>` でよい。watchdog が 60 秒以内に起動し直して DHCP が復旧する。
+
+診断が難しいのは、他の観測点が揃って「正常」を返すため。
+
+- `prlsrvctl net info Shared` は正常に見える。`NAT server:` 行が空なのは正常時もそうなので、サービス停止の根拠にならない (ここを誤読した)
+- ホスト側のブリッジは UP で Parallels adapter の IP を保持し、メンバーに VM の tap もいる
+- `ps` に `prl_naptd` が見える (生きてはいる)
+- アダプタを `--device-disconnect` / `--device-connect` すると bridge の address cache にゲスト MAC が載る (フレームは届いている)
+
+一時退避として bridged (`prlctl set <vm> --device-set net0 --type bridged --iface <host if>`) へ切り替える手もあるが、SSH 側の後始末が 2 つ付いてくる。(1) Windows が新しいネットワークを「パブリック」に分類して受信 SSH を塞ぐ (2) sshd のファイアウォール規則が Parallels の共有サブネットにスコープされている。真因を直す方が早い。
+
 ## Parallels に無い失敗モード
 
 旧環境 (VMware Fusion) には、バンドル内に `*.lck` ディレクトリが残ると「ディレクトリが空ではありません」で VM が起動しなくなる失敗モードがあり、それを除去する `recover` サブコマンドがあった。
