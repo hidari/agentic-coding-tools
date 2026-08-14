@@ -104,9 +104,14 @@ GitHub Releases の `PowerShell-7.6.4-win-arm64.msi` を `winvm push` で投入�
       -Command "exit 0"` の exit code を見る。往復数は変わらず、判定の意味だけが変わる
 - [ ] `PWSH_PROBE_ERROR` の文面に「Store の alias stub は使えない」ことを足す。
       今回の状態では probe が通ってしまい、この文面自体が表示されなかった
-- [ ] VM を作り直したときに同じ状態へ戻らないようにする。プロビジョニングが
-      `winget install --id Microsoft.PowerShell` で pwsh を入れているなら、ARM64 では
-      MSIX が入るので同じ問題が再発する。MSI を明示的に入れる手順へ変える
+- [ ] VM を作り直したときに同じ状態へ戻らないようにする。`references/windows-bootstrap.md` が
+      `winget install --id Microsoft.PowerShell` を案内しており、ARM64 ではこれで MSIX が入る
+      ので同じ問題が再発する。MSI を明示的に入れる手順へ変える
+- [ ] 実測に反証されている記述を訂正する。`references/windows-bootstrap.md` と
+      `references/troubleshooting.md` が「`%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe` の
+      alias 経由で SSH セッションからも起動できる」と書いており、前者には「(実測)」まで付いて
+      いる。本 Issue の実測 (非対話セッションからはアクセス拒否。上の調査記録) が反証している。
+      実測を名乗る記述は疑われないぶん、残すと次に踏んだ人を確実に誤誘導する
 
 ## 関連
 
@@ -114,3 +119,7 @@ GitHub Releases の `PowerShell-7.6.4-win-arm64.msi` を `winvm push` で投入�
   `PWSH_PROBE_ERROR`、`cmd_health`、`cmd_exec`
 - Issue [#7](../7_リモート往復数を減らす/issue.md) — probe を本実行に畳む案があり、
   本 Issue と設計が結合する。先に本 Issue を解決すること
+- Issue [#9](../9_doctor%20が%20APIPA%20アドレスを健全と判定する/issue.md) — 同種の欠陥。
+  あちらは doctor が APIPA アドレス (DHCP 失敗) を OK と判定する件で、どちらも
+  「検査が通ること」を「機能していること」の証拠として扱ってしまう類型。
+  対象のコードは別 (pwsh probe と IP チェック) なので独立に直せる
