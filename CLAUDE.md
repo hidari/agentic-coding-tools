@@ -98,15 +98,19 @@ CI (`.github/workflows/ci.yml`) が回す job より、ローカルの pre-commi
 **CI が緑であることは全検査を通ったことを意味しない**。マージ前にローカルで回すこと。
 何がどれだけ走るかの canonical は `.pre-commit-config.yaml` と `ci.yml`。
 
-逆向きの穴もある。ローカルは CI の上位集合ではない。
+逆向きの穴もある。ローカルは CI の上位集合ではない。片方にしか無い穴と、両方に共通する穴が
+それぞれある。
 
-- **漏洩検査**: pre-commit の hook は `gitleaks git --staged` なので、`--all-files` を
-  付けても走査対象は staged 差分だけ。index が clean だと `0 commits scanned` で緑になる。
-  全履歴を走査するのは CI だけ。なお漏洩ルール自身が正しいかは
-  `scripts/check-leak-guard-rules.py` が検出側と許可側の対照で見る
-- **Python テスト**: `scripts/run-python-tests.py` が探すのは `skills/` と `plugins/` の
-  配下だけ (`SEARCH_DIRS`)。`scripts/` に `test_*.py` を置いても収集されず、緑のまま
-  何も実行されない。規約を担保している検査スクリプト自身が現状 無検査であることを意味する
+- **漏洩検査 (経路の非対称)**: pre-commit の hook は `gitleaks git --staged` なので、
+  `--all-files` を付けても走査対象は staged 差分だけ。index が clean だと
+  `0 commits scanned` で緑になる。全履歴を走査するのは CI だけ。なお漏洩ルール自身が
+  正しいかは `scripts/check-leak-guard-rules.py` が検出側と許可側の対照で見る
+- **Python テスト (両経路に共通の盲点)**: `scripts/run-python-tests.py` は実行された
+  テスト ID の集合を `scripts/python-tests-manifest.txt` と照合する。テストを増減・改名
+  したら `--update-manifest` で再生成し、diff ごとコミットする。ローカルと CI は同じ
+  コマンドを引数なしで呼ぶので経路の非対称は無いが、この検査は自分の取り付けを自分では
+  検証できない。両取り付けの同時撤去・`__main__` ガードの除去・集計を `return 0` に潰す
+  変更は、どちらの経路でも緑のまま素通りする (限界の canonical は runner の docstring)
 
 つまりローカルの全 hook が緑でも全検査を意味しない。どちらの緑も、何を何件見た結果なのかを
 確かめてから根拠にすること。
