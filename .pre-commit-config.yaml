@@ -28,6 +28,15 @@ repos:
         pass_filenames: false
         always_run: true
 
+      # .gitleaks.toml を触ったときだけ走る。ルールの regex は読むだけでは
+      # 取りこぼしも誤検出も判定できず、両方とも実際に埋め込んだ実績がある。
+      - id: leak-guard-rules
+        name: 漏洩ガードのルールを対照で検証する
+        language: system
+        entry: scripts/check-leak-guard-rules.py
+        pass_filenames: false
+        files: ^\.gitleaks\.toml$
+
       - id: plugin-validate
         name: claude plugin validate --strict (plugin.json の妥当性)
         language: system

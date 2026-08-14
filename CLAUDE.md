@@ -93,20 +93,23 @@ PR で説明する。
 pre-commit run --all-files
 ```
 
-CI (`.github/workflows/ci.yml`) は 4 job だが、ローカルの pre-commit は 9 hook 走る。
-`claude plugin validate` と `end-of-file-fixer` 系はローカルにしか無いので、
+CI (`.github/workflows/ci.yml`) が回す job より、ローカルの pre-commit が回す hook の方が
+多い。`claude plugin validate` と `end-of-file-fixer` 系はローカルにしか無いので、
 **CI が緑であることは全検査を通ったことを意味しない**。マージ前にローカルで回すこと。
+何がどれだけ走るかの canonical は `.pre-commit-config.yaml` と `ci.yml`。
 
 逆向きの穴もある。ローカルは CI の上位集合ではない。
 
 - **漏洩検査**: pre-commit の hook は `gitleaks git --staged` なので、`--all-files` を
   付けても走査対象は staged 差分だけ。index が clean だと `0 commits scanned` で緑になる。
-  全履歴を走査するのは CI だけ
+  全履歴を走査するのは CI だけ。なお漏洩ルール自身が正しいかは別の hook
+  (`scripts/check-leak-guard-rules.py`) が検出側と許可側の対照で見る。こちらは
+  `.gitleaks.toml` を触ったときだけ走る
 - **Python テスト**: `scripts/run-python-tests.py` が探すのは `skills/` と `plugins/` の
   配下だけ (`SEARCH_DIRS`)。`scripts/` に `test_*.py` を置いても収集されず、緑のまま
   何も実行されない。規約を担保している検査スクリプト自身が現状 無検査であることを意味する
 
-つまり「ローカルで 9 hook 緑」も全検査を意味しない。どちらの緑も、何を何件見た結果なのかを
+つまりローカルの全 hook が緑でも全検査を意味しない。どちらの緑も、何を何件見た結果なのかを
 確かめてから根拠にすること。
 
 ### 外部コマンドを組み立てるコードは緑だけで完了にしない
