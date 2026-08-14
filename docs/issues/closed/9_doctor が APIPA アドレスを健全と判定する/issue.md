@@ -98,7 +98,10 @@ hint が指す先を先に作る。後から書くと hint の文字列を 2 回
 - `pick_ipv4` の呼び出し元は doctor と `cmd_resolve_ip` の 2 つあるが、本 Issue で触るのは
   doctor だけ。`resolve-ip` は「Parallels が報告した IP をそのまま返す」観測に徹する契約で、
   ここへ判定を入れると ProxyCommand 経由の接続の失敗様式まで変わる。診断は「ssh が失敗したら
-  まず doctor」で閉じるので、判定は doctor 側だけに置く (見落としではなく意図的な範囲外)
+  まず doctor」で閉じるので、判定は doctor 側だけに置く (見落としではなく意図的な範囲外)。
+  なお棄却したのは「判定を入れて exit 1 にする」案で、stdout と exit code を変えずに stderr へ
+  警告だけ出す中間案は評価していなかった。そちらは
+  [Issue #11](../../11_resolve-ip%20が%20APIPA%20をそのまま返すとき利用者に何も知らせない/issue.md) で扱う
 - 同種の欠陥: [Issue #4: VM の pwsh probe が偽陽性で exec と health が実機で動かない](../../4_VM%20の%20pwsh%20probe%20が偽陽性で%20exec%20と%20health%20が実機で動かない/issue.md)。
   あちらは「probe が通るのに本実行が失敗する」、こちらは「IP が取れているのにネットワークが無い」で、
   どちらも検査が通ることを機能の証拠として扱ってしまう類型。対象のコードは別 (pwsh probe と IP チェック)。
