@@ -109,8 +109,8 @@ CI (`.github/workflows/ci.yml`) が回す job より、ローカルの pre-commi
   テスト ID の集合を `scripts/python-tests-manifest.txt` と照合する。テストを増減・改名
   したら `--update-manifest` で再生成し、diff ごとコミットする。ローカルと CI は同じ
   コマンドを引数なしで呼ぶので経路の非対称は無いが、この検査は自分の取り付けを自分では
-  検証できない。両取り付けの同時撤去・`__main__` ガードの除去・集計を `return 0` に潰す
-  変更は、どちらの経路でも緑のまま素通りする (限界の canonical は runner の docstring)
+  検証できない。取り付けを外す種類の変更はどちらの経路でも緑のまま素通りするので、
+  そこはレビューが防衛層になる (何が素通りするかの canonical は runner の docstring)
 
 つまりローカルの全 hook が緑でも全検査を意味しない。どちらの緑も、何を何件見た結果なのかを
 確かめてから根拠にすること。

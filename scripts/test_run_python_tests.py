@@ -189,7 +189,7 @@ class MainEndToEnd(unittest.TestCase):
         self.assertIn("未記録のテスト: skills/pkg/test_probe.py::test_probe.Probe.test_z", out)
 
     def test_empty_tree_is_red(self):
-        # 0 件収集は「検査していない」であって健全ではない (Issue #8 の核心)。
+        # 0 件収集は「検査していない」であって健全ではない。
         # manifest 照合より手前で赤にする
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

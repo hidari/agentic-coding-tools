@@ -22,10 +22,10 @@ skip されたテストも suite (= 列挙) に載り、expectedFailure は wasS
 成功に数える (実測: 4 件中 skip 1 + xfail 1 でも `Ran 4 tests` / OK / exit 0)。
 どちらも件数にも exit code にも現れない「実行していないのに緑」の形。
 
-終了コードは 0 (manifest と一致で全緑) / 1 (違反: テスト失敗・消えた・未記録・
-skip・expectedFailure) / 2 (検査不能: manifest 不在・引数不正)。分離の先例は
-scripts/check-leak-guard-rules.py。引数不正の 2 は argparse の既定挙動で、typo が
-照合モードへの静かなフォールバックにならない。
+終了コードは 0 (manifest と一致で全緑) / 1 (違反: テスト失敗・収集ゼロ・消えた・
+未記録・skip・expectedFailure) / 2 (検査不能: manifest 不在・引数不正)。分離の先例は
+scripts/check-leak-guard-rules.py。引数不正の 2 は argparse の既定挙動で、typo も
+フラグの短縮形も照合モードや更新モードへの静かなフォールバックにならない。
 
 限界 (自己ホスト盲点): runner 自身の取り付けは、この runner が回す
 scripts/test_run_python_tests.py が検証する構造のため、次の 3 形は in-band では
@@ -102,7 +102,7 @@ sys.exit(0 if result.wasSuccessful() else 1)
 def discover(root: Path) -> list[Path]:
     # ディレクトリの列挙 (旧 SEARCH_DIRS) ではなく root 全体を走査して除外を列挙
     # する。列挙方式は「列挙に無いディレクトリは無検査」という穴をディレクトリが
-    # 増えるたびに再発させる (scripts/ が無検査だった Issue #8 の周辺そのもの)。
+    # 増えるたびに再発させる (実際 scripts/ 配下が長く無検査のまま残っていた)。
     # 除外判定は root 相対の parts で行う。絶対パスの parts で見ると、リポジトリ
     # 自体が SKIP_DIRS の名前を含む場所 (例: ~/.venv 配下) へ checkout されたとき
     # 全件が除外される (実測)。
@@ -172,6 +172,13 @@ def main(argv: list[str] | None = None, *, root: Path = ROOT) -> int:
         print("[x] test_*.py が 1 つも見つからない。検査対象ゼロは合格ではない")
         return 1
 
+    if not args.update_manifest and not manifest_path.exists():
+        # 照合基準が無いのは違反ではなく検査不能。テストの赤 (1) と混ぜると
+        # manifest の置き忘れがテストの失敗に見える。テスト実行より前で判定するのは、
+        # 捨てる結果のために全ファイルを走らせても得るものが無いため (実測で約 3.6 秒)
+        print(f"[x] manifest ({MANIFEST_NAME}) が無く照合できない。`{UPDATE_CMD}` で生成してコミットする")
+        return 2
+
     failed = 0
     actual: set[str] = set()
     for path in targets:
@@ -195,12 +202,6 @@ def main(argv: list[str] | None = None, *, root: Path = ROOT) -> int:
         )
         print(f"[+] manifest を更新した ({len(actual)} 件)。diff を確認してコミットすること")
         return 0
-
-    if not manifest_path.exists():
-        # 照合基準が無いのは違反ではなく検査不能。テストの赤 (1) と混ぜると
-        # manifest の置き忘れがテストの失敗に見える
-        print(f"[x] manifest ({MANIFEST_NAME}) が無く照合できない。`{UPDATE_CMD}` で生成してコミットする")
-        return 2
 
     expected = parse_manifest(manifest_path.read_text(encoding="utf-8"))
     missing = sorted(expected - actual)
