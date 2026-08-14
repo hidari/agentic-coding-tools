@@ -28,6 +28,16 @@ repos:
         pass_filenames: false
         always_run: true
 
+      # ルールの regex は読むだけでは取りこぼしも誤検出も判定できず、両方とも実際に
+      # 埋め込んだ実績がある。ルール本体と対照ケースの 2 ファイルで 1 つの契約なので、
+      # 発火条件も両方を見る。片側だけにすると、ケースを壊す変更が無検査で通る。
+      - id: leak-guard-rules
+        name: 漏洩ガードのルールを対照で検証する
+        language: system
+        entry: scripts/check-leak-guard-rules.py
+        pass_filenames: false
+        files: ^(\.gitleaks\.toml|scripts/check-leak-guard-rules\.py)$
+
       - id: plugin-validate
         name: claude plugin validate --strict (plugin.json の妥当性)
         language: system
