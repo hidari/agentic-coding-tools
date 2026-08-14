@@ -302,6 +302,10 @@ def collect_doctor_checks(
     ip = pick_ipv4(vm.get("Network"))
     tools_state, tools_version = parse_tools(vm)
     isolated = _read_isolation(vm.get("Home"))
+    # 169.254/16 は DHCP から応答が無いとき OS が自分で振る帯で、値が取れていても
+    # ネットワークは無い。pick_ipv4 が妥当性を検証済みなので再 parse で例外は出ないが、
+    # ip が None のときの IPv4Address(None) は送出するので None を先に弾く。
+    apipa = ip is not None and ipaddress.IPv4Address(ip).is_link_local
 
     checks = [
         Check("VM", f"{name} ({vm.get('ID', '')})", True),
@@ -309,8 +313,14 @@ def collect_doctor_checks(
         Check(
             "IP",
             ip or UNKNOWN,
-            ip is not None,
-            hint="VM を起動し Parallels Tools が動いているか確認する",
+            ip is not None and not apipa,
+            # 未取得と APIPA は原因が違うので確認先も分ける。APIPA では IP が取れている
+            # 以上 Parallels Tools は動いており、そちらへ誘導すると誤診に時間を使う。
+            hint=(
+                "DHCP が応答していない。references/troubleshooting.md の APIPA の節を見る"
+                if apipa
+                else "VM を起動し Parallels Tools が動いているか確認する"
+            ),
         ),
         Check(
             "Parallels Tools",

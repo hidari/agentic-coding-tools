@@ -52,7 +52,7 @@ VM が使える状態かをホスト側から観測する。各項目は **判�
 |---|---|
 | `VM` | `prlctl list -a -i -j` に該当があるか。名前と UUID |
 | `status` | `running` かどうか |
-| `IP` | `Network.ipAddresses` の `type: ipv4` エントリ |
+| `IP` | `Network.ipAddresses` の `type: ipv4` エントリ。**APIPA (link-local) は DHCP 失敗なので FAIL** |
 | `Parallels Tools` | 同じレコードの `GuestTools: state=... version=...` |
 | `host isolation` | バンドル内 `config.pvs` の `<IsolatedVm>`。**on だと `prlctl exec` が通らない** |
 | `prlctl exec` | 実際に `cmd.exe /c ver` をゲストで実行できるか |

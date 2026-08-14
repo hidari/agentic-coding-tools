@@ -92,5 +92,5 @@ live smoke の完走が要り、prlctl が argv をゲスト側でどう再結�
   `references/windows-bootstrap.md` と `winvm.py` の `prlctl_exec_argv` docstring が
   同じ実測を持つので、canonical をどこに置くかを決めてから書くこと
 - [Issue #1 (closed): winvm が VM の CP932 出力で UnicodeDecodeError になる](../closed/1_winvm%20が%20VM%20の%20CP932%20出力で%20UnicodeDecodeError%20になる/issue.md)
-- [Issue #9: doctor が APIPA アドレスを健全と判定する](../9_doctor%20が%20APIPA%20アドレスを健全と判定する/issue.md)
+- [Issue #9 (closed): doctor が APIPA アドレスを健全と判定する](../closed/9_doctor%20が%20APIPA%20アドレスを健全と判定する/issue.md)
   — 同じ調査中に見つかった

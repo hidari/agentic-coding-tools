@@ -418,6 +418,36 @@ class CollectDoctorChecks(unittest.TestCase):
         self.assertEqual(c.observed, "10.211.55.3")
         self.assertIs(c.ok, True)
 
+    def test_apipa_address_fails_and_points_at_dhcp(self):
+        # 読めた値の意味を見ずに OK へ倒さないことを pin する。帯そのものの意味は
+        # winvm.py 側のコメントが持つ。
+        json_text = PRLCTL_LIST_JSON.replace('"ip": "10.211.55.3"', '"ip": "169.254.10.20"')
+        checks = self._checks(list_json=json_text)
+        c = self._by_label(checks, "IP")
+        self.assertEqual(c.observed, "169.254.10.20")
+        self.assertIs(c.ok, False)
+        self.assertIn("DHCP", c.hint)
+        self.assertIn("troubleshooting.md", c.hint)
+        # 他が全部 OK でも診断全体は失敗を報告する。ここが 0 のままだと
+        # 呼び出し側のスクリプトが健全と読む。
+        self.assertEqual(winvm.doctor_exit_code(checks), 1)
+
+    def test_missing_ip_keeps_the_tools_hint(self):
+        # APIPA 用の hint を未取得側へ漏らすと、Tools も動いていない VM を
+        # DHCP 調査へ誘導してしまう。
+        c = self._by_label(self._checks(vm=STOPPED_VM, exec_rc=1), "IP")
+        self.assertIs(c.ok, False)
+        self.assertIn("Parallels Tools", c.hint)
+        self.assertNotIn("DHCP", c.hint)
+
+    def test_apipa_hint_points_at_a_section_that_exists(self):
+        # hint が名指しするのはファイルまでなので、節が消えても改名されても hint 側の
+        # assertion は通ってしまう。指した先が実在することはドキュメントを読まないと
+        # 確かめられない。hint 中に .md を持つのはこの 1 つだけ (他は操作を書いている)。
+        doc = Path(winvm.__file__).parent / "references" / "troubleshooting.md"
+        headings = [x for x in doc.read_text(encoding="utf-8").splitlines() if x.startswith("## ")]
+        self.assertTrue(any("APIPA" in h for h in headings), headings)
+
     def test_isolated_vm_fails_with_the_fix_command(self):
         c = self._by_label(self._checks(isolated="1"), "host isolation")
         self.assertEqual(c.observed, "on")

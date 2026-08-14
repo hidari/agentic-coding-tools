@@ -1,5 +1,5 @@
 ---
-status: open
+status: closed
 ---
 
 # fix: doctor が APIPA アドレスを健全と判定する
@@ -78,16 +78,16 @@ watchdog によって安定して維持され続ける (実測で 2 日間)。
 
 hint が指す先を先に作る。後から書くと hint の文字列を 2 回編集することになる。
 
-- [ ] `references/troubleshooting.md` に「VM が APIPA になる (DHCP 応答なし)」節を追加し、
+- [x] `references/troubleshooting.md` に「VM が APIPA になる (DHCP 応答なし)」節を追加し、
       上記「実際の真因」の診断手順 (`sudo lsof` を対照付きで引く / `kill` で watchdog に
       再起動させる) を書く。対照の引き方は「関連」に書いたとおり
-- [ ] `test_winvm.py` に「IP が `169.254.x.x` のとき doctor の IP チェックが FAIL になり、
+- [x] `test_winvm.py` に「IP が `169.254.x.x` のとき doctor の IP チェックが FAIL になり、
       hint が上の節を指す」テストを追加する
-- [ ] 追加したテストが現行実装で赤くなることを確認する (先に赤を見てから直す)
-- [ ] `winvm.py` の IP チェックを `ipaddress.IPv4Address(ip).is_link_local` で FAIL 側へ倒す。
+- [x] 追加したテストが現行実装で赤くなることを確認する (先に赤を見てから直す)
+- [x] `winvm.py` の IP チェックを `ipaddress.IPv4Address(ip).is_link_local` で FAIL 側へ倒す。
       `ip` は None を取りうるので None ガードを先に置くこと (`IPv4Address(None)` は例外を送出する)
-- [ ] APIPA のときだけ hint を上の節へ向ける (通常の未取得時の hint とは分ける)
-- [ ] 変異注入で確認する: hint の分岐を潰して常に既存の文面を返すようにすると、追加したテストの
+- [x] APIPA のときだけ hint を上の節へ向ける (通常の未取得時の hint とは分ける)
+- [x] 変異注入で確認する: hint の分岐を潰して常に既存の文面を返すようにすると、追加したテストの
       hint 側の assertion が赤くなること。判定式そのものを外す変異は「現行実装で赤を見る」工程と
       同じ状態を作るだけなので重ねない
 
@@ -98,11 +98,14 @@ hint が指す先を先に作る。後から書くと hint の文字列を 2 回
 - `pick_ipv4` の呼び出し元は doctor と `cmd_resolve_ip` の 2 つあるが、本 Issue で触るのは
   doctor だけ。`resolve-ip` は「Parallels が報告した IP をそのまま返す」観測に徹する契約で、
   ここへ判定を入れると ProxyCommand 経由の接続の失敗様式まで変わる。診断は「ssh が失敗したら
-  まず doctor」で閉じるので、判定は doctor 側だけに置く (見落としではなく意図的な範囲外)
-- 同種の欠陥: [Issue #4: VM の pwsh probe が偽陽性で exec と health が実機で動かない](../4_VM%20の%20pwsh%20probe%20が偽陽性で%20exec%20と%20health%20が実機で動かない/issue.md)。
+  まず doctor」で閉じるので、判定は doctor 側だけに置く (見落としではなく意図的な範囲外)。
+  なお棄却したのは「判定を入れて exit 1 にする」案で、stdout と exit code を変えずに stderr へ
+  警告だけ出す中間案は評価していなかった。そちらは
+  [Issue #11](../../11_resolve-ip%20が%20APIPA%20をそのまま返すとき利用者に何も知らせない/issue.md) で扱う
+- 同種の欠陥: [Issue #4: VM の pwsh probe が偽陽性で exec と health が実機で動かない](../../4_VM%20の%20pwsh%20probe%20が偽陽性で%20exec%20と%20health%20が実機で動かない/issue.md)。
   あちらは「probe が通るのに本実行が失敗する」、こちらは「IP が取れているのにネットワークが無い」で、
   どちらも検査が通ることを機能の証拠として扱ってしまう類型。対象のコードは別 (pwsh probe と IP チェック)。
-- [Issue #10: SSH 断時に prlctl exec を直接叩くときの注意が既存文書から辿れない](../10_SSH%20断時に%20prlctl%20exec%20を直接叩くときの注意が既存文書から辿れない/issue.md)
+- [Issue #10: SSH 断時に prlctl exec を直接叩くときの注意が既存文書から辿れない](../../10_SSH%20断時に%20prlctl%20exec%20を直接叩くときの注意が既存文書から辿れない/issue.md)
   — 同じ調査中に見つかった。本 Issue の状態が再現している間は ssh が使えないので、
   ゲストを覗く経路は `prlctl exec` だけになる
 - `sudo lsof` を引くときは対照を並べること。`sudo lsof -nP -iUDP:5353` が `mDNSResponder` を
