@@ -152,8 +152,12 @@ def parse_manifest(text: str) -> set[str]:
 
 
 def main(argv: list[str] | None = None, *, root: Path = ROOT) -> int:
+    # allow_abbrev の既定 (True) は --update や --u を --update-manifest の短縮として
+    # 受理し、manifest を無言で書き換える (実測)。書き込みに至るフラグは完全形の
+    # 明示だけに絞り、短縮は typo と同じ exit 2 へ倒す
     parser = argparse.ArgumentParser(
-        description="Python テストを実行し、テスト ID 集合を manifest と照合する"
+        description="Python テストを実行し、テスト ID 集合を manifest と照合する",
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--update-manifest",

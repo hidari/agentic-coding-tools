@@ -15,7 +15,7 @@ import importlib.util
 import io
 import sys
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -69,6 +69,12 @@ def write_fixture_tree(root: Path, test_source: str = PASSING_TESTS) -> Path:
     test_file = pkg / "test_probe.py"
     test_file.write_text(test_source, encoding="utf-8")
     return test_file
+
+
+def write_empty_tree(root: Path) -> None:
+    """test_*.py を 1 つも持たないミニリポジトリを作る。"""
+    (root / "skills" / "pkg").mkdir(parents=True)
+    (root / "scripts").mkdir()
 
 
 def run_main(root: Path, argv: list[str] | None = None) -> tuple[int, str]:
@@ -182,6 +188,27 @@ class MainEndToEnd(unittest.TestCase):
         self.assertIn("消えたテスト: skills/pkg/test_probe.py::test_probe.Probe.test_b", out)
         self.assertIn("未記録のテスト: skills/pkg/test_probe.py::test_probe.Probe.test_z", out)
 
+    def test_empty_tree_is_red(self):
+        # 0 件収集は「検査していない」であって健全ではない (Issue #8 の核心)。
+        # manifest 照合より手前で赤にする
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_empty_tree(root)
+            rc, out = run_main(root)
+        self.assertEqual(rc, 1)
+        self.assertIn("test_*.py が 1 つも見つからない", out)
+
+    def test_empty_tree_update_refuses_and_writes_nothing(self):
+        # この分岐が消えると、空ツリーへの update がヘッダだけの空 manifest を
+        # 焼き込む laundering 経路になる (0 件が baseline の正になる)
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_empty_tree(root)
+            rc, _ = run_main(root, ["--update-manifest"])
+            manifest_written = (root / "scripts" / runner.MANIFEST_NAME).exists()
+        self.assertEqual(rc, 1)
+        self.assertFalse(manifest_written, "空ツリーで manifest が書かれた")
+
     def test_missing_manifest_is_exit_2(self):
         # 照合基準が無いのは違反 (1) ではなく検査不能 (2)。混ぜると manifest の
         # 置き忘れがテストの失敗に見える (check-leak-guard-rules.py と同じ分離)
@@ -191,6 +218,22 @@ class MainEndToEnd(unittest.TestCase):
             rc, out = run_main(root)
         self.assertEqual(rc, 2)
         self.assertIn("python3 scripts/run-python-tests.py --update-manifest", out)
+
+
+class ArgumentSurface(unittest.TestCase):
+    def test_abbreviated_flag_is_rejected_before_any_write(self):
+        # allow_abbrev の既定 (True) では --update や --u が --update-manifest として
+        # 受理され、manifest が無言で書き換わる (実測)。短縮を typo と同じ exit 2 へ
+        # 倒し、更新を完全形の明示だけに絞る
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_fixture_tree(root)
+            err = io.StringIO()
+            with redirect_stderr(err), self.assertRaises(SystemExit) as ctx:
+                runner.main(["--update"], root=root)
+            manifest_written = (root / "scripts" / runner.MANIFEST_NAME).exists()
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertFalse(manifest_written, "短縮形で manifest が書かれた")
 
 
 class UpdateRefusal(unittest.TestCase):
