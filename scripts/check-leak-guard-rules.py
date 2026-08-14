@@ -1,23 +1,19 @@
 #!/usr/bin/env python3
 """漏洩ガードの custom ルールを、検出側と許可側の両方の対照で検証する。
 
-`.gitleaks.toml` の `user-path` ルールが「捕まえるべきものを捕まえ、通すべきものを通す」
-ことを確かめる。ルールの regex は読むだけでは正しさが判定できず、実際に誤りを 2 種類とも
-埋め込んだ実績がある。
-
-  - 取りこぼし: OS 別に 2 ルールへ割った版で、UNC・ドライブ省略・エスケープ済みの
-    3 形式がどちらの網からも落ちた。実際に履歴へ入った
-  - 誤検出: 大小無視の `(?i)` をパターン先頭へ置いた版が、`C:/Users/Public` (winvm が
-    一時ファイルの置き場に使う) と REST API の `/api/users/<id>` を拾った
-
-どちらも「エラー」ではなく静かな取りこぼし / もっともらしい検出として出るので、
-検出側だけ、あるいは許可側だけの対照では気づけない。両方を並べて初めて判定できる。
+`.gitleaks.toml` の user-path ルールが「捕まえるべきものを捕まえ、通すべきものを通す」
+ことを確かめる。regex は読むだけでは正しさを判定できず、取りこぼしと誤検出の両方を
+実際に埋め込んだ実績がある (経緯は `.gitleaks.toml` のコメントが持つ)。どちらも例外では
+なく静かな取りこぼし / もっともらしい検出として出るので、検出側だけ、あるいは許可側だけの
+対照では気づけない。両方を並べて初めて判定できる。
 
 ケースは 1 つの一時ディレクトリへ書き出し、gitleaks を 1 回だけ呼ぶ。判定は exit code
-ではなく JSON レポートの内容で行う (gitleaks の exit code は「検出があったか」であって
+ではなくレポートの内容で行う (gitleaks の exit code は「検出があったか」であって
 「期待どおりか」ではない)。
 
-終了コードは 0 (期待どおり) / 1 (不一致あり) / 2 (gitleaks を走らせられなかった)。
+終了コードは 0 (期待どおり) / 1 (不一致あり) / 2 (検査できなかった)。2 を 1 と分けるのは、
+ルールの誤りと「gitleaks を走らせられなかった」を混ぜないため。後者は検査の結果ではなく、
+同じ赤にすると config が壊れている状態がルールの誤りに見える。
 """
 
 import json
@@ -30,14 +26,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / ".gitleaks.toml"
 
-# 検出側のユーザー名は変数で埋める。ここへ literal で書くと **このファイル自身が
-# 漏洩ガードに捕まり** pre-commit が通らなくなる (実際に踏んだ。13 件検出された)。
+# 検証対象のルール。canonical は `.gitleaks.toml` の [[rules]] id で、ここはその参照。
+# 名前がずれると全ケース取りこぼしの赤になるので、ずれたまま緑にはならない。
+RULE_ID = "user-path"
+
+# 検出側のユーザー名は変数で埋める。ここへ literal で書くと このファイル自身が
+# 漏洩ガードに捕まり pre-commit が通らなくなる (実際に踏んだ。13 件検出された)。
 # `/Users/{NAME}` はソース上 `{` が続くのでルールの文字クラスに掛からず、実行時には
 # 正しいケース文字列が組み上がる。allowlist へこのファイルを足して黙らせる手もあるが、
 # それだとこのファイルに本物の漏洩が入っても素通りする。
 NAME = "alice"
 
-# 検出されるべき書かれ方。`.gitleaks.toml` のコメントが挙げる形を網羅する。
+# `.gitleaks.toml` が押さえると宣言している形に、実際に掛かる変形を足したもの。
+# 掛かる形の canonical はこのリストで、toml 側のコメントは意図の説明を持つ。
 SHOULD_DETECT = [
     ("macos", f"/Users/{NAME}/dev/project"),
     ("windows-backslash", rf"C:\Users\{NAME}\dev"),
@@ -57,11 +58,9 @@ SHOULD_DETECT = [
     ("underscore-name", f"/Users/{'_' + NAME}"),
 ]
 
-# 許可されるべき書かれ方。placeholder・CI・Windows 自身のディレクトリ・別文脈の users。
-# こちらは検出されない前提なので literal で書いてよい (書けることの確認も兼ねる)。
-#
-# allowlist が持つ名前は 1 つずつ全部並べる。覆っていない名前は allowlist から
-# 消しても緑のままで、免除が縮んだことに気づけない。
+# allowlist が持つ名前は 1 つずつ全部並べる。覆っていない名前は allowlist から消しても
+# 緑のままで、免除が縮んだことに気づけない。こちらは検出されない前提なので literal で
+# 書いてよく、書けること自体が確認になる。
 SHOULD_ALLOW = [
     ("placeholder-example", "/Users/example/project"),
     ("placeholder-user", "/Users/user/dev"),
@@ -70,11 +69,11 @@ SHOULD_ALLOW = [
     ("placeholder-angle-windows", r"C:\Users\<name>\AppData"),
     ("ci-runner", "/Users/runner/work/repo"),
     ("shared", "/Users/shared/data"),
-    ("windows-default-app-pool", r"C:\Users\DefaultAppPool\AppData"),
     ("windows-public", r"C:\Users\Public\Documents"),
     ("windows-public-slash", "C:/Users/Public"),
     ("windows-public-trailing-period", r"C:\Users\Public."),
     ("windows-default", r"C:\Users\Default\NTUSER.DAT"),
+    ("windows-default-app-pool", r"C:\Users\DefaultAppPool\AppData"),
     ("windows-all-users", r"C:\Users\All Users"),
     ("rest-api-users", "/api/users/123"),
 ]
@@ -85,7 +84,6 @@ class ProbeError(RuntimeError):
 
 
 def detected_ids(workdir: Path) -> set[str]:
-    """gitleaks を 1 回走らせ、検出されたケース ID の集合を返す。"""
     report = workdir / "report.json"
     proc = subprocess.run(
         [
@@ -100,7 +98,6 @@ def detected_ids(workdir: Path) -> set[str]:
             str(report),
             "--no-banner",
             "--redact",
-            # 検出があっても 0 で返させる。判定はレポートの内容で行う。
             "--exit-code",
             "0",
         ],
@@ -113,47 +110,57 @@ def detected_ids(workdir: Path) -> set[str]:
     # 見える (実際に allowlist を空にする変異で踏んだ)。
     if proc.returncode != 0:
         detail = proc.stderr.decode("utf-8", "replace").strip() or f"rc={proc.returncode}"
-        raise ProbeError(f"gitleaks の実行に失敗しました: {detail}")
+        raise ProbeError(f"gitleaks の実行に失敗した: {detail}")
     if not report.exists():
-        raise ProbeError("gitleaks がレポートを出力しませんでした")
+        raise ProbeError("gitleaks がレポートを出力しなかった")
     findings = json.loads(report.read_text(encoding="utf-8") or "[]")
-    return {Path(f["File"]).stem for f in findings}
+    # RuleID で絞る。絞らないと、別のルールが同じケース文字列を拾ったときに
+    # user-path が壊れていても「検出された」ことになって緑で隠れる。
+    return {Path(f["File"]).stem for f in findings if f.get("RuleID") == RULE_ID}
 
 
 def main() -> int:
     if shutil.which("gitleaks") is None:
-        print("error: gitleaks が見つかりません (brew install gitleaks)", file=sys.stderr)
+        print("[x] gitleaks が見つからない (brew install gitleaks)")
+        return 2
+
+    cases = SHOULD_DETECT + SHOULD_ALLOW
+    ids = [case_id for case_id, _ in cases]
+    # ID が重複するとケースのファイルが上書きされ、片方が一度も検査されないまま
+    # 両リストが同じ結果集合で判定される。失敗形が「1 件減った緑」なので先に弾く。
+    if len(ids) != len(set(ids)):
+        duplicated = sorted({i for i in ids if ids.count(i) > 1})
+        print(f"[x] ケース ID が重複している: {', '.join(duplicated)}")
         return 2
 
     with tempfile.TemporaryDirectory() as tmp:
         workdir = Path(tmp)
-        cases = workdir / "cases"
-        cases.mkdir()
-        for case_id, text in SHOULD_DETECT + SHOULD_ALLOW:
-            (cases / f"{case_id}.txt").write_text(text + "\n", encoding="utf-8")
+        case_dir = workdir / "cases"
+        case_dir.mkdir()
+        for case_id, text in cases:
+            (case_dir / f"{case_id}.txt").write_text(text + "\n", encoding="utf-8")
         try:
             found = detected_ids(workdir)
         except ProbeError as e:
-            print(f"error: {e}", file=sys.stderr)
+            print(f"[x] {e}")
             return 2
 
     missed = [c for c, _ in SHOULD_DETECT if c not in found]
     false_positives = [c for c, _ in SHOULD_ALLOW if c in found]
 
-    total = len(SHOULD_DETECT) + len(SHOULD_ALLOW)
     print(
-        f"検査したケース: {total} 件 "
+        f"検査したケース: {len(cases)} 件 "
         f"(検出されるべき {len(SHOULD_DETECT)} / 許可されるべき {len(SHOULD_ALLOW)})"
     )
     for case_id in missed:
-        print(f"  取りこぼし: {case_id} が検出されなかった")
+        print(f"  [x] 取りこぼし: {case_id} が検出されなかった")
     for case_id in false_positives:
-        print(f"  誤検出: {case_id} を検出した")
+        print(f"  [x] 誤検出: {case_id} を検出した")
 
     if missed or false_positives:
-        print(f"不一致: {len(missed) + len(false_positives)} 件")
+        print(f"[x] 不一致 {len(missed) + len(false_positives)} 件")
         return 1
-    print("不一致なし")
+    print("[+] 不一致なし")
     return 0
 
 

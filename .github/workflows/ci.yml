@@ -28,6 +28,12 @@ jobs:
           tar -xz -C "$RUNNER_TEMP" -f "$archive" gitleaks
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
+      # ルール自身が正しいかを先に見る。ここが壊れていると、次の全履歴走査は
+      # 「壊れたガードで緑」を出す。pre-commit にも同じ検査を置いてあるが、
+      # -n での skip や pre-commit 未導入の経路があるので防御を 1 層にしない。
+      - name: Verify leak guard rules
+        run: python3 scripts/check-leak-guard-rules.py
+
       # 履歴は本リポジトリで新規に作るため、範囲を絞らず全履歴を走査する。
       # 既定ルールだけでは /Users/<name> は検査されないので -c で custom ルールを渡す。
       - name: Scan full history for leaks

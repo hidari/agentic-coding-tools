@@ -102,9 +102,8 @@ CI (`.github/workflows/ci.yml`) が回す job より、ローカルの pre-commi
 
 - **漏洩検査**: pre-commit の hook は `gitleaks git --staged` なので、`--all-files` を
   付けても走査対象は staged 差分だけ。index が clean だと `0 commits scanned` で緑になる。
-  全履歴を走査するのは CI だけ。なお漏洩ルール自身が正しいかは別の hook
-  (`scripts/check-leak-guard-rules.py`) が検出側と許可側の対照で見る。こちらは
-  `.gitleaks.toml` を触ったときだけ走る
+  全履歴を走査するのは CI だけ。なお漏洩ルール自身が正しいかは
+  `scripts/check-leak-guard-rules.py` が検出側と許可側の対照で見る
 - **Python テスト**: `scripts/run-python-tests.py` が探すのは `skills/` と `plugins/` の
   配下だけ (`SEARCH_DIRS`)。`scripts/` に `test_*.py` を置いても収集されず、緑のまま
   何も実行されない。規約を担保している検査スクリプト自身が現状 無検査であることを意味する
