@@ -103,7 +103,7 @@ GitHub Releases の `PowerShell-7.6.4-win-arm64.msi` を `winvm push` で投入�
 - [ ] probe を「PATH にあるか」から「起動できるか」へ変える。案: `pwsh -NoProfile
       -Command "exit 0"` の exit code を見る。往復数は変わらず、判定の意味だけが変わる
 - [ ] `PWSH_PROBE_ERROR` の文面に「Store の alias stub は使えない」ことを足す。
-      今回の状態では probe が通ってしまい、この文面自体が表示されなかった
+      MSI 導入前の VM では probe が通ってしまい、この文面自体が表示されなかった
 - [ ] VM を作り直したときに同じ状態へ戻らないようにする。`references/windows-bootstrap.md` が
       `winget install --id Microsoft.PowerShell` を案内しており、ARM64 ではこれで MSIX が入る
       ので同じ問題が再発する。MSI を明示的に入れる手順へ変える
