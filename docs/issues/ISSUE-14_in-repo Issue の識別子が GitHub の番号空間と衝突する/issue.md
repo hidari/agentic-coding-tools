@@ -11,7 +11,7 @@ in-repo Issue は `docs/issues/<NNN>_<title>/` というディレクトリなの
 **GitHub と同じ記法・同じ番号空間を共有したまま消費だけしない**。結果、in-repo Issue #N を
 起票した後に作られた PR が #N を取り、`#N` がどちらを指すか文脈からしか判別できなくなる。
 
-この問題は hidari/astralys-art#1267 が investigation として詳細に測っている。本 Issue は
+この問題は astralys-art の in-repo Issue 1267 が investigation として詳細に測っている。本 Issue は
 そこで挙がった対応候補を再評価した上で、skill 側の規則としてこのリポジトリで先行実装する。
 `astralys-art` と `dotfiles` の移行は本 Issue の範囲外で、各リポジトリの判断に委ねる。
 
@@ -35,7 +35,7 @@ PR #3 / PR #6 / PR #9 の `closingIssuesReferences` はいずれも 0 で、自�
 
 つまり守っているのはリンク形の副作用であって規約ではない。素形式 `Closes #12` を書けば発火する。
 
-### 既に materialize している実害 (hidari/astralys-art#1267 の実測より)
+### 既に materialize している実害 (astralys-art の in-repo Issue 1267 の実測より)
 
 1. GitHub サーバ側に誤結線が記録される。in-repo Issue 1190 を閉じた PR のコメントが、
    無関係な GitHub PR #1190 のタイムラインへ `cross-referenced` として永久に残る。後から消せない
@@ -176,6 +176,6 @@ SKILL.md の「プロジェクト CLAUDE.md に明示すること」を削除し
 
 ## 関連
 
-- hidari/astralys-art#1267 (investigation。機序と実測の一次資料。本 Issue はそこから
+- astralys-art の in-repo Issue 1267 (investigation。機序と実測の一次資料。本 Issue はそこから
   skill 側の実装を引き取ったもので、astralys-art 側の既存衝突の遡及可否は向こうの判断)
 - 検査機構が自分の取り付けを検証できない問題は ISSUE-13 と同型

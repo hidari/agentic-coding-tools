@@ -15,8 +15,12 @@ Spec は同ディレクトリの `issue.md`。設計判断の根拠と却下し�
   - 本リポの in-repo Issue → `ISSUE-<N>` (`Issue #8` → `ISSUE-8`)
   - 本リポの GitHub PR → `PR #<N>`。**列挙は 1 件ごとに `PR ` を前置する**
     (`PR #3 / #6 / #9` → `PR #3` / `PR #6` / `PR #9`)。免除の判定は直前の文字列だけを見る
-  - 他リポジトリの Issue / PR → `<owner>/<repo>#<N>`
-    (astralys-art の `#1267` は `hidari/astralys-art#1267`)
+  - 他リポジトリの **GitHub** Issue / PR → `<owner>/<repo>#<N>`
+  - 他リポジトリの **in-repo** Issue → `#` を使わず `<repo> の in-repo Issue <N>` と書く。
+    向こうが記法分離をまだ採っていないので、`#` を付けるとその番号の GitHub オブジェクトへ
+    解決してしまう。実測: astralys-art の GitHub `#1267` は `chore: reserve issue number`
+    という中身の無い予約ダミーで、in-repo Issue 1267 の investigation とは別物。
+    GitHub `#1190` は Dependabot の bump で、in-repo Issue 1190 とは無関係
   - 参照先が復元できないコード内コメント → 推測で番号を割り当てず、番号を伴わない記述へ
     書き換える (コード内のタスク参照コメントは rot する、と既に規定がある)
   - コードフェンス / インラインコードの中は免除なので書き換えない
