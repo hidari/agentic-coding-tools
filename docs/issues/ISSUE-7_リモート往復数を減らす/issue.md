@@ -44,7 +44,7 @@ Issue #4 で実際にその状態に当たっている (VM 側は MSI 版の導�
 
 ### B. probe を本実行に畳む
 
-Issue [#4](../4_VM の pwsh probe が偽陽性で exec と health が実機で動かない/issue.md)
+Issue [#4](../ISSUE-4_VM の pwsh probe が偽陽性で exec と health が実機で動かない/issue.md)
 と結合する。probe の意味自体を直すのが先。
 
 ### C. exec / health を stdin 経由の 1 往復にする

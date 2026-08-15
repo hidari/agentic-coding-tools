@@ -60,10 +60,10 @@ Issue #8 で `scripts/run-python-tests.py` の収集がディレクトリ列挙�
 
 ## 関連
 
-- [Issue #8 (closed): run-python-tests.py の件数ガードが実質 1 件で機能していない](../closed/8_run-python-tests.py%20の件数ガードが実質%201%20件で機能していない/issue.md) —
+- [Issue #8 (closed): run-python-tests.py の件数ガードが実質 1 件で機能していない](../closed/ISSUE-8_run-python-tests.py%20の件数ガードが実質%201%20件で機能していない/issue.md) —
   この Issue の前提を作った。収集の仕組みと限界の canonical は
   `scripts/run-python-tests.py` の docstring
 - `scripts/test_run_python_tests.py` — ハイフン名スクリプトを `importlib` で読む定型
-- [Issue #13: 両取り付けの同時撤去を機構で検出できない](../13_両取り付けの同時撤去を機構で検出できない/issue.md) —
+- [Issue #13: 両取り付けの同時撤去を機構で検出できない](../ISSUE-13_両取り付けの同時撤去を機構で検出できない/issue.md) —
   `check-package-shape.py` へ規則を足す案が出ている。触る対象が重なるので、
   この Issue の import 安全化が先に入るなら合わせて考える

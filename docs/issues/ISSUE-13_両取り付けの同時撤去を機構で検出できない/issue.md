@@ -57,7 +57,7 @@ canonical はファイルシステムの glob そのものなので、スクリ�
 
 ## 関連
 
-- [Issue #8 (closed): run-python-tests.py の件数ガードが実質 1 件で機能していない](../closed/8_run-python-tests.py%20の件数ガードが実質%201%20件で機能していない/issue.md) —
+- [Issue #8 (closed): run-python-tests.py の件数ガードが実質 1 件で機能していない](../closed/ISSUE-8_run-python-tests.py%20の件数ガードが実質%201%20件で機能していない/issue.md) —
   この限界を作った変更。限界の canonical は `scripts/run-python-tests.py` の docstring
-- [Issue #12: scripts/ の検査スクリプトが自分自身のテストを持たない](../12_scripts%20の検査スクリプトが自分自身のテストを持たない/issue.md) —
+- [Issue #12: scripts/ の検査スクリプトが自分自身のテストを持たない](../ISSUE-12_scripts%20の検査スクリプトが自分自身のテストを持たない/issue.md) —
   `check-package-shape.py` に触る点が重なる。先に import 安全化が入るなら合わせて考える
