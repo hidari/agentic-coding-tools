@@ -2,6 +2,43 @@
 # 実行されたテスト ID の集合を pin し、消えた側 (痩せ) も未記録側 (増加) も赤にする。
 # テストを増減・改名したら上のコマンドで再生成し、diff ごとコミットする。
 # 衝突したら手でマージせず再生成する。
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ArgumentSurface.test_abbreviated_flag_is_rejected
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ArgumentSurface.test_no_mode_is_rejected
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_bare_reference_in_tracked_file_is_flagged
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_clean_repository_is_green_and_reports_counts
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_duplicate_number_across_active_and_closed_is_flagged
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_legacy_directory_name_is_flagged
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_non_git_root_is_exit_2
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_repository_without_tracked_files_is_exit_2
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_stylesheets_are_excluded
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_templates_directory_is_exempt
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_undecodable_file_is_counted_as_skipped
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_untracked_file_is_not_scanned
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckText.test_clean_text_is_green_and_reports_line_count
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckText.test_file_violation_is_labelled_with_its_path
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckText.test_missing_file_is_exit_2
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckText.test_stdin_is_scanned_and_labelled
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_closed_directory_in_unmerged_branch_is_counted
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_duplicate_number_is_reported_with_source_and_path
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_empty_repository_starts_at_one
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_legacy_directories_share_the_number_space
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_mixed_formats_take_one_maximum
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_new_format_directories_are_counted
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_bare_reference_is_flagged_with_location_and_replacement
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_cross_repo_reference_is_allowed
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_fenced_block_is_exempt
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_html_entity_is_allowed
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_inline_code_is_exempt
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_issue_prefixed_reference_is_flagged
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_longer_closing_fence_closes_the_block
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_markdown_link_reference_is_flagged
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_pr_with_space_is_allowed
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_pr_without_space_is_flagged
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_reference_at_line_start_is_flagged
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_scanning_resumes_after_a_closed_fence
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_shorter_fence_does_not_close_a_longer_one
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_two_references_on_one_line_are_both_flagged
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_unclosed_fence_is_reported
 scripts/test_run_python_tests.py::test_run_python_tests.ArgumentSurface.test_abbreviated_flag_is_rejected_before_any_write
 scripts/test_run_python_tests.py::test_run_python_tests.Attachment.test_ci_invokes_the_runner
 scripts/test_run_python_tests.py::test_run_python_tests.Attachment.test_pre_commit_invokes_the_runner
