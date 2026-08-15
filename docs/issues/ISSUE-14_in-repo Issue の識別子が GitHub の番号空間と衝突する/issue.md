@@ -11,7 +11,7 @@ in-repo Issue は `docs/issues/<NNN>_<title>/` というディレクトリなの
 **GitHub と同じ記法・同じ番号空間を共有したまま消費だけしない**。結果、in-repo Issue #N を
 起票した後に作られた PR が #N を取り、`#N` がどちらを指すか文脈からしか判別できなくなる。
 
-この問題は `astralys-art` の Issue #1267 が investigation として詳細に測っている。本 Issue は
+この問題は hidari/astralys-art#1267 が investigation として詳細に測っている。本 Issue は
 そこで挙がった対応候補を再評価した上で、skill 側の規則としてこのリポジトリで先行実装する。
 `astralys-art` と `dotfiles` の移行は本 Issue の範囲外で、各リポジトリの判断に委ねる。
 
@@ -23,7 +23,7 @@ in-repo Issue は `docs/issues/<NNN>_<title>/` というディレクトリなの
 |---|---|---|---|
 | astralys-art | 1282 | 1282 | ちょうど並んでいる。次の 1 件が無防備 |
 | dotfiles | 34 | 114 | 全 34 件が既に PR と衝突済み |
-| agentic-coding-tools (本リポ) | 13 | 9 | #1〜#9 衝突済み、#10〜#13 は未消費 |
+| agentic-coding-tools (本リポ) | 13 | 9 | ISSUE-1〜ISSUE-9 衝突済み、ISSUE-10〜ISSUE-13 は未消費 |
 
 本リポは `hasIssuesEnabled: true` で GitHub Issue は 0 件、番号は全て PR が消費している。
 
@@ -31,13 +31,13 @@ in-repo Issue は `docs/issues/<NNN>_<title>/` というディレクトリなの
 
 PR 本文の `Closes [Issue #N](path)` という Markdown リンク形は GitHub の closing keyword
 パーサに一致しない (`Closes` と `#N` の間に `[Issue ` が挟まるため)。実測すると
-PR #3 / #6 / #9 の `closingIssuesReferences` はいずれも 0 で、自動クローズの誤爆は起きていない。
+PR #3 / PR #6 / PR #9 の `closingIssuesReferences` はいずれも 0 で、自動クローズの誤爆は起きていない。
 
 つまり守っているのはリンク形の副作用であって規約ではない。素形式 `Closes #12` を書けば発火する。
 
-### 既に materialize している実害 (astralys-art #1267 の実測より)
+### 既に materialize している実害 (hidari/astralys-art#1267 の実測より)
 
-1. GitHub サーバ側に誤結線が記録される。in-repo Issue #1190 を閉じた PR のコメントが、
+1. GitHub サーバ側に誤結線が記録される。in-repo Issue 1190 を閉じた PR のコメントが、
    無関係な GitHub PR #1190 のタイムラインへ `cross-referenced` として永久に残る。後から消せない
 2. 同一ファイルが同じ番号に矛盾した答えを与える (`#1274` が in-repo Issue と GitHub PR の
    両方を指す記述が 1 ファイル内に混在)
@@ -128,7 +128,7 @@ SKILL.md の「プロジェクト CLAUDE.md に明示すること」を削除し
    採番から見えない。skill 自身が「クローズは feature PR 同梱を優先」を推奨しているので、
    ブランチ内で起票と close を同梱した Issue はこの穴にちょうど落ちる。A.1 の解説文が掲げる
    「未マージブランチの起票済み番号も拾う」という目的が closed については達成できていない
-2. **Phase C.1 が PR の body しか見ていない**。実測で PR #3 / #6 / #9 はタイトル側にしか
+2. **Phase C.1 が PR の body しか見ていない**。実測で PR #3 / PR #6 / PR #9 はタイトル側にしか
    Issue 参照が無い。title も読む
 3. **skill 間契約が literal で二重化している**。`pre-merge-quality-gate/SKILL.md:128` と
    `in-repo-issue` の frontmatter description が `Closes #NNN` / `Fixes #NNN` を持つ。
@@ -140,7 +140,7 @@ SKILL.md の「プロジェクト CLAUDE.md に明示すること」を削除し
 - GitHub 上で直接打つ PR タイトル / 本文はローカル hook を通らない。squash merge commit は
   サーバ側生成なので commit-msg hook も通らない。この経路を塞ぐには CI 側の機構が要る
 - 検査は自分の取り付けを自分では検証できない。pre-commit と CI の**両方**を同時に外すと
-  静かに緑になる (Issue #13 と同じ形。片側だけの撤去は Attachment テストが赤にする)
+  静かに緑になる (ISSUE-13 と同じ形。片側だけの撤去は Attachment テストが赤にする)
 - 未 push の別 clone / worktree での同時採番は解けない。全 ref 横断スキャンは ref に載った
   分しか見えないので、同番号の二重取得は次の push まで検出されない
 - リポジトリに custom autolink reference を設定すると `ISSUE-` が autolink されうる。
@@ -176,6 +176,6 @@ SKILL.md の「プロジェクト CLAUDE.md に明示すること」を削除し
 
 ## 関連
 
-- `astralys-art` Issue #1267 (investigation。機序と実測の一次資料。本 Issue はそこから
+- hidari/astralys-art#1267 (investigation。機序と実測の一次資料。本 Issue はそこから
   skill 側の実装を引き取ったもので、astralys-art 側の既存衝突の遡及可否は向こうの判断)
-- 検査機構が自分の取り付けを検証できない問題は Issue #13 と同型
+- 検査機構が自分の取り付けを検証できない問題は ISSUE-13 と同型

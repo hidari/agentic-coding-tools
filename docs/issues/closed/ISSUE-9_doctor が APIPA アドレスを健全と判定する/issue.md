@@ -101,11 +101,11 @@ hint が指す先を先に作る。後から書くと hint の文字列を 2 回
   まず doctor」で閉じるので、判定は doctor 側だけに置く (見落としではなく意図的な範囲外)。
   なお棄却したのは「判定を入れて exit 1 にする」案で、stdout と exit code を変えずに stderr へ
   警告だけ出す中間案は評価していなかった。そちらは
-  [Issue #11](../../ISSUE-11_resolve-ip%20が%20APIPA%20をそのまま返すとき利用者に何も知らせない/issue.md) で扱う
-- 同種の欠陥: [Issue #4: VM の pwsh probe が偽陽性で exec と health が実機で動かない](../../ISSUE-4_VM%20の%20pwsh%20probe%20が偽陽性で%20exec%20と%20health%20が実機で動かない/issue.md)。
+  [ISSUE-11](../../ISSUE-11_resolve-ip%20が%20APIPA%20をそのまま返すとき利用者に何も知らせない/issue.md) で扱う
+- 同種の欠陥: [ISSUE-4: VM の pwsh probe が偽陽性で exec と health が実機で動かない](../../ISSUE-4_VM%20の%20pwsh%20probe%20が偽陽性で%20exec%20と%20health%20が実機で動かない/issue.md)。
   あちらは「probe が通るのに本実行が失敗する」、こちらは「IP が取れているのにネットワークが無い」で、
   どちらも検査が通ることを機能の証拠として扱ってしまう類型。対象のコードは別 (pwsh probe と IP チェック)。
-- [Issue #10: SSH 断時に prlctl exec を直接叩くときの注意が既存文書から辿れない](../../ISSUE-10_SSH%20断時に%20prlctl%20exec%20を直接叩くときの注意が既存文書から辿れない/issue.md)
+- [ISSUE-10: SSH 断時に prlctl exec を直接叩くときの注意が既存文書から辿れない](../../ISSUE-10_SSH%20断時に%20prlctl%20exec%20を直接叩くときの注意が既存文書から辿れない/issue.md)
   — 同じ調査中に見つかった。本 Issue の状態が再現している間は ssh が使えないので、
   ゲストを覗く経路は `prlctl exec` だけになる
 - `sudo lsof` を引くときは対照を並べること。`sudo lsof -nP -iUDP:5353` が `mDNSResponder` を
