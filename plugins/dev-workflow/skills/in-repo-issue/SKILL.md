@@ -97,7 +97,9 @@ A.1 採番:
 NEXT=$(python3 "${CLAUDE_SKILL_DIR}/scripts/issue-id.py" --next)
 ```
 
-`--next` は現ツリーだけでなく全 ref を走査する。 現ツリーしか見ないと、 未マージブランチで起票済みの識別子と衝突する (実例: main で採番した番号が、 未マージの PR ブランチに既に存在した)。 重複を検出したときは識別子を印字せず非 0 で終了するので `${NEXT}` が空になる (実測)。 空なら起票を止め、 stderr に印字された重複を先に解消すること。 何をどう数えるかの canonical は `issue-id.py`。
+`--next` は現ツリーだけでなく全 ref を走査する。 現ツリーしか見ないと、 未マージブランチで起票済みの識別子と衝突する (実例: main で採番した番号が、 未マージの PR ブランチに既に存在した)。 何をどう数えるかの canonical は `issue-id.py`。
+
+**`${NEXT}` が空になったら起票を止めて stderr を読むこと。** 空になる経路は 2 つあり (どちらも実測)、 stderr で判別できる。 識別子の重複を検出した場合はスクリプトが重複箇所を名指しして非 0 で終了する。 スクリプトに辿り着けなかった場合 (`${CLAUDE_SKILL_DIR}` が未設定だとパスが `/scripts/issue-id.py` になる) は python の `No such file or directory` が出る。 後者を踏んだときに存在しない重複を探しに行かないよう、 まずスクリプトが動いたかを見る。
 
 A.2 ディレクトリ名 `${NEXT}_<sanitized-title>` を作る。 タイトルから FS-safe 文字列を作るサニタイズ規則 (3 項目):
 
@@ -109,7 +111,7 @@ A.2 ディレクトリ名 `${NEXT}_<sanitized-title>` を作る。 タイトル�
 
 - **サニタイズ対象はディレクトリ名タイトル部のみ**。 識別子の側は `--next` の出力をそのまま前置する。 本文 H1 は元タイトル (`:` を含む conventional commits prefix と記号類) を**そのまま保持**する
 - **conventional commits prefix の除外境界**: `feat:` 等の prefix とその**直後の半角空白 1 つ**を丸ごと除外してからサニタイズ規則を適用 (例: `feat: タイトル` → ディレクトリ名タイトル部 `タイトル`)
-- **シェル特殊文字を含むディレクトリ名**: `#` `!` や半角空白を含む場合、 シェルコマンドでは**常にダブルクォート**で囲う (例: `git add "docs/issues/${NEXT}_ラベルに #tag を含む/issue.md"`)。 ただし `$` と `` ` `` はダブルクォートの中でも展開されるので、 これらを含むタイトルはシングルクォートで囲うか `\$` へエスケープする (実測: `"... $VAR ..."` は変数の値へ置き換わったディレクトリを作る)。 Markdown リンクで `#` を含むパスを書くときは URL エンコードせず素のパスで OK (git / 多くの renderer が解決する)
+- **シェル特殊文字を含むディレクトリ名**: パスは `${NEXT}` を展開させる必要があるので、 シェルコマンドでは**パス全体を常にダブルクォート**で囲う (例: `git add "docs/issues/${NEXT}_ラベルに #tag を含む/issue.md"`)。 `#` `!` と半角空白はこれで足りる。 `$` と `` ` `` はダブルクォートの中でも展開されるので、 タイトル側にこれらを含むときは `\$` / `` \` `` へエスケープする (実測: `"... $VAR ..."` は変数の値へ置き換わったディレクトリを作る)。 **シングルクォートで囲う形は採らない**。 `'docs/issues/${NEXT}_...'` は `${NEXT}` まで literal になり、 しかも `mkdir` は成功するので、 識別子が展開されないままのディレクトリができてその場では気づけない (zsh / bash で同一の実測)。 Markdown リンクで `#` を含むパスを書くときは URL エンコードせず素のパスで OK (git / 多くの renderer が解決する)
 
 それ以外 (日本語、 英数字、 半角空白、 全角空白、 括弧、 句読点、 ハイフン等) は全部そのまま保持。 結果が空文字列なら `untitled`。
 
@@ -165,7 +167,8 @@ gh pr view <PR> --json title,body --jq '.title, .body' \
 
 - **title も読むのは body への記入漏れに対する保険**。 `Closes` / `Fixes` のキーワードは依然必須で、 PR タイトル規約の `(<ID>)` だけを書いた PR は close 対象にならない (キーワードが無いため)
 - **パターンは識別子の形そのものを持たない**。 `Closes` / `Fixes` の直後から「`]` と半角空白以外が続いて数字で終わる」塊を切り出すだけなので、 識別子の形が変わっても壊れない。 代わりに `Fixes 2 つある` のような散文も拾うが、 実在しない識別子は C.3 の「見つからない」分岐で no-op になる (実測)
-- `(Closes|Fixes) #[0-9]+` のような GitHub 素形式へ戻さないこと。 in-repo Issue の識別子は数字記法を使わないので抽出が静かに 0 件化し、 自動クローズが止まる
+- パターンを `(Closes|Fixes) #[0-9]+` のような **GitHub 素形式専用へ戻さないこと**。 in-repo Issue の識別子は数字記法を使わないので抽出が 0 件化し、 自動クローズが静かに止まる
+- なお現行パターンは `Closes #12` から `#12` **も**拾う (実測)。 数字記法は Issue ディレクトリ名にならないので C.3 の「見つからない」で no-op になるが、 ログには残る。 本文の数字記法はそもそも記法違反なので、 止めるのは C.1 ではなく `issue-id.py --check-text` の側
 
 C.2 起動契機 2 (gate 未経由フォールバック) の場合のみ、 main の最新 CI 成功を確認:
 
@@ -244,7 +247,8 @@ E.1 / E.2 close した Issue の `parent`、 親の `children`、 各子の所�
 CLOSED_PATH=$(find docs/issues/closed -mindepth 2 -maxdepth 2 -path "*/${ID}_*/issue.md" | head -1)
 PARENT=$(grep -E '^parent:' "$CLOSED_PATH" | sed -E 's/^parent: *//')
 [ -z "$PARENT" ] && exit 0
-PARENT_PATH=$(find docs/issues -mindepth 2 -maxdepth 3 -path "*/${PARENT}_*/issue.md" | head -1)
+PARENT_PATH=$(find docs/issues -mindepth 2 -maxdepth 2 -path "*/${PARENT}_*/issue.md" | head -1)
+[ -z "$PARENT_PATH" ] && { echo "${PARENT} は active に無い (既に closed か不在)"; exit 0; }
 grep -E '^children:' "$PARENT_PATH" | sed -E 's/.*\[(.*)\].*/\1/' | tr ',' '\n' | tr -d ' ' \
   | while IFS= read -r child; do
       [ -n "$child" ] && find docs/issues -mindepth 2 -maxdepth 2 -path "*/${child}_*/issue.md"
@@ -252,6 +256,8 @@ grep -E '^children:' "$PARENT_PATH" | sed -E 's/.*\[(.*)\].*/\1/' | tr ',' '\n' 
 ```
 
 最後のパイプラインが 1 行でも出せば active な子が残っている → Phase E 終了。 出力が空なら全件 closed で親も close 可能。 ディレクトリ位置と frontmatter の不整合は Phase D の手順違反なので、 E ではディレクトリ位置だけで判定する (`-maxdepth 2` は `closed/` 配下を含まないので、 出るのは active な子だけ)。
+
+`PARENT_PATH` の検索だけ `-maxdepth 2` にして `closed/` 配下を含めないのは、 親が既に closed のときに提案を出さないため。 `-maxdepth 3` にすると closed の親も解決し、 その親の子は当然すべて closed なので**既に closed の親へ close 提案が出る** (実測)。 C.3 の「既に closed」ガードと同じ役割を、 ここでは深さと直後の空判定で果たしている。
 
 `CHILDREN=$(...)` へ入れて `for child in $CHILDREN` で回す形は使わないこと。 zsh は変数展開を単語分割しないので**子が 1 つの塊として 1 回だけ回り、 全件を取りこぼす** (bash では分割される。 両方を実測)。 取りこぼした側は「active な子が 1 件も無い」に見えるので、 まだ open な子がいる親を close する提案が出る。 分割はシェルに任せず `tr` で行に割って読む。
 
@@ -284,12 +290,15 @@ find docs/issues -mindepth 2 -maxdepth 2 -name issue.md -not -path '*/templates/
 find docs/issues -mindepth 2 -maxdepth 2 -name issue.md -not -path '*/templates/*' \
   -exec grep -l '^children:' {} +
 
-# 識別子で開く (active / closed 両方)
+# 識別子で開く (active / closed 両方)。 ID を実際の識別子へ置き換えてから実行する
+ID='<探したい識別子>'
 find docs/issues -mindepth 2 -maxdepth 3 -path "*/${ID}_*/issue.md"
 
 # closed 一覧
 find docs/issues/closed -mindepth 1 -maxdepth 1 -type d
 ```
+
+3 本目だけ `ID=` の行があるのは、 この節が Phase から独立したチートシートで `${ID}` を誰も定義しないため。 未定義のまま実行すると zsh / bash とも **rc 0 / 0 行 / stderr 無し**の空振りになり、 「その識別子の Issue が無い」と読める (実測)。 プレースホルダはクォートすること。 `ID=<探したい識別子>` と裸で書くと `<` `>` がリダイレクトとして解釈されて parse error になる。
 
 `-exec ... {} +` は該当ファイルが 0 件なら `grep` を起動しない (実測)。 `xargs` へ繋ぐ形は空入力での起動有無が実装で分かれる (BSD 版は起動せず、 GNU 版は最低 1 回起動すると BSD の `xargs(1)` が `-r` の項で述べている。 起動されると `grep` が標準入力を待つ) ので、 実装に依存しない `-exec` の形にしてある。
 
