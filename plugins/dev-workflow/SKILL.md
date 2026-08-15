@@ -26,8 +26,10 @@ install 時にも runtime にも自動実行されるコードを含まない。
 
 ## 前提
 
-`in-repo-issue` と `issue-scoped-artifacts` は `docs/issues/<NNN>_<title>/` という
-ディレクトリ規約を前提にする。この規約を採らないプロジェクトでは、`issue-scoped-artifacts` は
+`in-repo-issue` と `issue-scoped-artifacts` は `docs/issues/<ID>_<title>/` という
+ディレクトリ規約を前提にする。`<ID>` の形式と採番規則の canonical は `in-repo-issue` 同梱の
+`scripts/issue-id.py` で、このファイルは形も接頭辞も再掲しない。
+この規約を採らないプロジェクトでは、`issue-scoped-artifacts` は
 プロジェクトの CLAUDE.md にポインタがある場合にのみ適用される opt-in 設計になっている。
 
 `commit-and-pr-message` は日本語の散文をコマンド文字列へ載せない作法を扱う。特定のフック実装を

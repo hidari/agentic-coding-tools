@@ -58,7 +58,7 @@ simplify / code-reviewer / boy-scout-sweep / dev-workflow:e2e-scenario-impact-ch
    - prompt: 「**触ったファイル** (今回 PR で diff のあるファイル) を読み、CLAUDE.md ボーイスカウトルールに該当する箇所のみ抽出。
      - **抽出対象は『触ったファイル』のみ**。 同 directory の隣接ファイル (`<sibling>.tsx` など) は **抽出対象ではなく**、 触ったファイル内の表記揺れ検出のための **コンテキスト参照** として読む (隣接ファイル自体に boy scout 候補があっても、それは別 PR で扱う / 別 issue 提案として返す)。
      - **必ず検出する対象**:
-       - タスク参照コメント (`// Issue #N: ...`, `// PR #N`, `// Closes #N` など) — PR description にあるべき情報、コードでは rot する
+       - タスク参照コメント (`// Issue #N: ...`, `// PR #N`, `// Closes #N` のような GitHub の番号記法に加え、 in-repo Issue の識別子を書いたコメントも同じ) — PR description にあるべき情報、コードでは rot する。 参照先が既に復元できないものは推測で番号や識別子を割り当て直さず、 参照を伴わない記述へ書き換える
        - 履歴説明コメント (`// 旧実装は ...`, `// 元々は ...`, `// 以前 ...`) — git log で追える、 rot する
        - 識別子で表現済みの WHAT 説明コメント (関数名・型名で意図が明らかなのに WHAT を書いてあるもの)
        - 隣接 panel / コンポーネントとの表記揺れで **触ったファイル側に正当な WHY が無い** もの (`<div>` vs `<p>` のような同等用途タグの不統一など)。 触ったファイル側に「機能差を生む WHY コメント」が明示されていれば設計差として温存する。
@@ -125,7 +125,7 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 
 ### Phase 5: Issue クローズ処理 (gh pr merge 実行時のみ)
 
-`gh pr merge` 成功後、 マージ PR 本文に `Closes #NNN` / `Fixes #NNN` があれば `dev-workflow:in-repo-issue` skill の Phase C (自動クローズ) を起動する。 起動時は呼び出し元が gate であることを明示し、 dev-workflow:in-repo-issue 側 C.2 のフォールバック CI 確認をスキップさせる。 詳細手順は dev-workflow:in-repo-issue SKILL.md 参照。
+`gh pr merge` 成功後、 `dev-workflow:in-repo-issue` skill の Phase C (自動クローズ) を起動する。 起動可否を gate 側で判定しないこと。 対象識別子の抽出も「抽出 0 件なら close 対象なしで終了」の判定も C.1 が持っており、 同じ条件を gate 側へ写すと識別子の記法が変わったときに写した側だけが取り残されて起動が静かに止まる。 起動時は呼び出し元が gate であることを明示し、 dev-workflow:in-repo-issue 側 C.2 のフォールバック CI 確認をスキップさせる。 詳細手順は dev-workflow:in-repo-issue SKILL.md 参照。
 
 ## 落とし穴 (Red flags)
 

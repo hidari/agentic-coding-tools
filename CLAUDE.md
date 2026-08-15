@@ -76,6 +76,7 @@ PR で説明する。
 | `plugin.json` のフィールド | `claude plugin validate --strict` |
 | README の内容 | 各 SKILL.md の frontmatter |
 | secret とパスの漏洩 | `.gitleaks.toml` |
+| in-repo Issue の識別子と記法 | `plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py` の docstring |
 
 新しい規約を作るときは、まず検査に落とせないかを考える。落とせないものだけを散文で書く。
 
@@ -131,7 +132,13 @@ localized な文字列を判定に混ぜると環境依存で壊れる。
 
 ## Issue 管理
 
-- `docs/issues/<NNN>_<title>/issue.md` の in-repo Markdown で管理する。起票・更新・
+- `docs/issues/<ID>_<title>/issue.md` の in-repo Markdown で管理する。起票・更新・
 クローズ・reopen の手順は skill `dev-workflow:in-repo-issue` が canonical。
-- PR 本文には `Closes [Issue #NNN](../../docs/issues/...)` 形式で相対リンクを書く。
-- superpowers の spec / plan は Issue ディレクトリ配下へ `<NNN>-spec.md` / `<NNN>-plan.md` として置く（規約と手順の canonical は `dev-workflow:issue-scoped-artifacts` skill）
+- `<ID>` の形式と採番規則は再掲しない。canonical は
+`plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py` の docstring で、採番は
+`--next`、GitHub の番号記法が混入していないかの検査は `--check` / `--check-text` が行う。
+- PR タイトルは `<prefix>(<scope>): <subject> (<ID>)`、PR 本文には
+`Closes [<ID>](../../docs/issues/<ID>_<title>/issue.md)` 形式で相対リンクを書く。
+この行が無い PR は自動クローズされない (起動条件と抽出規則の canonical は
+`dev-workflow:in-repo-issue` の Phase C)。
+- superpowers の spec / plan は Issue ディレクトリ配下へ `<ID>-spec.md` / `<ID>-plan.md` として置く（規約と手順の canonical は `dev-workflow:issue-scoped-artifacts` skill）
