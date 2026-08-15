@@ -24,8 +24,12 @@ plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_i
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_legacy_directories_share_the_number_space
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_mixed_formats_take_one_maximum
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_new_format_directories_are_counted
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_non_git_root_is_exit_2
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_prefix_migration_rename_is_not_a_duplicate
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_remote_tracking_ref_is_counted
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_bare_reference_is_flagged_with_location_and_replacement
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_cross_repo_reference_is_allowed
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_empty_allowed_prefix_does_not_exempt_everything
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_fenced_block_is_exempt
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_html_entity_is_allowed
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_inline_code_is_exempt

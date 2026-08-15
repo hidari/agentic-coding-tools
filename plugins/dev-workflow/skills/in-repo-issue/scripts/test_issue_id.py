@@ -67,6 +67,17 @@ def git(root: Path, *args: str) -> None:
     )
 
 
+def git_out(root: Path, *args: str) -> str:
+    proc = subprocess.run(
+        ["git", "-C", str(root), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=GIT_ENV,
+    )
+    return proc.stdout.strip()
+
+
 def write(root: Path, rel: str, text: str = "本文\n") -> None:
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -147,6 +158,59 @@ class NextIdentifier(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertEqual(out, f"{PREFIX}10\n")
 
+    def test_remote_tracking_ref_is_counted(self):
+        # refs/remotes を列挙から落とすと push 済みの番号を再発行する。ローカルブランチを
+        # 消して、番号 9 が remote-tracking ref からしか辿れない形にする
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            git(root, "checkout", "-q", "-b", "topic")
+            write(root, f"docs/issues/{PREFIX}9_遠くの課題/issue.md")
+            commit(root, "remote work")
+            sha = git_out(root, "rev-parse", "HEAD")
+            git(root, "checkout", "-q", "main")
+            git(root, "update-ref", "refs/remotes/origin/topic", sha)
+            git(root, "branch", "-q", "-D", "topic")
+            refs = git_out(
+                root, "for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes"
+            ).split()
+            rc, out, err = run(["--next", "--root", str(root)])
+        # refs/heads 側に 9 が残っていると refs/remotes を見なくても緑になり dead pin になる
+        self.assertEqual(refs, ["refs/heads/main", "refs/remotes/origin/topic"])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out, f"{PREFIX}10\n")
+
+    def test_prefix_migration_rename_is_not_a_duplicate(self):
+        # 接頭辞の有無を同一視しないと、旧形式が残る main と新形式へ揃えたブランチが
+        # 「番号 8 の重複」に見えて --next が exit 1 で止まり、新規起票が一切できなくなる。
+        # Task 2 の rename がちょうどこの形を作る
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, ("8_移行する課題",))
+            git(root, "checkout", "-q", "-b", "topic")
+            git(
+                root,
+                "mv",
+                "docs/issues/8_移行する課題",
+                f"docs/issues/{PREFIX}8_移行する課題",
+            )
+            git(root, "commit", "-q", "-m", "rename")
+            git(root, "checkout", "-q", "main")
+            rc, out, err = run(["--next", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out, f"{PREFIX}9\n")
+
+    def test_non_git_root_is_exit_2(self):
+        # git を走らせられないのは違反 (1) ではなく検査不能 (2)。ここを緑にすると
+        # 「ref が 1 つも無い」と読めてしまい、採番が ISSUE-1 へ巻き戻って既存番号を
+        # 再発行する (実測: 検査を落とすと ISSUE-1 を rc 0 で返した)
+        with TemporaryDirectory() as tmp:
+            rc, out, err = run(["--next", "--root", tmp])
+        self.assertEqual(rc, 2)
+        # 識別子を出さないこと。出すと検査不能が採番成功に化ける
+        self.assertEqual(out, "")
+        self.assertIn("git for-each-ref", err)
+
     def test_duplicate_number_is_reported_with_source_and_path(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -207,6 +271,19 @@ class ScanText(unittest.TestCase):
 
     def test_pr_with_space_is_allowed(self):
         self.assertEqual(self.flags(f"PR {SIGIL}9 でマージした\n"), [])
+
+    def test_empty_allowed_prefix_does_not_exempt_everything(self):
+        # 免除は truthy を要求する (fail closed)。ガードを外すと endswith("") が常に真に
+        # なり、定数を空にする変更が「全件免除」へ静かに広がる。定数を空にしたときに
+        # 免除が消えることを直接見ないと、ガードの有無が挙動に現れず pin にならない
+        original = issue_id.GITHUB_REF_ALLOWED_PREFIX
+        issue_id.GITHUB_REF_ALLOWED_PREFIX = ""
+        try:
+            found = self.flags(f"PR {SIGIL}9 でマージした\n")
+        finally:
+            issue_id.GITHUB_REF_ALLOWED_PREFIX = original
+        self.assertEqual(len(found), 1)
+        self.assertIn(f"{PREFIX}9", found[0])
 
     def test_cross_repo_reference_is_allowed(self):
         self.assertEqual(self.flags(f"owner/repo{SIGIL}9 を参照\n"), [])
@@ -344,7 +421,10 @@ class CheckRepository(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             rc, out, err = run(["--check", "--root", tmp])
         self.assertEqual(rc, 2)
-        self.assertIn("[x]", err)
+        # 追跡下 0 件の経路も 2 を返すので、失敗した git コマンドが名指しされていることまで
+        # 見る。「[x] が出ている」だけでは 2 つの経路を区別できず dead pin になる (実測)
+        self.assertIn("git ls-files", err)
+        self.assertNotIn("走査対象ゼロ", err)
 
 
 class CheckText(unittest.TestCase):
@@ -391,11 +471,16 @@ class ArgumentSurface(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 2)
 
     def test_abbreviated_flag_is_rejected(self):
-        # allow_abbrev の既定 (True) は --che を別の入口として受理する。
-        # typo が静かに別モードへ落ちないよう完全形だけに絞る
-        err = io.StringIO()
-        with redirect_stderr(err), self.assertRaises(SystemExit) as ctx:
-            issue_id.main(["--che"])
+        # プローブは曖昧でない前方一致にする。--che は --check と --check-text の両方に
+        # 前方一致するので allow_abbrev の既定 (True) でも ambiguous option で
+        # SystemExit(2) になり、機構と無関係に緑になる (実測)。--nex は --next にしか
+        # 前方一致しないので既定では受理され、typo が静かに採番モードへ落ちる。
+        # --root を完全形で添えてあるのは、受理されてしまう変異下でも実リポジトリを
+        # 触らせないため
+        with TemporaryDirectory() as tmp:
+            err = io.StringIO()
+            with redirect_stderr(err), self.assertRaises(SystemExit) as ctx:
+                issue_id.main(["--nex", "--root", tmp])
         self.assertEqual(ctx.exception.code, 2)
 
 
