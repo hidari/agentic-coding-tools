@@ -28,7 +28,7 @@ install 時にも runtime にも自動実行されるコードを含まない。
 
 `in-repo-issue` と `issue-scoped-artifacts` は `docs/issues/<ID>_<title>/` という
 ディレクトリ規約を前提にする。`<ID>` の形式と採番規則の canonical は `in-repo-issue` 同梱の
-`scripts/issue-id.py` で、このファイルは形も接頭辞も再掲しない。
+`scripts/issue-id.py` で、このファイルは識別子の形も接頭辞も再掲しない。
 この規約を採らないプロジェクトでは、`issue-scoped-artifacts` は
 プロジェクトの CLAUDE.md にポインタがある場合にのみ適用される opt-in 設計になっている。
 

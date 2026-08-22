@@ -137,8 +137,7 @@ localized な文字列を判定に混ぜると環境依存で壊れる。
 - `<ID>` の形式と採番規則は再掲しない。canonical は
 `plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py` の docstring で、採番は
 `--next`、GitHub の番号記法が混入していないかの検査は `--check` / `--check-text` が行う。
-- PR タイトルは `<prefix>(<scope>): <subject> (<ID>)`、PR 本文には
-`Closes [<ID>](../../docs/issues/<ID>_<title>/issue.md)` 形式で相対リンクを書く。
-この行が無い PR は自動クローズされない (起動条件と抽出規則の canonical は
-`dev-workflow:in-repo-issue` の Phase C)。
+- PR タイトルと PR 本文には対象 Issue を指す記載を規約どおり入れる。どちらの書式も再掲しない。
+canonical は `dev-workflow:in-repo-issue` の「PR / コミット規約」節で、自動クローズの起動条件と
+抽出規則は同 skill の Phase C が持つ。
 - superpowers の spec / plan は Issue ディレクトリ配下へ `<ID>-spec.md` / `<ID>-plan.md` として置く（規約と手順の canonical は `dev-workflow:issue-scoped-artifacts` skill）

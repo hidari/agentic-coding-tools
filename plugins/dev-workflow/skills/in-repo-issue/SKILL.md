@@ -1,6 +1,6 @@
 ---
 name: in-repo-issue
-description: リポジトリ内 Markdown (`docs/issues/<ID>_<title>/issue.md`) で Issue を起票・更新・自動クローズ・reopen する。「Issue を立てて」「起票して」「作って」「閉じて」と指示された時、 PR マージ後 `Closes <ID>` / `Fixes <ID>` を検出した時 (dev-workflow:pre-merge-quality-gate Phase 5 から自動呼び出し)、 親 Issue の子全 closed を検出した時に起動。 識別子 `<ID>` は同梱の `scripts/issue-id.py` が採番し、 GitHub の番号記法との混同も同スクリプトが検出する。 frontmatter は status のみ、 完了判定は本文「## タスク」チェックリスト全 [x] で行う。
+description: リポジトリ内 Markdown (`docs/issues/<ID>_<title>/issue.md`) で Issue を起票・更新・自動クローズ・reopen する。「Issue を立てて」「起票して」「作って」「閉じて」と指示された時、 PR マージ後 (dev-workflow:pre-merge-quality-gate Phase 5 が起動可否を判定せず無条件に呼ぶ。 `Closes <ID>` / `Fixes <ID>` の抽出は本 skill の Phase C)、 親 Issue の子全 closed を検出した時に起動。 識別子 `<ID>` は同梱の `scripts/issue-id.py` が採番し、 GitHub の番号記法との混同も同スクリプトが検出する。 frontmatter は status のみ、 完了判定は本文「## タスク」チェックリスト全 [x] で行う。
 ---
 
 # In-Repo Issue Management
@@ -9,7 +9,7 @@ description: リポジトリ内 Markdown (`docs/issues/<ID>_<title>/issue.md`) �
 
 | 用語 | 実体 |
 |---|---|
-| 識別子 | `scripts/issue-id.py --next` が発行する文字列。 形式と採番規則の canonical は同スクリプト。 このファイルは形も接頭辞も再掲せず、 以降 `<ID>` と書く |
+| 識別子 | `scripts/issue-id.py --next` が発行する文字列。 形式と採番規則の canonical は同スクリプト。 このファイルは識別子の形も接頭辞も再掲せず、 以降 `<ID>` と書く |
 | Issue | `docs/issues/<ID>_<title>/issue.md` |
 | 補助資料 | 同ディレクトリ内の任意ファイル。 命名はプロジェクト規約に従う (`dev-workflow:issue-scoped-artifacts` 採用時は `<ID>-spec.md` / `<ID>-plan.md`) |
 | クローズ済み | `docs/issues/closed/` (`status: closed` の保管庫。 通常は編集しない。 例外: Phase F reopen) |
@@ -45,7 +45,7 @@ templates と `issue-id.py` のセットアップは「初期化」として起�
 - 新規 Issue 起票指示 (「Issue を立てて」「起票して」「作って」)
 - 既存 Issue の status 更新・クローズ・PR リンク追加
 - 親 Issue を子 Issue に分割するとき
-- dev-workflow:pre-merge-quality-gate Phase 5 から自動呼び出し (PR マージ後 `Closes <ID>` / `Fixes <ID>` を検出した時)
+- dev-workflow:pre-merge-quality-gate Phase 5 から `gh pr merge` 成功後に無条件で自動呼び出し (gate は起動可否を判定しない。 対象識別子の抽出と「0 件なら終了」の判定は本 skill の C.1 が持つ。 起動条件を gate 側へ写すと、 記法が変わったときに写した側だけが取り残されて起動が静かに止まる)
 - ユーザーから「マージしたよ」「閉じて」と指示された時、 また次セッション開始時に main の CI 成功 + `Closes <ID>` を検出した時 (フォールバック)
 
 ### 使わない
@@ -306,15 +306,15 @@ find docs/issues/closed -mindepth 1 -maxdepth 1 -type d
 
 PR タイトル: `<prefix>(<scope>): <subject> (<ID>)`
 
-PR 本文に Issue 本体への相対リンクと `Closes <ID>` を必ず書く (`Closes` キーワードが Phase C.1 のトリガーになる):
+PR 本文に Issue 本体への相対リンクと `Closes <ID>` を必ず書く (トリガーになるキーワードの集合は C.1 が持つ):
 
 ```markdown
 Closes [<ID>](../../docs/issues/<ID>_<title>/issue.md)
 ```
 
-これがない PR は close されない。
+C.1 が識別子を抽出するかどうかを決めるのはキーワードの有無だけで、 リンクの有無も、 書いたのが body か title かも影響しない (リンク有り / リンク無し / title のみ / キーワード無しの 4 通りを実測)。 抽出できた識別子が実際に close まで進むかは C.3 の判定による。 それでもリンクを規約で必須にするのは、 PR から Issue 本体へ辿る導線がここにしか無いため。
 
-識別子が数字記法でないため、 GitHub Issues を併用するプロジェクトでもこの行が GitHub の自動クローズ構文として解釈されることはない (GitHub のクローズキーワードは `#<数字>` / URL / `<owner>/<repo>#<数字>` のいずれかを要求する)。 番号空間の衝突は「プロジェクトごとに規約を書いて避ける」ものではなく、 記法が交わらないことで構造的に起きない。 手書きで数字記法が混入した場合の検出は `issue-id.py` の検査入口が担う (プロジェクトへ配る手順は「初期化」節。 hook / CI への取り付けはプロジェクト側の判断なので、 配っただけでは検出は走らない)。
+識別子が数字記法でないため、 GitHub Issues を併用するプロジェクトでもこの `Closes` 行が GitHub の自動クローズ構文として解釈されることはない (GitHub のクローズキーワードは `#<数字>` / URL / `<owner>/<repo>#<数字>` のいずれかを要求する)。 番号空間の衝突は「プロジェクトごとに規約を書いて避ける」ものではなく、 記法が交わらないことで構造的に起きない。 手書きで数字記法が混入した場合の検出は `issue-id.py` の検査入口が担う (プロジェクトへ配る手順は「初期化」節。 hook / CI への取り付けはプロジェクト側の判断なので、 配っただけでは検出は走らない)。
 
 コミットメッセージ形式 (Phase 別):
 
