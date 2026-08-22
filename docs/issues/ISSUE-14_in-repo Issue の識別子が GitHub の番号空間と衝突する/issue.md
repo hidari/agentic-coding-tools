@@ -1,5 +1,5 @@
 ---
-status: open
+status: in_progress
 ---
 
 # fix: in-repo Issue の識別子が GitHub の番号空間と衝突する
@@ -145,7 +145,11 @@ SKILL.md の「プロジェクト CLAUDE.md に明示すること」を削除し
 
 - 既存の commit message に焼き付いた `#N` は直せない (push 済み)。過去の参照は曖昧なまま残る
 - GitHub 上で直接打つ PR タイトル / 本文はローカル hook を通らない。squash merge commit は
-  サーバ側生成なので commit-msg hook も通らない。この経路を塞ぐには CI 側の機構が要る
+  サーバ側生成なので commit-msg hook も通らない。この経路を塞ぐには CI 側の機構が要る。
+  **さらに、GitHub が subject へ自動で付ける接尾辞は免除形のどちらにも一致しないので、
+  squash マージのたびに違反が機械的に生成される。**この部分は
+  [ISSUE-20](<../ISSUE-20_squash merge commit のメッセージが規約の免除形と一致しない/issue.md>)
+  が扱う
 - 検査は自分の取り付けを自分では検証できない。pre-commit と CI の**両方**を同時に外すと
   静かに緑になる (ISSUE-13 と同じ形。片側だけの撤去は Attachment テストが赤にする)
 - 未 push の別 clone / worktree での同時採番は解けない。全 ref 横断スキャンは ref に載った
@@ -161,19 +165,43 @@ SKILL.md の「プロジェクト CLAUDE.md に明示すること」を削除し
 
 ## タスク
 
-- [ ] `issue-id.py` を作る (`--next` / `--next --as=number` / `--check` / `--check-text`)
-- [ ] 既存 13 件を `ISSUE-<N>_<title>` へ rename し、Issue 間の相対リンク 19 件を直す
-- [ ] `issue-id.py` を pre-commit の pre-commit stage と commit-msg stage、および CI へ取り付ける
-- [ ] 変異注入 3 種 + 範囲 + 緩める方向を置いて、それぞれ赤になることを実測する
-- [ ] git を歩く経路のテストは fixture リポを作る形にする (実測で dead pin になった前例がある)
-- [ ] skill の A.1 をスクリプト呼び出しへ置き換え、`git ls-tree -d` の非再帰バグを直す
-- [ ] skill の Phase C.1 が PR の title も見るようにする
-- [ ] skill の C.3 / E.1 の `ls` グロブを見直す (シェルの nomatch 設定に依存して空振りしうる)
-- [ ] skill の委譲記述を削除し、スクリプト同梱で置き換える
-- [ ] skill 間契約の consumer を数えて直す (`pre-merge-quality-gate` と frontmatter description)
-- [ ] CLAUDE.md へ canonical の参照を足す (値は再掲しない)
-- [ ] README を再生成する (frontmatter を変えた場合)
-- [ ] apm 配布のロールアウト順序を決める (skill は 3 リポ共通なので更新は即座に届く)
+- [x] `issue-id.py` を作る (`--next` / `--check` / `--check-text`)。**タスク文が挙げていた
+      `--next --as=number` は実装していない。**plan の Global Constraints「ツールの surface を
+      広げない」が入口を 3 つに限っているため意図的に落とした (実測: `--help` が挙げる入口は
+      3 つ、`--as` はスクリプト内に 1 件も無い)。チェックが付いているのは残り 3 入口に対してで、
+      4 入口すべてに対してではない
+- [x] 既存 13 件を `ISSUE-<N>_<title>` へ rename し、Issue 間の相対リンク 19 件を直す
+- [x] `issue-id.py` を pre-commit の pre-commit stage と commit-msg stage、および CI へ取り付ける
+- [x] 変異注入 3 種 + 範囲 + 緩める方向を置いて、それぞれ赤になることを実測する
+- [x] git を歩く経路のテストは fixture リポを作る形にする (実測で dead pin になった前例がある)
+- [x] skill の A.1 をスクリプト呼び出しへ置き換え、`git ls-tree -d` の非再帰バグを直す
+- [x] skill の Phase C.1 が PR の title も見るようにする
+- [x] skill の C.3 / E.1 の `ls` グロブを見直す (シェルの nomatch 設定に依存して空振りしうる)
+- [x] skill の委譲記述を削除し、スクリプト同梱で置き換える
+- [x] skill 間契約の consumer を数えて直す (`pre-merge-quality-gate` と frontmatter description)
+- [x] CLAUDE.md へ canonical の参照を足す (値は再掲しない)
+- [x] README を再生成する (frontmatter を変えた場合)
+- [ ] apm 配布のロールアウト順序を決める
+
+### 未完タスクの実測 (2026-08-23)
+
+ロールアウト順序は仮説ではなく**実際に顕在化した**。起票時に添えた「skill は 3 リポ共通なので
+更新は即座に届く」という括弧書きは誤りだったので、ここで訂正する。届く時期を決めるのは
+消費側の pin であって、このリポジトリのマージではない。
+
+- 消費側の宣言はこのリポジトリの外にあり、`agentic-coding-tools` を指す 9 本のエントリが
+  すべて `3a407fc` (このマージの 1 つ前) に pin されたままである
+- そのため開発機の `~/.claude/skills/dev-workflow/` は旧記法のままになっている。大小を無視した
+  実測で、インストール済み 11 ファイルに旧記法のプレースホルダが 53 箇所 / 新記法が 0 箇所。
+  canonical 側 (`__pycache__` を除く 12 ファイル) は旧記法 0 箇所 / 新記法 55 箇所
+- **インストール済みの側には `scripts/` ディレクトリごと存在しない。**`issue-id.py` も
+  そのテストも配られていないので、手順書が指示する `${CLAUDE_SKILL_DIR}/scripts/issue-id.py`
+  はそこでは解決しない
+- したがってマージ直後に skill を呼ぶと旧版がロードされる。手順どおりに進めれば旧記法で
+  抽出して静かに 0 件になり、自動クローズが空振りするところだった
+- 中身が実際に変わった配布パッケージは `plugins/dev-workflow` と
+  `plugins/security-blue-red-team` の 2 つ (`3a407fc..685e560` の差分から)
+- 消費側のリポジトリが別タスクの作業ブランチにいるため、ロールアウトは保留中 (ユーザー判断)
 
 ## 却下した案
 
@@ -193,3 +221,11 @@ SKILL.md の「プロジェクト CLAUDE.md に明示すること」を削除し
   skill 側の実装だけを引き取ったもので、向こうの既存衝突を遡って直すかは向こうの判断。
   この Issue は出所を伴わない形で知見だけを持つ (このリポジトリは PUBLIC のため)
 - 検査機構が自分の取り付けを検証できない問題は ISSUE-13 と同型
+- 最終レビューで「別 Issue にすべき」と判定された項目を 6 件切り出した。いずれも本 Issue の
+  範囲外だが、同じ skill と同じ検査機構を対象にしている
+  - [ISSUE-16](<../ISSUE-16_git commit -v の scissors 以降の diff で記法検査が偽陽性になる/issue.md>)
+  - [ISSUE-17](<../ISSUE-17_C.2 の「gate が既に検証済み」が指す CI が別物/issue.md>)
+  - [ISSUE-18](<../ISSUE-18_手順書のコードブロックに未定義変数の silent 空振りが残る/issue.md>)
+  - [ISSUE-19](<../ISSUE-19_フォールバック起動契機の記述が C.1 より狭い/issue.md>)
+  - [ISSUE-20](<../ISSUE-20_squash merge commit のメッセージが規約の免除形と一致しない/issue.md>)
+  - [ISSUE-21](<../ISSUE-21_find の深さで意味を表現している箇所の対応が散文にしかない/issue.md>)
