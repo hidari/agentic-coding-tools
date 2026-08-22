@@ -48,6 +48,17 @@ jobs:
       # setup-python を足すと pin すべき依存が 1 つ増えるため入れない。
       - run: python3 scripts/check-package-shape.py
 
+      # 新 job を作らずこの job へ相乗りさせている。runner を 1 つ増やすと CI コストが
+      # 上がり、job 名を変えると required status checks が壊れるため。結果として job 名
+      # (パッケージの形と命名規約) はこの step を覆えていないので、step に明示の name を
+      # 置いて失敗時の表示だけでも実態を名乗らせる。
+      # --check は index と作業ツリーしか見ないので checkout の既定 (fetch-depth 1) で
+      # 足りる。実測: depth 1 の clone と全履歴の clone で走査ファイル数が一致した。
+      # コミットメッセージを見る --check-text は CI にその surface が無いので置かない
+      # (pre-commit の commit-msg stage が持つ)。
+      - name: Issue 識別子の記法を検査する
+        run: python3 plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py --check
+
   readme-drift:
     name: README の drift
     runs-on: ubuntu-latest

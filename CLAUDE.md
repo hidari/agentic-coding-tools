@@ -106,6 +106,12 @@ CI (`.github/workflows/ci.yml`) が回す job より、ローカルの pre-commi
   `--all-files` を付けても走査対象は staged 差分だけ。index が clean だと
   `0 commits scanned` で緑になる。全履歴を走査するのは CI だけ。なお漏洩ルール自身が
   正しいかは `scripts/check-leak-guard-rules.py` が検出側と許可側の対照で見る
+- **Issue 識別子の記法 (stage の非対称)**: 追跡ファイルを見る `--check` は pre-commit と
+  CI の両方に居るが、コミットメッセージを見る `--check-text` は commit-msg stage にしか
+  居ない。上の `pre-commit run --all-files` は pre-commit stage しか回さないので、
+  この hook は**一度も走らないまま緑になる** (実測)。message の面を手で確かめるなら
+  `pre-commit run --hook-stage commit-msg --commit-msg-filename <file>` を使う。
+  CI にはこの面が無く、GitHub 上で編集した squash / merge のメッセージは誰も検査しない
 - **Python テスト (両経路に共通の盲点)**: `scripts/run-python-tests.py` は実行された
   テスト ID の集合を `scripts/python-tests-manifest.txt` と照合する。テストを増減・改名
   したら `--update-manifest` で再生成し、diff ごとコミットする。ローカルと CI は同じ

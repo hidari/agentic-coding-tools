@@ -8,7 +8,22 @@
 #   既定ルールだけでは /Users/<name> は検査されないため .gitleaks.toml の custom ルールが要る。
 # - claude plugin validate --strict で plugin.json の妥当性を機械検証する。
 #   フィールド名を散文へ再掲しないための canonical な検証手段。
+# - issue-id.py が Issue 識別子の記法を検査する。追跡ファイルとコミットメッセージで
+#   surface が違うため hook を 2 本に分ける (下の該当 hook のコメントを参照)。
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# commit-msg を足すのは、コミットメッセージが追跡ファイルではなく pre-commit stage の
+# 走査に入らないため。ここに書かないと `pre-commit install` が commit-msg の hook を
+# 置かず、設定にはあるのに一度も発火しない形になる (実測: この行を入れる前の開発機には
+# .git/hooks/commit-msg が無かった)。既にインストール済みの環境では
+# `pre-commit install` の打ち直しが要る。
+default_install_hook_types: [pre-commit, commit-msg]
+
+# stages を宣言しない hook は全 stage で走るのが pre-commit の既定なので、
+# commit-msg を install した途端に gitleaks も plugin validate も Python テストも
+# 1 コミットで 2 回走る (実測: 些細な 1 行のコミットに 14.8 秒。うち 2 周目が約半分)。
+# 既定を pre-commit へ寄せ、commit-msg で走らせたい hook だけが stages を宣言する。
+default_stages: [pre-commit]
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -58,6 +73,34 @@ repos:
         entry: scripts/gen-readme.py --check
         pass_filenames: false
         always_run: true
+
+      # files: で絞らないのは、絞ると docs/issues を触らないコミットで走らなくなり、
+      # 「走らなかったこと」自体が出力に現れないため。記法違反はどのファイルにも
+      # 書けるので、走査対象は追跡ファイル全体で固定する (対象集合の canonical は
+      # issue-id.py の --check)。
+      - id: issue-id-notation
+        name: Issue 識別子の記法を検査する (追跡ファイル)
+        language: system
+        entry: plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py --check
+        pass_filenames: false
+        always_run: true
+
+      # コミットメッセージは追跡ファイルではないので --check の走査集合に入らない。
+      # pre-commit は commit-msg stage で message ファイルのパスを 1 つだけ渡すので、
+      # --check-text の引数として素直に流れる。
+      #
+      # 既知の限界: 走査対象は git が渡す message ファイルの全文で、コメント行も
+      # `git commit -v` が末尾へ足す diff も含まれる (実測)。したがって -v で
+      # コミットすると、diff に載っただけの数字記法 (フェンス内や .css など --check が
+      # 免除している側も含む) を違反として弾く。-m と -F の経路にはこの面が無く
+      # (実測: message そのものしか渡らない)、本リポの規約は -F なので既定では踏まない。
+      # 潰すには git の cleanup 規則 (コメント行の除去と scissors 行以降の切り落とし) を
+      # hook 側で再実装することになり、二重管理と引き換えになるため採っていない。
+      - id: issue-id-notation-commit-msg
+        name: Issue 識別子の記法を検査する (コミットメッセージ)
+        language: system
+        entry: plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py --check-text
+        stages: [commit-msg]
 
       - id: python-tests
         name: Python テスト (stdlib unittest)
