@@ -30,7 +30,7 @@ prlctl exec "<vm>" "cmd.exe /c ver"
 `iconv -f CP932 -t UTF-8` を通す必要がある。`tr` などのバイト単位ツールに直接渡すと
 `Illegal byte sequence` で落ちる (実際に `tr -d '\r'` で落ちた)。
 
-[Issue #1](../closed/1_winvm%20が%20VM%20の%20CP932%20出力で%20UnicodeDecodeError%20になる/issue.md)
+[ISSUE-1](../closed/ISSUE-1_winvm%20が%20VM%20の%20CP932%20出力で%20UnicodeDecodeError%20になる/issue.md)
 が直したのは `winvm.py` が外部コマンドの出力を読む経路で、対処は UTF-8 decode +
 `errors="replace"` である。落ちなくはなったが日本語は化けたままで、復号はしていない。
 ホスト側で `prlctl exec` の出力を直接読む経路は、そもそもこの対処の外側にある。
@@ -91,6 +91,6 @@ live smoke の完走が要り、prlctl が argv をゲスト側でどう再結�
 - `skills/devops/windows-vm-verification/references/troubleshooting.md` — 追記先。
   `references/windows-bootstrap.md` と `winvm.py` の `prlctl_exec_argv` docstring が
   同じ実測を持つので、canonical をどこに置くかを決めてから書くこと
-- [Issue #1 (closed): winvm が VM の CP932 出力で UnicodeDecodeError になる](../closed/1_winvm%20が%20VM%20の%20CP932%20出力で%20UnicodeDecodeError%20になる/issue.md)
-- [Issue #9 (closed): doctor が APIPA アドレスを健全と判定する](../closed/9_doctor%20が%20APIPA%20アドレスを健全と判定する/issue.md)
+- [ISSUE-1 (closed): winvm が VM の CP932 出力で UnicodeDecodeError になる](../closed/ISSUE-1_winvm%20が%20VM%20の%20CP932%20出力で%20UnicodeDecodeError%20になる/issue.md)
+- [ISSUE-9 (closed): doctor が APIPA アドレスを健全と判定する](../closed/ISSUE-9_doctor%20が%20APIPA%20アドレスを健全と判定する/issue.md)
   — 同じ調査中に見つかった

@@ -76,6 +76,7 @@ PR で説明する。
 | `plugin.json` のフィールド | `claude plugin validate --strict` |
 | README の内容 | 各 SKILL.md の frontmatter |
 | secret とパスの漏洩 | `.gitleaks.toml` |
+| in-repo Issue の識別子と記法 | `plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py` の docstring |
 
 新しい規約を作るときは、まず検査に落とせないかを考える。落とせないものだけを散文で書く。
 
@@ -105,6 +106,12 @@ CI (`.github/workflows/ci.yml`) が回す job より、ローカルの pre-commi
   `--all-files` を付けても走査対象は staged 差分だけ。index が clean だと
   `0 commits scanned` で緑になる。全履歴を走査するのは CI だけ。なお漏洩ルール自身が
   正しいかは `scripts/check-leak-guard-rules.py` が検出側と許可側の対照で見る
+- **Issue 識別子の記法 (stage の非対称)**: 追跡ファイルを見る `--check` は pre-commit と
+  CI の両方に居るが、コミットメッセージを見る `--check-text` は commit-msg stage にしか
+  居ない。上の `pre-commit run --all-files` は pre-commit stage しか回さないので、
+  この hook は**一度も走らないまま緑になる** (実測)。message の面を手で確かめるなら
+  `pre-commit run --hook-stage commit-msg --commit-msg-filename <file>` を使う。
+  CI にはこの面が無く、GitHub 上で編集した squash / merge のメッセージは誰も検査しない
 - **Python テスト (両経路に共通の盲点)**: `scripts/run-python-tests.py` は実行された
   テスト ID の集合を `scripts/python-tests-manifest.txt` と照合する。テストを増減・改名
   したら `--update-manifest` で再生成し、diff ごとコミットする。ローカルと CI は同じ
@@ -131,7 +138,12 @@ localized な文字列を判定に混ぜると環境依存で壊れる。
 
 ## Issue 管理
 
-- `docs/issues/<NNN>_<title>/issue.md` の in-repo Markdown で管理する。起票・更新・
+- `docs/issues/<ID>_<title>/issue.md` の in-repo Markdown で管理する。起票・更新・
 クローズ・reopen の手順は skill `dev-workflow:in-repo-issue` が canonical。
-- PR 本文には `Closes [Issue #NNN](../../docs/issues/...)` 形式で相対リンクを書く。
-- superpowers の spec / plan は Issue ディレクトリ配下へ `<NNN>-spec.md` / `<NNN>-plan.md` として置く（規約と手順の canonical は `dev-workflow:issue-scoped-artifacts` skill）
+- `<ID>` の形式と採番規則は再掲しない。canonical は
+`plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py` の docstring で、採番は
+`--next`、GitHub の番号記法が混入していないかの検査は `--check` / `--check-text` が行う。
+- PR タイトルと PR 本文には対象 Issue を指す記載を規約どおり入れる。どちらの書式も再掲しない。
+canonical は `dev-workflow:in-repo-issue` の「PR / コミット規約」節で、自動クローズの起動条件と
+抽出規則は同 skill の Phase C が持つ。
+- superpowers の spec / plan は Issue ディレクトリ配下へ `<ID>-spec.md` / `<ID>-plan.md` として置く（規約と手順の canonical は `dev-workflow:issue-scoped-artifacts` skill）

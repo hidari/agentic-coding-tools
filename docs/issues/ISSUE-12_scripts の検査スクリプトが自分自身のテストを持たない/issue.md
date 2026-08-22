@@ -6,7 +6,7 @@ status: open
 
 ## 背景
 
-Issue #8 で `scripts/run-python-tests.py` の収集がディレクトリ列挙から ROOT 全体走査へ
+ISSUE-8 で `scripts/run-python-tests.py` の収集がディレクトリ列挙から ROOT 全体走査へ
 変わり、`scripts/` 配下にテストを置けるようになった。実際に
 `scripts/test_run_python_tests.py` が置かれ、runner 自身は変異注入で検証された状態にある。
 
@@ -60,10 +60,10 @@ Issue #8 で `scripts/run-python-tests.py` の収集がディレクトリ列挙�
 
 ## 関連
 
-- [Issue #8 (closed): run-python-tests.py の件数ガードが実質 1 件で機能していない](../closed/8_run-python-tests.py%20の件数ガードが実質%201%20件で機能していない/issue.md) —
+- [ISSUE-8 (closed): run-python-tests.py の件数ガードが実質 1 件で機能していない](../closed/ISSUE-8_run-python-tests.py%20の件数ガードが実質%201%20件で機能していない/issue.md) —
   この Issue の前提を作った。収集の仕組みと限界の canonical は
   `scripts/run-python-tests.py` の docstring
 - `scripts/test_run_python_tests.py` — ハイフン名スクリプトを `importlib` で読む定型
-- [Issue #13: 両取り付けの同時撤去を機構で検出できない](../13_両取り付けの同時撤去を機構で検出できない/issue.md) —
+- [ISSUE-13: 両取り付けの同時撤去を機構で検出できない](../ISSUE-13_両取り付けの同時撤去を機構で検出できない/issue.md) —
   `check-package-shape.py` へ規則を足す案が出ている。触る対象が重なるので、
   この Issue の import 安全化が先に入るなら合わせて考える

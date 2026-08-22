@@ -87,7 +87,7 @@ A / B / C のいずれも採らず、**件数そのものを捨てた**。pin �
 取り付けを足せば塞がるが、取り付け literal の二重管理と引き換えになるため採っていない。
 
 `scripts/` の他の検査スクリプトが無検査である件は
-[Issue #12: scripts/ の検査スクリプトが自分自身のテストを持たない](../../12_scripts%20の検査スクリプトが自分自身のテストを持たない/issue.md)
+[ISSUE-12: scripts/ の検査スクリプトが自分自身のテストを持たない](../../ISSUE-12_scripts%20の検査スクリプトが自分自身のテストを持たない/issue.md)
 へ分離した。
 
 現在の canonical: 機構と限界は `scripts/run-python-tests.py` の docstring、
@@ -97,4 +97,4 @@ pin されている集合は `scripts/python-tests-manifest.txt`。
 
 - `scripts/run-python-tests.py` — 60 行の下限比較 (起票時点。現在は ID 集合の照合へ書き換え済み)
 - `.pre-commit-config.yaml` / `.github/workflows/ci.yml` — 呼び出し元 2 箇所
-- [Issue #12: scripts/ の検査スクリプトが自分自身のテストを持たない](../../12_scripts%20の検査スクリプトが自分自身のテストを持たない/issue.md) — この Issue が作った前提の上に立つ follow-up
+- [ISSUE-12: scripts/ の検査スクリプトが自分自身のテストを持たない](../../ISSUE-12_scripts%20の検査スクリプトが自分自身のテストを持たない/issue.md) — この Issue が作った前提の上に立つ follow-up

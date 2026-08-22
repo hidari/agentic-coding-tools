@@ -43,7 +43,7 @@ probe が buy している情報は SSH 到達性と PATH 有無に限られ、�
 ### 影響範囲 (発見時点)
 
 `exec` は PR #3 で追加した新機能で、発見時点では **live smoke が行われていなかった**。
-Issue #1 の対応記録にある実機 A/B は `winvm run` (cmd.exe 経路) で行われたもので、
+ISSUE-1 の対応記録にある実機 A/B は `winvm run` (cmd.exe 経路) で行われたもので、
 pwsh 経路は通っていなかった。`health` は既存機能だが同じ probe を使うため同じ状態にあった。
 
 live smoke は本 Issue の調査中に実施した (下の調査記録を参照)。残っているのは probe の
@@ -117,9 +117,9 @@ GitHub Releases の `PowerShell-7.6.4-win-arm64.msi` を `winvm push` で投入�
 
 - `skills/devops/windows-vm-verification/winvm.py` — `pwsh_probe_command`、
   `PWSH_PROBE_ERROR`、`cmd_health`、`cmd_exec`
-- Issue [#7](../7_リモート往復数を減らす/issue.md) — probe を本実行に畳む案があり、
+- [ISSUE-7](../ISSUE-7_リモート往復数を減らす/issue.md) — probe を本実行に畳む案があり、
   本 Issue と設計が結合する。先に本 Issue を解決すること
-- Issue [#9 (closed)](../closed/9_doctor%20が%20APIPA%20アドレスを健全と判定する/issue.md) — 同種の欠陥。
+- [ISSUE-9 (closed)](../closed/ISSUE-9_doctor%20が%20APIPA%20アドレスを健全と判定する/issue.md) — 同種の欠陥。
   あちらは doctor が APIPA アドレス (DHCP 失敗) を OK と判定する件で、どちらも
   「検査が通ること」を「機能していること」の証拠として扱ってしまう類型。
   対象のコードは別 (pwsh probe と IP チェック) なので独立に直せる

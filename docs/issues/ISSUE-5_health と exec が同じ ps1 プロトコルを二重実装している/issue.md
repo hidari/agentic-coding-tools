@@ -62,9 +62,9 @@ probe が効いていないのにテストは緑で通る。型が違うのに�
 - [ ] 重複しているテストを畳む (`test_two_invocations_do_not_share_a_remote_path` は
       2 箇所に同一内容で存在する)
 - [ ] 統合後に `winvm health` と `winvm exec` の full chain を live smoke する
-      (かつては Issue [#4](../4_VM の pwsh probe が偽陽性で exec と health が実機で動かない/issue.md)
+      (かつては [ISSUE-4](../ISSUE-4_VM の pwsh probe が偽陽性で exec と health が実機で動かない/issue.md)
       の解決待ちだったが、VM へ MSI 版 pwsh を入れた時点で smoke は可能になっている。
-      #4 に残っているのは probe の判定を直す作業で、live smoke を妨げない)
+      ISSUE-4 に残っているのは probe の判定を直す作業で、live smoke を妨げない)
 - [ ] 変異注入で確認する
 
 ## 関連
@@ -72,4 +72,4 @@ probe が効いていないのにテストは緑で通る。型が違うのに�
 - `skills/devops/windows-vm-verification/winvm.py` — `cmd_health`、`cmd_exec`、
   `run_ssh` / `run_ssh_code`
 - 本 Issue は PR #3 に同梱しなかった。トランスポートの契約変更は live smoke なしに
-  入れるべきでなく、当時はその live smoke が Issue #4 に阻まれていたため (現状はタスク欄のとおり)
+  入れるべきでなく、当時はその live smoke が ISSUE-4 に阻まれていたため (現状はタスク欄のとおり)

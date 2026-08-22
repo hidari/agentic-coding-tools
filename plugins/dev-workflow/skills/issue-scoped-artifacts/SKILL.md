@@ -1,6 +1,6 @@
 ---
 name: issue-scoped-artifacts
-description: superpowers の brainstorming や writing-plans が spec / plan を書き出す直前に使う。成果物を docs/superpowers/ ではなく Issue ディレクトリ配下 (docs/issues/<NNN>_<title>/<NNN>-spec.md と <NNN>-plan.md) へ置く規約と、採用手順・移行手順を持つ。プロジェクトの CLAUDE.md にこの skill を指すポインタがある場合にのみ適用し、ポインタが無いプロジェクトでは何もせず既定の置き場に従う。
+description: superpowers の brainstorming や writing-plans が spec / plan を書き出す直前に使う。成果物を docs/superpowers/ ではなく Issue ディレクトリ配下 (docs/issues/<ID>_<title>/<ID>-spec.md と <ID>-plan.md) へ置く規約と、採用手順・移行手順を持つ。プロジェクトの CLAUDE.md にこの skill を指すポインタがある場合にのみ適用し、ポインタが無いプロジェクトでは何もせず既定の置き場に従う。
 ---
 
 # Issue-Scoped Artifacts
@@ -23,18 +23,18 @@ Issue ディレクトリ配下に置くファイルは次のとおり。
 
 | ファイル | 必須/任意 | 書き手 |
 |---|---|---|
-| `docs/issues/<NNN>_<title>/issue.md` | 必須 | `dev-workflow:in-repo-issue` |
-| `docs/issues/<NNN>_<title>/<NNN>-spec.md` | 任意 | `superpowers:brainstorming` |
-| `docs/issues/<NNN>_<title>/<NNN>-plan.md` | 任意 | `superpowers:writing-plans` |
-| `docs/issues/<NNN>_<title>/notes/<name>.md` | 任意 | 手動 |
+| `docs/issues/<ID>_<title>/issue.md` | 必須 | `dev-workflow:in-repo-issue` |
+| `docs/issues/<ID>_<title>/<ID>-spec.md` | 任意 | `superpowers:brainstorming` |
+| `docs/issues/<ID>_<title>/<ID>-plan.md` | 任意 | `superpowers:writing-plans` |
+| `docs/issues/<ID>_<title>/notes/<name>.md` | 任意 | 手動 |
 
-`<NNN>` はディレクトリ名先頭の番号と一致させる。
+`<ID>` はディレクトリ名先頭の識別子と一致させる。識別子の形式と採番規則の canonical は `dev-workflow:in-repo-issue` 同梱の `scripts/issue-id.py` で、本 skill は形を再掲しない。
 
-## なぜ番号を前置するか
+## なぜ識別子を前置するか
 
-番号を前置すれば、期待されるファイル名はディレクトリ名 (`<NNN>_<title>`) の純粋関数になる。ディレクトリ名の番号を読むだけで、そこに置くべき `<NNN>-spec.md` / `<NNN>-plan.md` が一意に決まり、機械的に検査できる。
+識別子を前置すれば、期待されるファイル名はディレクトリ名 (`<ID>_<title>`) の純粋関数になる。ディレクトリ名の識別子を読むだけで、そこに置くべき `<ID>-spec.md` / `<ID>-plan.md` が一意に決まり、機械的に検査できる。
 
-これに加えて、番号前置は sdd (subagent-driven-development) の衝突も避ける。sdd の workspace 名は plan ファイルの basename から導出される観測可能な挙動を持ち (`sdd-workspace` は `basename "$plan" .md` で workspace 名を決める)、全 Issue で plan ファイル名を `plan.md` にすると全 Issue の workspace が `.superpowers/sdd/plan/` へ集中し、上流が「plan ごとのサブディレクトリ化」で潰したばかりの衝突を再現してしまう。ファイル名に番号を前置して `<NNN>-plan.md` にすれば basename が大域一意になり、この衝突は起きない。
+これに加えて、識別子の前置は sdd (subagent-driven-development) の衝突も避ける。sdd の workspace 名は plan ファイルの basename から導出される観測可能な挙動を持ち (`sdd-workspace` は `basename "$plan" .md` で workspace 名を決める)、全 Issue で plan ファイル名を `plan.md` にすると全 Issue の workspace が `.superpowers/sdd/plan/` へ集中し、上流が「plan ごとのサブディレクトリ化」で潰したばかりの衝突を再現してしまう。ファイル名に識別子を前置して `<ID>-plan.md` にすれば basename が大域一意になり、この衝突は起きない。
 
 自己完結する前者の理由を主とするのは、sdd の workspace 名の導出方法が上流の実装詳細であり、将来 sdd の命名規則が変わってもファイル名がディレクトリ名の純粋関数であるという性質自体は無傷で残るためである。
 
@@ -62,7 +62,7 @@ Issue を起票するのは spec を書き出す直前である。ブレイン�
       - id: issue-scoped-artifacts
         name: spec と plan は Issue ディレクトリ配下へ置く
         language: fail
-        entry: "この成果物は docs/issues/<NNN>_<title>/<NNN>-spec.md または <NNN>-plan.md へ置く"
+        entry: "この成果物は docs/issues/<ID>_<title>/<ID>-spec.md または <ID>-plan.md へ置く"
         files: '^docs/superpowers/(plans|specs)/'
 ```
 
@@ -74,7 +74,7 @@ Issue を起票するのは spec を書き出す直前である。ブレイン�
 
 本 hook が捕捉するのは「CLAUDE.md の上書きが効かず、成果物が上流 skill の既定パスへ落ちる」という失敗モードだけである。既定パスは `docs/superpowers/plans/` と `docs/superpowers/specs/` の 2 つしか存在しない (superpowers 6.2.0 時点) ため、この失敗モードは漏れなく捕捉される。
 
-一方で、Issue ディレクトリ配下に置かれたファイルの名前違反 (番号の無い `spec.md`、`15_` 配下に置かれた `16-spec.md` のような番号不一致) は検出しない。ファイル名まで検証するにはディレクトリ名から番号を抽出するようなリポジトリ固有のロジックが必要になり、「全プロジェクトで同一の hook」という性質を失う。したがって意図的に見送っている。
+一方で、Issue ディレクトリ配下に置かれたファイルの名前違反 (識別子の無い `spec.md`、置かれたディレクトリとは別 Issue の識別子を前置したファイル) は検出しない。ファイル名まで検証するにはディレクトリ名から識別子を抽出するようなリポジトリ固有のロジックが必要になり、「全プロジェクトで同一の hook」という性質を失う。したがって意図的に見送っている。
 
 ## language: fail を選ぶ理由
 

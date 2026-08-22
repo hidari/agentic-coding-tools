@@ -46,7 +46,7 @@ scp のループを reset より前に来るよう並べ替えると、同期し
       `git=` 注入で pin する
 - [ ] 変異注入で確認する。特に **scp ループと reset の順序を入れ替えて赤くなること**
       (今は緑のまま通る)
-- [ ] full chain を live smoke する (`cmd_run` は cmd.exe 経路なので Issue #4 の
+- [ ] full chain を live smoke する (`cmd_run` は cmd.exe 経路なので ISSUE-4 の
       pwsh 問題には阻まれない)
 
 ## 関連
