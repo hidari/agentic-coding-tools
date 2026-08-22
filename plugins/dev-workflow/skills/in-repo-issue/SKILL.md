@@ -31,6 +31,10 @@ cp "${CLAUDE_SKILL_DIR}/scripts/issue-id.py" scripts/
 採番は skill 同梱のものを直接呼ぶので、 配布先の copy は検査経路のためだけにある。 取り付けるか
 どうかはプロジェクトの判断で、 配っただけでは検査は走らない。
 
+取り付けの実例は本 skill の配布元リポジトリ (`hidari/agentic-coding-tools`) の
+`.pre-commit-config.yaml` と `.github/workflows/ci.yml` が持つ。 どの入口をどちらへ載せるかは
+surface で決まる (コミットメッセージという surface は CI に無い) ので、 両方を読むこと。
+
 置き場は `docs/issues/` の**外**にすること。 `docs/issues/` 直下のディレクトリは `templates/` と
 `closed/` を除いて Issue ディレクトリとみなされ、 検査スクリプト自身が命名違反として報告される
 (実測)。

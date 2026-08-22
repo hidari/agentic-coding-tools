@@ -74,10 +74,11 @@ repos:
         pass_filenames: false
         always_run: true
 
-      # files: で絞らないのは、絞ると docs/issues を触らないコミットで走らなくなり、
-      # 「走らなかったこと」自体が出力に現れないため。記法違反はどのファイルにも
-      # 書けるので、走査対象は追跡ファイル全体で固定する (対象集合の canonical は
-      # issue-id.py の --check)。
+      # 記法違反はどのファイルにも書けるので、走査対象は追跡ファイル全体で固定する
+      # (対象集合の canonical は issue-id.py の --check)。ファイル名で絞る指定を
+      # 置かないのはその宣言で、実際に走ることを保証しているのは always_run: true の方。
+      # always_run があると pre-commit のファイル名フィルタは効かなくなる
+      # (実測: 設定の top-level に exclude を置いてもこの hook は走った)。
       - id: issue-id-notation
         name: Issue 識別子の記法を検査する (追跡ファイル)
         language: system
@@ -96,11 +97,20 @@ repos:
       # (実測: message そのものしか渡らない)、本リポの規約は -F なので既定では踏まない。
       # 潰すには git の cleanup 規則 (コメント行の除去と scissors 行以降の切り落とし) を
       # hook 側で再実装することになり、二重管理と引き換えになるため採っていない。
+      #
+      # always_run: true を置くのは、この stage では絞り込みが「絞る」ではなく
+      # 「常に skip」になるため。渡るファイルが message ファイル 1 本しかないので、
+      # ファイル名やファイル型で絞る指定は (hook 側でも設定の top-level でも) 集合を
+      # 空にする。always_run が無いと空集合は "(no files to check)Skipped" の rc 0 で
+      # 返り、裸の数字記法を含むメッセージがそのままコミットできた (実測)。always_run が
+      # あれば同じ変異は引数ゼロの argparse エラー (exit 2) になり、静かには素通りしない
+      # (実測)。stage 宣言があるので通常の pre-commit stage では走らない (実測)。
       - id: issue-id-notation-commit-msg
         name: Issue 識別子の記法を検査する (コミットメッセージ)
         language: system
         entry: plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py --check-text
         stages: [commit-msg]
+        always_run: true
 
       - id: python-tests
         name: Python テスト (stdlib unittest)
