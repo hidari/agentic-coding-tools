@@ -158,7 +158,7 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 ```
 
 「Merge OK」を出力していない状態で `gh pr merge` を呼ばない。
-ユーザーに「ボーイスカウト適用余地は？」と追加で聞かれた場合は **本 skill が既にカバーしているはず** なので、漏れた候補があれば skill の Phase 1 (Boy Scout Sweep) のプロンプト改善対象として記録する (`memory/project_skill_improvement_boy_scout.md`)。
+ユーザーに「ボーイスカウト適用余地は？」と追加で聞かれた場合は **本 skill が既にカバーしているはず** なので、漏れた候補があれば skill の Phase 1 (Boy Scout Sweep) のプロンプト改善対象として記録する。
 
 ## 関連
 

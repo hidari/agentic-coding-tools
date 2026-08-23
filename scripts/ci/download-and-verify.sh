@@ -2,14 +2,14 @@
 # =============================================================================
 # CI のツール取得で共通する「HTTPS ダウンロード + 固定 sha256 検証」を1箇所へ集約する。
 #
-# setup-ast-grep / setup-neovim / gitleaks 導入ステップが独立に書いていた
+# ツール導入ステップが独立に書きがちな
 #   curl (--proto '=https' 等の security flag 群) + sha256sum -c の2行
-# を共通化し、検証手順を変えるときの drift を防ぐ。展開方法は3者で異なる
+# を共通化し、検証手順を変えるときの drift を防ぐ。展開方法は取得物ごとに違う
 # (unzip / tar 全体 / tar 単一メンバ) ため展開は呼び出し側に残す。
 #
-# 対象外: setup-bats (commit-SHA 付き URL を tar へ直接パイプ) と bootstrap.sh の
-# installer (curl | sh) は「ファイルへ落として sha256 で pin」という契約に合わない
-# 別の完全性モデルのため、同じ security flag を持っていてもここには通さない。
+# 対象外: 「ファイルへ落として sha256 で pin」という契約に合わない取得はここへ通さない。
+# commit-SHA 付き URL を tar へ直接パイプする形や、installer を curl | sh する形が
+# それにあたる。同じ security flag を持っていても完全性モデルが別なので混ぜない。
 #
 # 使い方:
 #   download-and-verify.sh <url> <sha256> <dest>
@@ -19,8 +19,7 @@
 #
 # テスト容易性のため検証本体を verify_sha256 に切り出し、source 時は main を走らせず
 # 関数だけ公開する (末尾の BASH_SOURCE guard)。set -euo pipefail は main の内側に
-# 置く。top-level に置くと source したテストシェルへ errexit が漏れるため
-# (scripts/tests/download-and-verify.bats)。
+# 置く。top-level に置くと source したテストシェルへ errexit が漏れるため。
 # =============================================================================
 
 # ダウンロード済みファイルの sha256 が期待値と一致するか検証する。

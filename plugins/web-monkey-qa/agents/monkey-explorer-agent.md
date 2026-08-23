@@ -41,9 +41,9 @@ You run non-interactively: treat any missing input as unknown and proceed with t
 
 1. Read the profile at `MONKEY_PROFILE` and locate the section named `SECTION`.
 2. Prepare the browser session: use `--session monkey-<SECTION>` on EVERY agent-browser command (isolation between parallel explorers).
-3. **HTTP Basic credentials — before the first `open`.** If BOTH `HTTP_AUTH_USERNAME_ENV` and `HTTP_AUTH_PASSWORD_ENV` are provided, set the credentials on the session BEFORE any `open` (whether the first open is in Phase 1's recipe or Phase 2), so the whole origin's Basic-auth transport succeeds. Substitute the env var NAMES you were given into the command — you write `$<name>`, the shell expands it, and the value never enters your context. With `HTTP_AUTH_USERNAME_ENV=BASIC_AUTH_USERNAME` / `HTTP_AUTH_PASSWORD_ENV=BASIC_AUTH_PASSWORD` and `SECTION=public-gallery` the command reads:
+3. **HTTP Basic credentials — before the first `open`.** If BOTH `HTTP_AUTH_USERNAME_ENV` and `HTTP_AUTH_PASSWORD_ENV` are provided, set the credentials on the session BEFORE any `open` (whether the first open is in Phase 1's recipe or Phase 2), so the whole origin's Basic-auth transport succeeds. Substitute the env var NAMES you were given into the command — you write `$<name>`, the shell expands it, and the value never enters your context. With `HTTP_AUTH_USERNAME_ENV=BASIC_AUTH_USERNAME` / `HTTP_AUTH_PASSWORD_ENV=BASIC_AUTH_PASSWORD` and `SECTION=public` the command reads:
    ```bash
-   agent-browser --session monkey-public-gallery set credentials "$BASIC_AUTH_USERNAME" "$BASIC_AUTH_PASSWORD"
+   agent-browser --session monkey-public set credentials "$BASIC_AUTH_USERNAME" "$BASIC_AUTH_PASSWORD"
    ```
    - Write the plain `"$NAME"` form shown above. Do NOT use shell indirect expansion (`${!VAR}` is bash-only and is a `bad substitution` under zsh, which the Bash tool may run). Do NOT `echo` the value.
    - If a name is provided but the env var is unset/empty (`[ -z "$BASIC_AUTH_USERNAME" ]`), ABORT this section fail-fast (record `HTTP auth env not set`).
