@@ -16,7 +16,7 @@ AI exploratory monkey testing plugin. 目的なしにサイトを歩き回り、
 
 ## Tooling
 
-ツールは agent-browser CLI。direct binary の `agent-browser` を使う (`npx agent-browser` は起動が大幅に遅いため使わない)。以下は 2026-07-09 に agent-browser v0.31.1 で `https://astralys.local` に対して実施した live smoke で確認した確定 contract。Task 5 の explorer agent はこの節を literal に参照する。
+ツールは agent-browser CLI。direct binary の `agent-browser` を使う (`npx agent-browser` は起動が大幅に遅いため使わない)。以下は 2026-07-09 に agent-browser v0.31.1 で実アプリに対して実施した live smoke で確認した確定 contract。Task 5 の explorer agent はこの節を literal に参照する。
 
 ### 検知器 → コマンド contract
 

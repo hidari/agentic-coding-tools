@@ -110,7 +110,7 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 1. 修正を適用 (Edit / Write)
 2. `make format` (該当エリアのみ)
 3. `make ci-<area>` で全テスト pass を確認
-   - area 名はプロジェクトの `Makefile` に依存。例 (Astralys): `ci-frontend` / `ci-backend` / `ci-perihelion-dashboard` / `ci-perihelion-api` / `ci-workers-cron`
+   - area 名はプロジェクトの `Makefile` に依存する。`ci-frontend` / `ci-backend` のようにデプロイ単位で切られていることが多い
    - 不明なら `make help` か `Makefile` を grep して該当 target を探す
 4. UI 変更なら **chrome-devtools-mcp で実ブラウザ動作確認** (CLAUDE.md MUST: フロントエンド変更は実ブラウザで確認)
    - 主要ツール: `mcp__plugin_chrome-devtools-mcp_chrome-devtools__navigate_page`, `take_snapshot`, `take_screenshot`, `list_console_messages`, `click`, `hover`, `fill`

@@ -59,10 +59,10 @@ const mkFinding = (over = {}) => ({
   fingerprint: 'a1b2c3d4e5f60718',
   severity: 'High',
   category: 'http-5xx',
-  url: 'https://astralys.local/dashboard',
+  url: 'https://app.example.test/dashboard',
   viewport: 'desktop',
-  signal: 'GET /api/v1/artworks 500',
-  repro_steps: ['/ を開く', '「作品管理」をクリック'],
+  signal: 'GET /api/v1/items 500',
+  repro_steps: ['/ を開く', '「一覧」をクリック'],
   ...over,
 });
 const mkDoc = (findings = [mkFinding()]) => ({

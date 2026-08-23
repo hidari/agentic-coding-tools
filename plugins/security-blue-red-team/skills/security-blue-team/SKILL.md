@@ -17,7 +17,7 @@ description: "防御者視点で対象プロダクトのセキュリティ改善
 ## 起動経路
 
 1. **Slash command**: `/security-blueteam [--mode=a|b] [--report=<path>]`
-2. **Skill tool 経由**: メインエージェントまたは wrap skill が `Skill` tool で本 skill を呼ぶ (Astralys の quarterly モードなど)
+2. **Skill tool 経由**: メインエージェントまたは wrap skill が `Skill` tool で本 skill を呼ぶ (四半期ごとの定期実行を wrap skill が駆動する場合など)
 3. **自然言語起動**: 上記 description の trigger 語彙が含まれる依頼
 
 いずれの経路でも、 最終的に `blue-team-agent` を Agent tool で dispatch する。
