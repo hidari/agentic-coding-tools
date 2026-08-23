@@ -6,7 +6,7 @@ status: open
 
 ## 背景
 
-[ISSUE-14](<../ISSUE-14_in-repo Issue の識別子が GitHub の番号空間と衝突する/issue.md>) は
+[ISSUE-14](<../closed/ISSUE-14_in-repo Issue の識別子が GitHub の番号空間と衝突する/issue.md>) は
 識別子を `ISSUE-<N>` へ分離し、背景に「他リポジトリの移行は本 Issue の範囲外で、各リポジトリの
 判断に委ねる」と書いた。**この委譲は機構上成立しない。**
 
