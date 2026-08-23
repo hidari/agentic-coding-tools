@@ -33,7 +33,7 @@
         "properties": {
           "seed_type": {
             "type": "string",
-            "description": "Resource category. Examples: user | artwork | stripe_customer | r2_object | supabase_user. Maps to environment.cleanup.commands.<seed_type> in the profile."
+            "description": "Resource category. Examples: user | document | stripe_customer | r2_object | supabase_user. Maps to environment.cleanup.commands.<seed_type> in the profile."
           },
           "seed_id": {
             "type": "string",
