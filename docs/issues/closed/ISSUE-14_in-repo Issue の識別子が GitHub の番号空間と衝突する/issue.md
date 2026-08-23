@@ -1,5 +1,5 @@
 ---
-status: in_progress
+status: closed
 ---
 
 # fix: in-repo Issue の識別子が GitHub の番号空間と衝突する
@@ -148,7 +148,7 @@ SKILL.md の「プロジェクト CLAUDE.md に明示すること」を削除し
   サーバ側生成なので commit-msg hook も通らない。この経路を塞ぐには CI 側の機構が要る。
   **さらに、GitHub が subject へ自動で付ける接尾辞は免除形のどちらにも一致しないので、
   squash マージのたびに違反が機械的に生成される。**この部分は
-  [ISSUE-20](<../ISSUE-20_squash merge commit のメッセージが規約の免除形と一致しない/issue.md>)
+  [ISSUE-20](<../../ISSUE-20_squash merge commit のメッセージが規約の免除形と一致しない/issue.md>)
   が扱う
 - 検査は自分の取り付けを自分では検証できない。pre-commit と CI の**両方**を同時に外すと
   静かに緑になる (ISSUE-13 と同じ形。片側だけの撤去は Attachment テストが赤にする)
@@ -181,7 +181,7 @@ SKILL.md の「プロジェクト CLAUDE.md に明示すること」を削除し
 - [x] skill 間契約の consumer を数えて直す (`pre-merge-quality-gate` と frontmatter description)
 - [x] CLAUDE.md へ canonical の参照を足す (値は再掲しない)
 - [x] README を再生成する (frontmatter を変えた場合)
-- [ ] apm 配布のロールアウト順序を決める
+- [x] apm 配布のロールアウト順序を決める
 
 ### 未完タスクの実測 (2026-08-23)
 
@@ -203,6 +203,28 @@ SKILL.md の「プロジェクト CLAUDE.md に明示すること」を削除し
   `plugins/security-blue-red-team` の 2 つ (`3a407fc..685e560` の差分から)
 - 消費側のリポジトリが別タスクの作業ブランチにいるため、ロールアウトは保留中 (ユーザー判断)
 
+### ロールアウトの実施 (2026-08-24)
+
+消費側の 9 本すべてを新しい SHA へ上げて install を回した。実際に中身が変わったのは 2 本だけ
+だが、ばらけると次に上げるとき「どれが古いか」を毎回 diff で確かめる必要が出るので揃えている。
+
+- 追加 2 件、変更 5 件、削除 0 件。影響を受けたパッケージは上記の 2 つのみで、他 14 パッケージは
+  ファイル単位のハッシュで不変
+- Claude Code が実際に読む live path から `--next` を起動して `rc=0` を得た。スクリプトの
+  sha256 は canonical と lockfile の記録と三者一致している
+
+**上の「インストール済みの側には `scripts/` ディレクトリごと存在しない」の原因を訂正する。**
+apm が `scripts/` を配らないのではなく、pin 先のコミットにまだ存在しなかっただけだった。
+pin を上げたら 2 ファイルとも配られた。原因を配布側に帰属させると、pin を上げれば消える問題を
+ツールの制約と誤認する。
+
+**背景の「他リポジトリの移行は本 Issue の範囲外で、各リポジトリの判断に委ねる」も成立しない。**
+skill の deploy 先は 1 箇所しかなく、複数の設定ディレクトリがそこを symlink で共有している。
+特定のリポジトリにだけ配らない経路が無いので、委ねる単位そのものが存在しない。配れば全
+リポジトリへ同時に効き、旧記法との同居は選択ではなく帰結になる。この帰結は
+[ISSUE-22](<../../ISSUE-22_skill のグローバル配布で他リポジトリの Issue 記法が混在する/issue.md>)
+が引き取る。
+
 ## 却下した案
 
 | 案 | 却下理由 |
@@ -221,11 +243,14 @@ SKILL.md の「プロジェクト CLAUDE.md に明示すること」を削除し
   skill 側の実装だけを引き取ったもので、向こうの既存衝突を遡って直すかは向こうの判断。
   この Issue は出所を伴わない形で知見だけを持つ (このリポジトリは PUBLIC のため)
 - 検査機構が自分の取り付けを検証できない問題は ISSUE-13 と同型
+- ロールアウトで判明した「移行を各リポジトリへ委ねられない」という帰結は
+  [ISSUE-22](<../../ISSUE-22_skill のグローバル配布で他リポジトリの Issue 記法が混在する/issue.md>)
+  が引き取る
 - 最終レビューで「別 Issue にすべき」と判定された項目を 6 件切り出した。いずれも本 Issue の
   範囲外だが、同じ skill と同じ検査機構を対象にしている
-  - [ISSUE-16](<../ISSUE-16_git commit -v の scissors 以降の diff で記法検査が偽陽性になる/issue.md>)
-  - [ISSUE-17](<../ISSUE-17_C.2 の「gate が既に検証済み」が指す CI が別物/issue.md>)
-  - [ISSUE-18](<../ISSUE-18_手順書のコードブロックに未定義変数の silent 空振りが残る/issue.md>)
-  - [ISSUE-19](<../ISSUE-19_フォールバック起動契機の記述が C.1 より狭い/issue.md>)
-  - [ISSUE-20](<../ISSUE-20_squash merge commit のメッセージが規約の免除形と一致しない/issue.md>)
-  - [ISSUE-21](<../ISSUE-21_find の深さで意味を表現している箇所の対応が散文にしかない/issue.md>)
+  - [ISSUE-16](<../../ISSUE-16_git commit -v の scissors 以降の diff で記法検査が偽陽性になる/issue.md>)
+  - [ISSUE-17](<../../ISSUE-17_C.2 の「gate が既に検証済み」が指す CI が別物/issue.md>)
+  - [ISSUE-18](<../../ISSUE-18_手順書のコードブロックに未定義変数の silent 空振りが残る/issue.md>)
+  - [ISSUE-19](<../../ISSUE-19_フォールバック起動契機の記述が C.1 より狭い/issue.md>)
+  - [ISSUE-20](<../../ISSUE-20_squash merge commit のメッセージが規約の免除形と一致しない/issue.md>)
+  - [ISSUE-21](<../../ISSUE-21_find の深さで意味を表現している箇所の対応が散文にしかない/issue.md>)
