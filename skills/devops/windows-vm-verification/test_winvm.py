@@ -26,18 +26,18 @@ import winvm
 # ごと欠ける GuestTools、末尾スラッシュ付きの Home) は実際の出力のままにしてある。
 PRLCTL_LIST_JSON = """[
 \t{
-\t\t"ID": "e97a3a2f-9112-4017-a3a7-48c04bdd7a45",
-\t\t"Name": "Coda - macOS",
+\t\t"ID": "aaaa1111-bbbb-4ccc-8ddd-eeee22223333",
+\t\t"Name": "Fixture Host - macOS",
 \t\t"State": "stopped",
-\t\t"Home": "/Users/example/Parallels/Coda - macOS.macvm/",
+\t\t"Home": "/Users/example/Parallels/Fixture Host - macOS.macvm/",
 \t\t"GuestTools": {"state": "not_installed"},
 \t\t"Network": {"Conditioned": "off", "ipAddresses": []}
 \t},
 \t{
-\t\t"ID": "4eb49f98-7f09-4b43-a3f1-35f285ad4d26",
-\t\t"Name": "Staccato - Windows 11 ARM",
+\t\t"ID": "ffff4444-aaaa-4bbb-8ccc-dddd55556666",
+\t\t"Name": "Fixture Guest - Windows 11 ARM",
 \t\t"State": "running",
-\t\t"Home": "/Users/example/Parallels/Staccato - Windows 11 ARM.pvm/",
+\t\t"Home": "/Users/example/Parallels/Fixture Guest - Windows 11 ARM.pvm/",
 \t\t"GuestTools": {"state": "installed", "version": "26.4.0-57513"},
 \t\t"Network": {"Conditioned": "off", "ipAddresses": [
 \t\t\t{"type": "ipv4", "ip": "10.211.55.3"},
@@ -48,8 +48,8 @@ PRLCTL_LIST_JSON = """[
 ]
 """
 
-RUNNING_VM = "Staccato - Windows 11 ARM"
-STOPPED_VM = "Coda - macOS"
+RUNNING_VM = "Fixture Guest - Windows 11 ARM"
+STOPPED_VM = "Fixture Host - macOS"
 
 
 def config_pvs(isolated: str) -> str:
@@ -87,24 +87,24 @@ class FindVm(unittest.TestCase):
     def test_matches_exact_name_including_spaces(self):
         vm = winvm.find_vm(self.vms, RUNNING_VM)
         self.assertIsNotNone(vm)
-        self.assertEqual(vm["ID"], "4eb49f98-7f09-4b43-a3f1-35f285ad4d26")
+        self.assertEqual(vm["ID"], "ffff4444-aaaa-4bbb-8ccc-dddd55556666")
 
     def test_matches_bare_uuid(self):
-        vm = winvm.find_vm(self.vms, "4eb49f98-7f09-4b43-a3f1-35f285ad4d26")
+        vm = winvm.find_vm(self.vms, "ffff4444-aaaa-4bbb-8ccc-dddd55556666")
         self.assertEqual(vm["Name"], RUNNING_VM)
 
     def test_matches_braced_uuid(self):
         # prl_vm_app の argv は波括弧付きで UUID を出す。
-        vm = winvm.find_vm(self.vms, "{4eb49f98-7f09-4b43-a3f1-35f285ad4d26}")
+        vm = winvm.find_vm(self.vms, "{ffff4444-aaaa-4bbb-8ccc-dddd55556666}")
         self.assertEqual(vm["Name"], RUNNING_VM)
 
     def test_uuid_match_is_case_insensitive(self):
-        vm = winvm.find_vm(self.vms, "4EB49F98-7F09-4B43-A3F1-35F285AD4D26")
+        vm = winvm.find_vm(self.vms, "FFFF4444-AAAA-4BBB-8CCC-DDDD55556666")
         self.assertEqual(vm["Name"], RUNNING_VM)
 
     def test_name_match_is_exact_not_substring(self):
         # 部分一致を許すと別 VM を掴む。
-        self.assertIsNone(winvm.find_vm(self.vms, "Staccato"))
+        self.assertIsNone(winvm.find_vm(self.vms, "Fixture Guest"))
 
     def test_unknown_identifier_is_none(self):
         self.assertIsNone(winvm.find_vm(self.vms, "no-such-vm"))
@@ -279,7 +279,7 @@ class CmdResolveIp(unittest.TestCase):
         self.assertEqual(out.strip(), "10.211.55.3")
 
     def test_resolves_by_uuid_too(self):
-        rc, out, _ = self._resolve("4eb49f98-7f09-4b43-a3f1-35f285ad4d26")
+        rc, out, _ = self._resolve("ffff4444-aaaa-4bbb-8ccc-dddd55556666")
         self.assertEqual(rc, 0)
         self.assertEqual(out.strip(), "10.211.55.3")
 
@@ -324,12 +324,12 @@ class DoctorReport(unittest.TestCase):
         # ラベルの部分文字列に当たる assert (例: "on" は "host isolation" に一致する)
         # だと観測値を空にしても通るので、描画される区切りごと一致させる。
         checks = [
-            winvm.Check("VM", "Staccato (4eb49f98)", True),
+            winvm.Check("VM", "Fixture Guest (ffff4444)", True),
             winvm.Check("host isolation", "on", False, hint="FIX ME"),
             winvm.Check("Parallels Tools", "installed 26.4.0-57513", None),
         ]
         report = winvm.format_doctor_report(checks)
-        self.assertIn(": Staccato (4eb49f98)", report)
+        self.assertIn(": Fixture Guest (ffff4444)", report)
         self.assertIn(": on", report)
         self.assertIn(": installed 26.4.0-57513", report)
 
@@ -411,7 +411,7 @@ class CollectDoctorChecks(unittest.TestCase):
     def test_reports_vm_name_and_uuid(self):
         c = self._by_label(self._checks(), "VM")
         self.assertIn(RUNNING_VM, c.observed)
-        self.assertIn("4eb49f98-7f09-4b43-a3f1-35f285ad4d26", c.observed)
+        self.assertIn("ffff4444-aaaa-4bbb-8ccc-dddd55556666", c.observed)
 
     def test_running_vm_reports_its_ipv4(self):
         c = self._by_label(self._checks(), "IP")
@@ -594,8 +594,8 @@ class RemoteCommandBuilders(unittest.TestCase):
 
     def test_exec_command(self):
         self.assertEqual(
-            winvm.remote_exec_command("C:\\repo", "cargo xtask check-desktop"),
-            'cd /d "C:\\repo" && cargo xtask check-desktop',
+            winvm.remote_exec_command("C:\\repo", "cargo xtask check"),
+            'cd /d "C:\\repo" && cargo xtask check',
         )
         self.assertEqual(
             winvm.remote_exec_command("D:\\other", "echo hi"), 'cd /d "D:\\other" && echo hi'
@@ -613,14 +613,14 @@ class RemoteCommandBuilders(unittest.TestCase):
 class RemoteCommandFromArgs(unittest.TestCase):
     def test_strips_leading_separator(self):
         self.assertEqual(
-            winvm.remote_command_from_args(["--", "cargo xtask check-desktop"]),
-            "cargo xtask check-desktop",
+            winvm.remote_command_from_args(["--", "cargo xtask check"]),
+            "cargo xtask check",
         )
 
     def test_without_separator(self):
         self.assertEqual(
-            winvm.remote_command_from_args(["cargo", "xtask", "check-desktop"]),
-            "cargo xtask check-desktop",
+            winvm.remote_command_from_args(["cargo", "xtask", "check"]),
+            "cargo xtask check",
         )
 
     def test_empty_is_none(self):
@@ -785,8 +785,8 @@ class ParserSurface(unittest.TestCase):
             winvm.build_parser().parse_args(["resolve-ip", "--vmx", "x"])
 
     def test_resolve_ip_accepts_vm(self):
-        args = winvm.build_parser().parse_args(["resolve-ip", "--vm", "Staccato"])
-        self.assertEqual(args.vm, "Staccato")
+        args = winvm.build_parser().parse_args(["resolve-ip", "--vm", "Fixture Guest"])
+        self.assertEqual(args.vm, "Fixture Guest")
 
 
 class NoLegacyHypervisorResidue(unittest.TestCase):
@@ -940,8 +940,8 @@ class CmdScreenshot(unittest.TestCase):
 
     def test_uuid_is_resolved_to_the_name_before_capture(self):
         # prlctl capture へ渡すのは解決後の Name。UUID をそのまま渡すと撮れない。
-        # 名前に空白が入る (Staccato - Windows 11 ARM) ので argv 分割の崩れもここで出る。
-        rc, _, _ = self._shoot("4eb49f98-7f09-4b43-a3f1-35f285ad4d26")
+        # 名前に空白が入る (Fixture Guest - Windows 11 ARM) ので argv 分割の崩れもここで出る。
+        rc, _, _ = self._shoot("ffff4444-aaaa-4bbb-8ccc-dddd55556666")
         self.assertEqual(rc, 0)
         self.assertEqual(
             self.run_argvs[-1],

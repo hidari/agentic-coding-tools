@@ -125,7 +125,7 @@ mkdir -p "${DIR}"
 cp docs/issues/templates/issue.md "${DIR}/issue.md"
 ```
 
-例: 入力 `feat: 作品詳細ページに SNS シェアボタンを追加` → ディレクトリ `${NEXT}_作品詳細ページに SNS シェアボタンを追加/`、 本文 H1 `# feat: 作品詳細ページに SNS シェアボタンを追加`
+例: 入力 `feat: 詳細ページに共有ボタンを追加` → ディレクトリ `${NEXT}_詳細ページに共有ボタンを追加/`、 本文 H1 `# feat: 詳細ページに共有ボタンを追加`
 
 A.3 issue.md を Edit:
 

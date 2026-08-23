@@ -110,7 +110,7 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 1. 修正を適用 (Edit / Write)
 2. `make format` (該当エリアのみ)
 3. `make ci-<area>` で全テスト pass を確認
-   - area 名はプロジェクトの `Makefile` に依存。例 (Astralys): `ci-frontend` / `ci-backend` / `ci-perihelion-dashboard` / `ci-perihelion-api` / `ci-workers-cron`
+   - area 名はプロジェクトの `Makefile` に依存する。`ci-frontend` / `ci-backend` のようにデプロイ単位で切られていることが多い
    - 不明なら `make help` か `Makefile` を grep して該当 target を探す
 4. UI 変更なら **chrome-devtools-mcp で実ブラウザ動作確認** (CLAUDE.md MUST: フロントエンド変更は実ブラウザで確認)
    - 主要ツール: `mcp__plugin_chrome-devtools-mcp_chrome-devtools__navigate_page`, `take_snapshot`, `take_screenshot`, `list_console_messages`, `click`, `hover`, `fill`
@@ -158,7 +158,7 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 ```
 
 「Merge OK」を出力していない状態で `gh pr merge` を呼ばない。
-ユーザーに「ボーイスカウト適用余地は？」と追加で聞かれた場合は **本 skill が既にカバーしているはず** なので、漏れた候補があれば skill の Phase 1 (Boy Scout Sweep) のプロンプト改善対象として記録する (`memory/project_skill_improvement_boy_scout.md`)。
+ユーザーに「ボーイスカウト適用余地は？」と追加で聞かれた場合は **本 skill が既にカバーしているはず** なので、漏れた候補があれば skill の Phase 1 (Boy Scout Sweep) のプロンプト改善対象として記録する。
 
 ## 関連
 

@@ -88,7 +88,7 @@ git checkout -b <branch-name>
 
 description（説明）部分は、小文字のケバブケース（ハイフンつなぎ）で、簡潔かつ説明的に（2〜4単語が理想）、実際の作業内容と明確に関連したものにしてください。
 
-良いブランチ名の例：`feature/artwork-collections`、`fix/search-performance`、`refactor/error-handling`、`docs/api-documentation` など。
+良いブランチ名の例：`feature/user-collections`、`fix/search-performance`、`refactor/error-handling`、`docs/api-documentation` など。
 
 ## 重要な考慮事項
 
