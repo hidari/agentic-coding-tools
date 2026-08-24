@@ -79,7 +79,7 @@ PreToolUse フックの Tirith は **Bash ツールの command 文字列だけ**
 
 名前が決め打ちなので、前回の実行で作ったファイルが残っていることがある。Write する前に存在を確認し、自分が作った残骸なら上書きしてよい。別物なら slug を変える。
 
-本文は自然な日本語でよい。prefix と `(wip)` の規約はグローバル CLAUDE.md の「[MUST] コミットメッセージ」節が canonical。末尾に harness が指示するセッショントレーラを `Claude-Session: <URL>` の形式で置く。
+本文は自然な日本語でよい。prefix と `(wip)` の一覧は `~/.claude/references/git-workflow.md` が canonical で、グローバル CLAUDE.md の「コミットメッセージのプレフィックスと本文の渡し方」節がそこを名指ししている。末尾に harness が指示するセッショントレーラを `Claude-Session: <URL>` の形式で置く。
 
 **A.2 コミットして着地を確認する**
 
@@ -155,5 +155,6 @@ gh pr create --body-file .cache/pr-<slug>.md --title "<1 行>" && gh pr view --j
 
 ## 関連 CLAUDE.md ルール
 
-- `~/.claude/CLAUDE.md`: コミットメッセージ節 (prefix と `(wip)`) / push ルール / 一時ファイルの置き場
+- `~/.claude/CLAUDE.md`: push ルール / 一時ファイルの置き場 / prefix 一覧の所在
+- `~/.claude/references/git-workflow.md`: prefix と `(wip)` の一覧 (CLAUDE.md が指す先)
 - 各プロジェクトの `CLAUDE.md`: `gh pr create` のフラグと PR 確認手順
