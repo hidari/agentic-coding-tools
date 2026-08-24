@@ -43,6 +43,7 @@ uv run ${CLAUDE_SKILL_DIR}/scripts/render.py <input.md> [OPTIONS]
 | `--author <著者>`                      | 空                            | PDF メタ情報の著者名                                    |
 | `--date YYYY-MM-DD`                  | 実行日                          | フッター左下に表示する日付                                   |
 | `--css <css_path>`                   | 同梱の `style.css`              | カスタム CSS パス（`{{title}}` `{{date}}` のテンプレ変数を使える） |
+| `--allow-html`                       | 指定なし（生 HTML は文字列としてエスケープ表示）    | 入力 Markdown 内の生 HTML をそのまま解釈する。信頼できる入力にのみ指定すること（`weasyprint` は `<img>` や `<link rel="stylesheet">` を描画時に実際に取得するため、既定を開けると外部への送信経路になる） |
 
 パス解決: 入力ファイルのパスは呼び出し時の cwd に依存せず、絶対/相対どちらで渡しても正しく解決される。画像や相対リンクの `base_url` は**入力 MD の親ディレクトリ**が基準になる。
 
@@ -67,6 +68,7 @@ uv run ${CLAUDE_SKILL_DIR}/scripts/render.py docs/コスト試算.md
 | コードブロック     | 対応  | Pygments でハイライト（言語タグ必須、未知言語はプレーン表示）     |
 | リンク自動化      | 対応  | linkify で生 URL 自動リンク                    |
 | 画像・相対リンク    | 対応  | 入力 MD の親ディレクトリを `base_url` に設定          |
+| 生 HTML       | 既定非対応 | 既定は文字列としてエスケープ表示。`--allow-html` 指定時のみ解釈（信頼できる入力限定） |
 | ページ番号       | 対応  | `counter(page) / counter(pages)`（中央下）   |
 | ヘッダー右上      | 対応  | タイトル（`--title` または入力ファイル名）              |
 | フッター左下      | 対応  | 日付（`--date` または実行日）                     |
@@ -82,6 +84,7 @@ uv run ${CLAUDE_SKILL_DIR}/scripts/render.py docs/コスト試算.md
 - コードブロックに色が付かない → ` ```python ` のように言語タグを付ける。タグ無しの ``` ``` ``` だけだとプレーンの `<pre>` になる
 - タイトルに `"` や `\` を含めると CSS が壊れる → `render.py` 側で CSS 文字列エスケープ済みなので、呼び出し時はそのまま渡して良い
 - `uv run render.py` で依存解決が毎回遅く感じる → 初回のみ。uv キャッシュ（`~/.cache/uv/`）に入れば 2 回目以降は瞬時
+- 表セル内の `<br>` がそのまま文字列で印字される → 既定 (`html: False`) では生 HTML はエスケープされる仕様。GFM の表はセル内改行を書けないため記入欄の高さを `<br>` で作りたい場合は `--allow-html` を指定する（信頼できる入力のみ）
 
 ## 検証済み環境
 

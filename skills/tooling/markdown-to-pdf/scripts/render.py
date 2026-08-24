@@ -80,6 +80,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="カスタム CSS のパス（省略時は同梱の style.css を使用）",
     )
+    p.add_argument(
+        "--allow-html",
+        action="store_true",
+        help=(
+            "入力 Markdown 内の生 HTML をそのまま解釈する（既定は文字列として"
+            "エスケープ表示）。weasyprint は <img> や <link rel=\"stylesheet\">"
+            "などを描画時に実際に取得するため、信頼できる入力にのみ指定すること"
+        ),
+    )
     return p
 
 
@@ -93,11 +102,11 @@ def highlight_code(code: str, lang: str) -> str:
     return highlight(code, lexer, formatter)
 
 
-def make_markdown_parser() -> MarkdownIt:
+def make_markdown_parser(allow_html: bool = False) -> MarkdownIt:
     md = (
         MarkdownIt(
             "gfm-like",
-            {"linkify": True, "typographer": False, "html": False, "breaks": False},
+            {"linkify": True, "typographer": False, "html": allow_html, "breaks": False},
         )
         .use(tasklists_plugin, enabled=True)
         .use(footnote_plugin)
@@ -128,8 +137,8 @@ def make_markdown_parser() -> MarkdownIt:
     return md
 
 
-def render_md_to_html(md_text: str) -> str:
-    return make_markdown_parser().render(md_text)
+def render_md_to_html(md_text: str, allow_html: bool = False) -> str:
+    return make_markdown_parser(allow_html).render(md_text)
 
 
 def css_string_escape(s: str) -> str:
@@ -198,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
     date = args.date or dt.date.today().isoformat()
 
     md_text = input_path.read_text(encoding="utf-8")
-    body_html = render_md_to_html(md_text)
+    body_html = render_md_to_html(md_text, args.allow_html)
 
     css_template = css_path.read_text(encoding="utf-8")
     css = build_css(css_template, title=title, date=date)
