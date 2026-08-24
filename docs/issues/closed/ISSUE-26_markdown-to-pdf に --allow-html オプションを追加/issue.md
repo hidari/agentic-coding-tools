@@ -1,5 +1,5 @@
 ---
-status: open
+status: closed
 ---
 
 # feat: markdown-to-pdf に --allow-html オプションを追加
