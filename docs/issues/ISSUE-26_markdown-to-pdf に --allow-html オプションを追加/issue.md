@@ -24,13 +24,13 @@ markdown-it-py を `{"linkify": True, "typographer": False, "html": False, "brea
 
 ## タスク
 
-- [ ] `build_parser()` に `--allow-html`（`action="store_true"`、既定 False、日本語 help に
+- [x] `build_parser()` に `--allow-html`（`action="store_true"`、既定 False、日本語 help に
       信頼できる入力に限る旨を明記）を追加する
-- [ ] `make_markdown_parser()` が `allow_html: bool = False` を受け取り、markdown-it-py の
+- [x] `make_markdown_parser()` が `allow_html: bool = False` を受け取り、markdown-it-py の
       `"html"` オプションへ渡す（既定引数 False で既存呼び出しを壊さない）
-- [ ] `render_md_to_html()` / `main()` に `allow_html` を配線する
-- [ ] `SKILL.md` のオプション一覧表に `--allow-html` を追記する
-- [ ] `--allow-html` 無し / 有りの両方で実際に PDF を生成し、`pdftotext` で `<br>` の扱いが
+- [x] `render_md_to_html()` / `main()` に `allow_html` を配線する
+- [x] `SKILL.md` のオプション一覧表に `--allow-html` を追記する
+- [x] `--allow-html` 無し / 有りの両方で実際に PDF を生成し、`pdftotext` で `<br>` の扱いが
       変わる（無し: 文字列として印字される / 有り: HTML として解釈され消える）ことを確認する
 
 ## 関連
