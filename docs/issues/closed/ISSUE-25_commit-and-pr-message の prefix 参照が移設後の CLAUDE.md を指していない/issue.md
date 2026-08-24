@@ -1,5 +1,5 @@
 ---
-status: open
+status: closed
 ---
 
 # commit-and-pr-message の prefix 参照が移設後の CLAUDE.md を指していない
