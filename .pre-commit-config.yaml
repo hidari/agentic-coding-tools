@@ -112,6 +112,20 @@ repos:
         stages: [commit-msg]
         always_run: true
 
+      # 捕捉するのは「CLAUDE.md の上書きが効かず、成果物が上流 skill の既定パスへ落ちる」
+      # 失敗モードだけ。Issue ディレクトリ配下に置かれたファイルの名前違反 (識別子の無い
+      # spec.md、別 Issue の識別子を前置したファイル) は見ない。ディレクトリ名から識別子を
+      # 抽出するリポジトリ固有のロジックが要るためで、規約の canonical は
+      # dev-workflow:issue-scoped-artifacts skill が持つ。
+      #
+      # language: fail なのは環境構築を伴わせないため。実行可能スクリプトを配る方式は
+      # plugin の実体パスをシェルから解決できないので採れない (理由の canonical も同 skill)。
+      - id: issue-scoped-artifacts
+        name: spec と plan は Issue ディレクトリ配下へ置く
+        language: fail
+        entry: "この成果物は docs/issues/<ID>_<title>/<ID>-spec.md または <ID>-plan.md へ置く"
+        files: '^docs/superpowers/(plans|specs)/'
+
       - id: python-tests
         name: Python テスト (stdlib unittest)
         language: system

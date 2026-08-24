@@ -1,6 +1,11 @@
 # 書き捨ての検証スクリプトと中間出力
 .cache/
 
+# superpowers の作業ディレクトリ。sdd は .superpowers/sdd/.gitignore を自前で生成するが
+# brainstorming の visual companion が書く .superpowers/brainstorm/ は対象外で git status に
+# 出続ける。この非対称をプロジェクト側で一括して吸収する。
+.superpowers/
+
 # Python の副産物 (skill が自前の venv を持つことがある)
 .venv/
 __pycache__/
