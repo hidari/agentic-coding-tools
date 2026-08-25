@@ -15,4 +15,4 @@ status: open
 
 ## 関連
 
-<関連 PR・Issue・ドキュメントなど自由記述>
+<関連する Issue・PR・ドキュメント。書式は dev-workflow:in-repo-issue skill の「Issue 間の参照」節>

@@ -112,6 +112,18 @@ repos:
         stages: [commit-msg]
         always_run: true
 
+      # 走査対象は git の pathspec で固定するので files: で絞らない。Issue を触らない
+      # コミットでも走らせるのは、baseline とリンクの実態のずれを次に Issue を触るまで
+      # 隠さないため。絞ると「走らなかったこと」自体が出力に現れなくなる。
+      # 規約そのものの canonical は dev-workflow:in-repo-issue skill で、識別子記法の
+      # canonical は上の issue-id.py。この検査はどちらも再掲せず借りている。
+      - id: related-refs
+        name: 関連節の Issue 参照を検査する (識別子の実在とリンク baseline)
+        language: system
+        entry: scripts/check-related-refs.py
+        pass_filenames: false
+        always_run: true
+
       # 捕捉するのは「CLAUDE.md の上書きが効かず、成果物が上流 skill の既定パスへ落ちる」
       # 失敗モードだけ。Issue ディレクトリ配下に置かれたファイルの名前違反 (識別子の無い
       # spec.md、別 Issue の識別子を前置したファイル) は見ない。ディレクトリ名から識別子を
