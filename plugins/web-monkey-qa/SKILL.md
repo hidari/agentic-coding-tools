@@ -1,6 +1,6 @@
 ---
 name: web-monkey-qa
-description: Web アプリを重み付きランダム操作で探索し、コンソールエラーや HTTP 4xx/5xx、レイアウト崩れ、行き止まり遷移などを検出する monkey test バンドルの入口。実行は monkey-qa を直接呼ぶ。
+description: Web アプリを重み付きランダム操作で探索し、コンソールエラーや HTTP 4xx/5xx、レイアウト崩れ、行き止まり遷移などを検出する monkey test バンドルの入口。実行は `/monkey-qa` を呼ぶ。
 ---
 
 # web-monkey-qa
@@ -8,16 +8,16 @@ description: Web アプリを重み付きランダム操作で探索し、コン
 profile 駆動の monkey test 探索バンドル。`<project>/.claude/monkey-qa-profile.yml` を読み、
 セクションごとに探索エージェントを割り当てる。
 
-このファイルは入口の案内のみを持つ。実際の手順は component skill が持つ。
+このファイルは入口の案内のみを持つ。実際の手順は command と agent が持つ。
 
 ## component
 
 | component | 役割 |
 |---|---|
-| `monkey-qa` (skill) | profile を読み、セクションごとに探索エージェントを dispatch する |
+| `/monkey-qa` (command) | profile を読み、環境ガードを適用し、セクションごとに探索エージェントを dispatch して findings を集約する |
 | `monkey-explorer-agent` (agent) | entry URL から重み付きランダム操作で探索し 7 種の検出器を回す |
 
-呼び出しは `web-monkey-qa:monkey-qa` の修飾名で行う。
+agent の dispatch は `web-monkey-qa:monkey-explorer-agent` の修飾名で行う。
 
 ## 検出する事象
 

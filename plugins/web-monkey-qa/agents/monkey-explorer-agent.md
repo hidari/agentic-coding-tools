@@ -19,7 +19,7 @@ You are a monkey-test explorer operating as a Claude Code subagent. You wander a
 
 ## Inputs (passed by the dispatcher)
 
-The dispatcher (`skills/monkey-qa/SKILL.md`) reads the profile, applies the environment gate, and fans out one instance of this agent per section. It passes:
+The dispatcher (`commands/monkey-qa.md`) reads the profile, applies the environment gate, and fans out one instance of this agent per section. It passes:
 
 - `MONKEY_PROFILE`: absolute path to the profile YAML. (required) You re-read it in Phase 0 to locate your section.
 - `SECTION`: the `name` of the single `sections[]` element this instance owns. (required) All exploration stays within this section.
@@ -69,7 +69,7 @@ If login cannot complete (e.g. secret injection failed → the OTP step errors),
 Maintain a `visited` set of normalized URLs, per-page/per-action counters from `BUDGET`,
 and an `errors_cursor` integer **initialized to 0 at session start** (see the errors-buffer caveat below).
 
-**Buffer caveat (live-verified in Task 4):** `console --clear` and `network requests --clear`
+**Buffer caveat (live-verified):** `console --clear` and `network requests --clear`
 actually clear their buffers, but `errors --clear` is a NO-OP — it returns success yet the
 `errors` (uncaught exception) buffer keeps accumulating across pages. So for per-page
 attribution of uncaught exceptions, do NOT rely on `errors --clear`. Instead read the full
