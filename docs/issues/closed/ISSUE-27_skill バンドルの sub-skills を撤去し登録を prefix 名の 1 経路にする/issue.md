@@ -1,5 +1,5 @@
 ---
-status: in_progress
+status: closed
 ---
 
 # refactor: skill バンドルの sub-skills を撤去し登録を prefix 名の 1 経路にする
