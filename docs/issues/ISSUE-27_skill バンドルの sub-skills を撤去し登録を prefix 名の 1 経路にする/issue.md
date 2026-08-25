@@ -1,5 +1,5 @@
 ---
-status: open
+status: in_progress
 ---
 
 # refactor: skill バンドルの sub-skills を撤去し登録を prefix 名の 1 経路にする
@@ -35,27 +35,27 @@ flat 側にはその経路が無い。
 
 ## タスク
 
-- [ ] 2 bundle から sub-skills を撤去する (`security-blue-red-team/skills/` の 3 個と
+- [x] 2 bundle から sub-skills を撤去する (`security-blue-red-team/skills/` の 3 個と
       `web-monkey-qa/skills/` の 1 個)。`plugin.json` の `skills` 宣言も外す。root `SKILL.md` は
       残す (verbatim コピーが `schemas/` の唯一の deploy 経路のため)
-- [ ] `/monkey-qa` に dispatcher 本体を取り込む。取り込んだ側で `${CLAUDE_PLUGIN_ROOT}` 参照が
+- [x] `/monkey-qa` に dispatcher 本体を取り込む。取り込んだ側で `${CLAUDE_PLUGIN_ROOT}` 参照が
       解決することを確かめる
-- [ ] 自然言語からの起動語彙を、撤去する sub-skill の `description` から command の
+- [x] 自然言語からの起動語彙を、撤去する sub-skill の `description` から command の
       `description` へ凝縮して移す。責務説明と production 拒否は agent 側が canonical なので
       再掲しない
-- [ ] 「使われない条件」を command 本文へ移す。本文は常時ロードされないので、移設で常時層の
+- [x] 「使われない条件」を command 本文へ移す。本文は常時ロードされないので、移設で常時層の
       バイト数は増えない
-- [ ] bare 名の agent dispatch を prefix 名へ揃える。`web-monkey-qa` は既に prefix 名なので
+- [x] bare 名の agent dispatch を prefix 名へ揃える。`web-monkey-qa` は既に prefix 名なので
       対象外
-- [ ] 撤去した skill への参照を残さない。対象は `web-monkey-qa/README.md`、
+- [x] 撤去した skill への参照を残さない。対象は `web-monkey-qa/README.md`、
       `web-monkey-qa/commands/monkey-qa.md`、`security-blue-red-team/SKILL.md` (description と
       component 表と schema 節)、`security-blue-red-team/commands/security-redteam.md` の
       Purple Team 連鎖
-- [ ] `${CLAUDE_PLUGIN_ROOT}/schemas/<name>` の参照が撤去後も残る層 (agents と commands) から
+- [x] `${CLAUDE_PLUGIN_ROOT}/schemas/<name>` の参照が撤去後も残る層 (agents と commands) から
       解決することを確かめる
-- [ ] `python3 scripts/gen-readme.py` で README を再生成する。パッケージ一覧の表は各 SKILL.md の
+- [x] `python3 scripts/gen-readme.py` で README を再生成する。パッケージ一覧の表は各 SKILL.md の
       frontmatter から読むので、撤去すると表が変わる
-- [ ] `pre-commit run --all-files` を通す。CI より hook が多いのはローカル側なので、マージ前に
+- [x] `pre-commit run --all-files` を通す。CI より hook が多いのはローカル側なので、マージ前に
       ローカルで回す
 
 ## 関連
@@ -65,3 +65,5 @@ flat 側にはその経路が無い。
   だけを持つ
 - flat 分解を抑止するノブが無いこと自体は apm の設計判断なので、必要なら上流へ報告する余地が
   ある。ノブが入れば利用側の後始末は不要になるが、本 Issue は apm の変更を待たずに閉じられる
+- ISSUE-30: 撤去に伴って README の component 数を直したとき、component の定義がREADME 生成器と形の検査に分裂した。その解消を持つ
+- ISSUE-31: production ガードを command へ移したことで、monkey 側の防御が 1 層しかないことが可視化された。agent 側へ写しを置く作業を持つ

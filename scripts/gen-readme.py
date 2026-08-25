@@ -57,7 +57,8 @@ MIT
 
 
 def frontmatter(path: str) -> dict[str, str]:
-    text = open(path, encoding="utf-8").read()
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
     m = re.match(r"---\n(.*?)\n---", text, re.S)
     if not m:
         return {}
@@ -73,6 +74,40 @@ def frontmatter(path: str) -> dict[str, str]:
     return out
 
 
+def count_components(pkg_dir: str) -> int:
+    """パッケージが Claude Code へ登録する component の数を数える。
+
+    表の見出しが「component を持つパッケージ」なので skill・agent・command の 3 種を
+    数える。skills/ だけでは agent と command しか持たないパッケージが 0 で載り、
+    見出しと数字が正面から食い違う。
+
+    agents/ と commands/ は拡張子で分けない。plugin のディレクトリには README.md が
+    置かれる運用なので、`*.md` を数えると非 component が component に化ける。登録される
+    ものは frontmatter を持つので、そちらで判定する。command は名前空間付き
+    (`commands/<ns>/<name>.md`) を取りうるため再帰で見る。
+
+    「パッケージの形」の canonical は check-package-shape.py だが、あちらは
+    トップレベルで検査を実行して sys.exit するため import できない。定義を 1 つへ
+    寄せる作業は ISSUE-30 が持つ。
+    """
+    n = 0
+    inner = os.path.join(pkg_dir, "skills")
+    if os.path.isdir(inner):
+        n += sum(
+            1
+            for d in os.listdir(inner)
+            if os.path.exists(os.path.join(inner, d, "SKILL.md"))
+        )
+    for kind in ("agents", "commands"):
+        for dirpath, _, filenames in os.walk(os.path.join(pkg_dir, kind)):
+            n += sum(
+                1
+                for f in filenames
+                if f.endswith(".md") and frontmatter(os.path.join(dirpath, f))
+            )
+    return n
+
+
 def build() -> str:
     parts = [HEADER]
 
@@ -83,13 +118,13 @@ def build() -> str:
         if not os.path.exists(p):
             continue
         fm = frontmatter(p)
-        inner_dir = os.path.join(plugins_dir, name, "skills")
-        inner = sorted(os.listdir(inner_dir)) if os.path.isdir(inner_dir) else []
-        rows.append((f"plugins/{name}", fm.get("description", ""), len(inner)))
+        n = count_components(os.path.join(plugins_dir, name))
+        rows.append((f"plugins/{name}", fm.get("description", ""), n))
 
     parts.append("\n## plugin\n")
     parts.append(
-        "component を持つパッケージ。呼び出しは `<plugin 名>:<component 名>` の修飾名で行う。\n"
+        "component を持つパッケージ。skill と agent は `<plugin 名>:<component 名>` の"
+        "修飾名で呼び、command は `/<command 名>` で呼ぶ。\n"
     )
     parts.append("\n| パス | component 数 | 説明 |\n|---|---|---|\n")
     for path, desc, n in rows:
@@ -121,11 +156,16 @@ def build() -> str:
 if __name__ == "__main__":
     content = build()
     if "--check" in sys.argv:
-        current = open(README, encoding="utf-8").read() if os.path.exists(README) else ""
+        if os.path.exists(README):
+            with open(README, encoding="utf-8") as f:
+                current = f.read()
+        else:
+            current = ""
         if current != content:
             print("[x] README.md が frontmatter と一致しない。scripts/gen-readme.py を実行すること")
             sys.exit(1)
         print("README.md は frontmatter と一致している")
     else:
-        open(README, "w", encoding="utf-8").write(content)
+        with open(README, "w", encoding="utf-8") as f:
+            f.write(content)
         print(f"README.md を生成した ({len(content)} 文字)")

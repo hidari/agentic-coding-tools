@@ -2,13 +2,9 @@
 
 AI exploratory monkey testing plugin. 目的なしにサイトを歩き回り、ランダム操作で「人間が見ておかしいもの」を広く拾う。
 
-## Status
-
-- v0.1.0: universal plugin (dispatcher skill + explorer agent + schemas)。ツールは agent-browser CLI。
-
 ## Architecture
 
-- `skills/monkey-qa/SKILL.md` — dispatcher (profile 読込・環境ガード・fan-out・集約)
+- `commands/monkey-qa.md` — dispatcher (profile 読込・環境ガード・fan-out・集約)
 - `agents/monkey-explorer-agent.md` — 探索本体 (探索ループ・検知器・denylist 照合)
 - `schemas/` — profile / findings の入出力契約
 
@@ -16,7 +12,7 @@ AI exploratory monkey testing plugin. 目的なしにサイトを歩き回り、
 
 ## Tooling
 
-ツールは agent-browser CLI。direct binary の `agent-browser` を使う (`npx agent-browser` は起動が大幅に遅いため使わない)。以下は 2026-07-09 に agent-browser v0.31.1 で実アプリに対して実施した live smoke で確認した確定 contract。Task 5 の explorer agent はこの節を literal に参照する。
+ツールは agent-browser CLI。direct binary の `agent-browser` を使う (`npx agent-browser` は起動が大幅に遅いため使わない)。以下は 2026-07-09 に agent-browser v0.31.1 で実アプリに対して実施した live smoke で確認した確定 contract。explorer agent はこの節を literal に参照する。
 
 ### 検知器 → コマンド contract
 
@@ -30,7 +26,7 @@ AI exploratory monkey testing plugin. 目的なしにサイトを歩き回り、
 | ページ構造 (探索用) | - | `snapshot -i`。`@eN` ref を返す。detector ではなく次アクションを決める探索の目 |
 | 証跡キャプチャ | - | `screenshot <path>`。finding の `screenshot` フィールド用 |
 
-確定コマンド (live 確認済み、Task 5 は以下を literal に流用してよい):
+確定コマンド (live 確認済み、explorer agent は以下を literal に流用してよい):
 
 ```bash
 SESSION=monkey-<SECTION>   # explorer は section ごとにセッションを分離する (Phase 0 step 2)
@@ -63,6 +59,6 @@ playwright-mcp fallback は不要 (console/network/eval/snapshot が全て CLI �
 
 ## Boundary
 
-- production では fill / submit / 認証に到達しない (dispatcher が `auth: seed_login` section を dispatch せず、残る匿名 section に `READ_ONLY: true` と空の `SUBMIT_ALLOWLIST` を渡すことで担保する匿名 read-only 探索)
+- production では fill / submit / 認証に到達しない (匿名 read-only 探索へ落とす。担保する機構は `commands/monkey-qa.md` の実行フロー 2 が canonical)
 - source を編集しない・PR を作らない・issue を起票しない
 - local-first: hooks / mcpServers を宣言せず install/runtime に自動実行コードを持たない

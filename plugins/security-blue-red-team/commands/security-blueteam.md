@@ -1,11 +1,11 @@
 ---
-description: "Universal Blue Team security planner. Reads <project>/.claude/security-profile.yml and dispatches blue-team-agent in Mode A (Red Team report response) or Mode B (defensive surface audit)."
+description: "Universal Blue Team security planner. Reads <project>/.claude/security-profile.yml and dispatches security-blue-red-team:blue-team-agent in Mode A (Red Team report response) or Mode B (defensive surface audit). 「Blue Team 動かして」「改善計画立てて」「防御機構を監査」「Red Team レポートに対応策」「セキュリティ改善計画」「防御策を策定」と依頼された時にも起動する。"
 argument-hint: "[--mode=a|b] [--report=<path>]"
 ---
 
 # /security-blueteam
 
-product-agnostic な Blue Team セキュリティ計画策定を起動する。 詳細手順は `blue-team-agent` の system prompt に集約されているので、 本 command は **薄い entry point** に徹する。
+product-agnostic な Blue Team セキュリティ計画策定を起動する。 詳細手順・安全制約・責務境界は `agents/blue-team-agent.md` の system prompt が canonical なので、 本 command は **起動だけ**を持つ。
 
 ## 引数 parsing
 
@@ -49,7 +49,7 @@ product-agnostic な Blue Team セキュリティ計画策定を起動する。 
 
 Agent tool で `blue-team-agent` を起動:
 
-- `subagent_type`: `blue-team-agent`
+- `subagent_type`: `security-blue-red-team:blue-team-agent`
 - 引数として渡す値:
   - `SECURITY_PROFILE`: `<cwd>/.claude/security-profile.yml` の絶対パス
   - `MODE`: 確定した `a` または `b`
@@ -59,3 +59,16 @@ Agent tool で `blue-team-agent` を起動:
 ## Dispatch 後
 
 Agent の出力 (生成された blue-team.md のパス + mode 別サマリ: Mode A は priority 集計、 Mode B は surface 別の gap 数) を user に報告。 後続 (Issue 起票 / PR 作成 / 実装スケジューリング) は user の判断に委ねる。
+
+## 使われない条件
+
+- 攻撃面の検出だけ → 対の `/security-redteam` を使う
+- 単発の「この PR 大丈夫?」 → 公式 `/security-review`
+- 品質レビュー (バグ / 可読性) → `simplify` / `feature-dev:code-reviewer`
+- 実コード修正が欲しい → 通常のコーディング依頼として進める (本 command は計画策定まで)
+
+## 関連
+
+- `agents/blue-team-agent.md`: Mode A / Mode B の具体実行ロジック / Production Gate / Safety Constraints / 責務境界の本体
+- `${CLAUDE_PLUGIN_ROOT}/schemas/security-profile.schema.yml`: profile YAML の入力契約
+- `${CLAUDE_PLUGIN_ROOT}/schemas/findings.schema.json`: Mode A 入力 findings.json の契約
