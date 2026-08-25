@@ -59,6 +59,13 @@ jobs:
       - name: Issue 識別子の記法を検査する
         run: python3 plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py --check
 
+      # 上と同じ理由でこの job へ相乗りさせている (新 job は runner を 1 つ増やす)。
+      # 走査は index と作業ツリーだけを見るので checkout の既定 (fetch-depth 1) で足りる。
+      # pre-commit にも同じ検査を置いてあるが、-n での skip や pre-commit 未導入の
+      # 経路があるので防御を 1 層にしない。
+      - name: 関連節の Issue 参照を検査する
+        run: python3 scripts/check-related-refs.py
+
   readme-drift:
     name: README の drift
     runs-on: ubuntu-latest

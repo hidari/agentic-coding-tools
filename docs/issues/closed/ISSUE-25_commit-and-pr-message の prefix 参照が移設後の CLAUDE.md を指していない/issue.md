@@ -64,4 +64,5 @@ skill 本文は「prefix 一覧や `Closes` 書式をここに写経せず所在
 
 ## 関連
 
-- 移設の経緯と判断は配布先リポジトリの hidari/dotfiles#36 が持つ
+- 移設の経緯と判断は dotfiles の Issue 36 (CLAUDE.md を rules と skill へ分割し常時
+  ロード量を減らす) が持つ

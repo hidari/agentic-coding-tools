@@ -13,8 +13,7 @@ status: open
 走るので、同じ内容が 2 箇所に置かれ、Claude Code がそれぞれを別経路で登録する。apm 側に
 これを抑止するノブは無い。
 
-利用側 (dotfiles リポジトリの in-repo Issue「CLAUDE.md を rules と skill へ分割し常時ロード量を
-減らす」) で 7 通りの案を実測して比較し、sub-skills を撤去して bundle を root `SKILL.md` +
+利用側 (dotfiles の Issue 36) で 7 通りの案を実測して比較し、sub-skills を撤去して bundle を root `SKILL.md` +
 command + agent だけにする案を採ることが決まっている。本 Issue はその上流側の担当分で、
 flat 側 deploy 先の後始末は利用側が持つ。
 
@@ -61,8 +60,8 @@ flat 側にはその経路が無い。
 
 ## 関連
 
-- 実測と案の比較、および採用した案の削減幅は dotfiles リポジトリの in-repo Issue
-  「CLAUDE.md を rules と skill へ分割し常時ロード量を減らす」が canonical。本 Issue はその
-  派生で、上流側の変更だけを持つ
+- 実測と案の比較、および採用した案の削減幅は dotfiles の Issue 36 (CLAUDE.md を rules と
+  skill へ分割し常時ロード量を減らす) が canonical。本 Issue はその派生で、上流側の変更
+  だけを持つ
 - flat 分解を抑止するノブが無いこと自体は apm の設計判断なので、必要なら上流へ報告する余地が
   ある。ノブが入れば利用側の後始末は不要になるが、本 Issue は apm の変更を待たずに閉じられる
