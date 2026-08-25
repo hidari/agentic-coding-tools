@@ -1,5 +1,5 @@
 ---
-status: open
+status: closed
 ---
 
 # fix: Issue 間の相対リンクの書式が 3 通り混在している
@@ -356,9 +356,9 @@ baseline を増やす側は機械が止めていない。リンクを 1 本足�
 
 ## 関連
 
-- [ISSUE-22](<../ISSUE-22_skill のグローバル配布で他リポジトリの Issue 記法が混在する/issue.md>)
+- [ISSUE-22](<../../ISSUE-22_skill のグローバル配布で他リポジトリの Issue 記法が混在する/issue.md>)
   (識別子の記法の混在を追跡している。こちらは書式の混在で、対象が別)
-- [ISSUE-14](<../closed/ISSUE-14_in-repo Issue の識別子が GitHub の番号空間と衝突する/issue.md>)
+- [ISSUE-14](<../ISSUE-14_in-repo Issue の識別子が GitHub の番号空間と衝突する/issue.md>)
   (既存 Issue の rename で相対リンクをまとめて直した作業。`%20` 形の 7 件は、そのとき rename した
   13 件の番号範囲に収まる。因果までは確かめていない)
 - dotfiles の Issue 43: Issue 間の参照を維持し続けるコストを下げる。この Issue の裁定の出所で、
