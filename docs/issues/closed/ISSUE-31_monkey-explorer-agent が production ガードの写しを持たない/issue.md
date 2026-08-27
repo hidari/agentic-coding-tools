@@ -1,5 +1,5 @@
 ---
-status: open
+status: closed
 ---
 
 # fix: monkey-explorer-agent が production ガードの写しを持たない
