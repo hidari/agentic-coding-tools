@@ -18,7 +18,7 @@ profile.sections[] ごとに `Agent(subagent_type="web-monkey-qa:monkey-explorer
 
 ## 実行フロー
 
-1. **profile を構造化 parse** する (`python3 -c "import yaml; yaml.safe_load(open(...))"` 等。text grep は禁止 — コメントアウトされた `kind: production` 行や継続行を誤読して production を見落とし/誤検知しうる)。ファイルが無い、または parse に失敗したら `monkey-qa-profile.template.yml` を提示して停止する (この時点で abort する場合、date directory は作らない)。
+1. **profile を構造化 parse** する (`python3 -c "import yaml; yaml.safe_load(open(...))"` 等。PyYAML はシステムの python に入っていないことがあるので、無ければ `uv run --with pyyaml python3 -c ...` のように調達する。text grep は禁止 — コメントアウトされた `kind: production` 行や継続行を誤読して production を見落とし/誤検知しうる)。ファイルが無い、または parse に失敗したら `monkey-qa-profile.template.yml` を提示して停止する (この時点で abort する場合、date directory は作らない)。
 2. **環境ガード (二層防御の宣言的層。ここが canonical — 他ファイルはこの記述を参照するのみで再定義しない)**:
    - `environment.kind == production` の場合、**read-only モードを強制**する。`sections[]` のうち `auth: seed_login` の区画は explorer を dispatch せず skip し、その section 名と「production read-only によりスキップ」を記録する。`auth: none` の区画のみ匿名探索として実行対象に残す。
    - **production で実行対象に残る全 section には、破壊的操作 (fill / submit / 認証) への到達を実装で封じるため次を強制する (profile の値を無視する)**: `SUBMIT_ALLOWLIST` を**空配列**に上書きし、`READ_ONLY: true` を渡す。この 2 つ (`auth: seed_login` の section を dispatch しない + 残る section に空 `SUBMIT_ALLOWLIST` と `READ_ONLY: true` を渡す) が production read-only の canonical な担保であり、宣言 (責務境界) と実装 (dispatch 引数) をここで一致させる。
@@ -60,6 +60,7 @@ profile.sections[] ごとに `Agent(subagent_type="web-monkey-qa:monkey-explorer
 - PR 作成 / Issue 起票を行わない (wrap skill / user に委ねる)
 - profile に無い product-specific チェックを勝手に行わない
 - production では破壊的操作 (fill / submit / 認証) に絶対到達しない (`auth: seed_login` の section を dispatch しない **+ 残る section に `READ_ONLY: true` と空の `SUBMIT_ALLOWLIST` を渡す**ことで担保する。実行フロー 2 が canonical)
+  - この dispatcher を経由しない経路 (agent type としての直接 dispatch) では上の引数が届かないので、`agents/monkey-explorer-agent.md` の Phase 0 が profile から独立に同じ判定を行う。層は 2 つあり、canonical はここのまま
 - 探索ループ・検知器のロジックをここに複製しない (`agents/monkey-explorer-agent.md` が唯一の実装)
 
 ## 使われない条件
@@ -70,6 +71,6 @@ profile.sections[] ごとに `Agent(subagent_type="web-monkey-qa:monkey-explorer
 
 ## 関連
 
-- `agents/monkey-explorer-agent.md` — 探索本体 (探索ループ・検知器・denylist 照合)
+- `agents/monkey-explorer-agent.md` — 探索本体 (探索ループ・検知器・denylist 照合) と Phase 0 の production gate (直接 dispatch でも効く独立層)
 - `${CLAUDE_PLUGIN_ROOT}/schemas/monkey-qa-profile.schema.yml` — profile の入力契約
 - `${CLAUDE_PLUGIN_ROOT}/schemas/findings.schema.json` — findings.json の出力契約
