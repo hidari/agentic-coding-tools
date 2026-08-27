@@ -52,6 +52,11 @@ scripts/check-leak-guard-rules.py と同じ理由で、「規約違反」と「�
   番号もタイトル部も保存し、接頭辞の付与だけに留めること
 - --check-diff の免除は記録に残らないので、件数を監査できない。--check が全走査の backstop
   になる。取り付ける側は増分だけに頼らないこと
+- --check-diff は rename の回転やスワップを rename として見ない。git の rename 検出は片側に
+  しか無いパスどうしをマッチさせるので、中間のパスが両側に存在する形 (A から B への移動と
+  同時に B から C への移動) は削除・変更・追加として出る (実測)。移動しただけの既存違反が
+  「追加行」として報告される。偽陽性の方向なので見落としにはならない。Issue ディレクトリの
+  番号を入れ替える操作は --next の限界からも避けるべきなので、この形は想定していない
 """
 
 from __future__ import annotations
@@ -302,7 +307,9 @@ def _diff_records(root: Path, rng: str, *filters: str) -> list[tuple[str, str | 
     fields = [f for f in out.decode("utf-8", "replace").split("\0") if f]
     records: list[tuple[str, str | None, str]] = []
     i = 0
-    # 末尾が欠けたレコードは落とす。数を合わせるより読めた分だけを返す方が安全
+    # 末尾が 1 要素だけ残った場合は落とす。R / C なのに 2 要素しか残っていない形は 2 要素
+    # レコードとして読むが、git が成功して返す出力ではこの形にならない (_git は非 0 で
+    # GitError を送出するので、途中で切れた出力はそもそもここへ来ない)
     while i + 1 < len(fields):
         kind = fields[i][:1]
         if kind in ("R", "C") and i + 2 < len(fields):

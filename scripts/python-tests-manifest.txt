@@ -25,12 +25,14 @@ plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_i
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckDiff.test_hunk_marker_inside_an_added_line_is_not_read_as_a_header
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckDiff.test_last_line_of_a_hunk_is_inside_the_added_set
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckDiff.test_line_boundaries_follow_git_not_python
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckDiff.test_lone_rename_of_the_same_shape_stays_green
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckDiff.test_new_issue_directory_with_legacy_name_is_flagged
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckDiff.test_non_ascii_directory_name_violation_is_found
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckDiff.test_non_git_root_is_exit_2
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckDiff.test_pre_existing_violation_on_an_untouched_line_is_not_reported
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckDiff.test_rename_into_a_bad_name_is_flagged_regardless_of_rename_detection
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckDiff.test_rename_into_a_good_name_is_green_regardless_of_rename_detection
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckDiff.test_rename_rotation_reports_moved_content_as_added
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckDiff.test_renaming_a_bad_name_into_another_bad_name_is_still_flagged
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckDiff.test_staged_violation_is_reported_even_if_the_worktree_hides_it
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckDiff.test_stylesheet_is_excluded

@@ -883,6 +883,38 @@ class CheckDiff(unittest.TestCase):
                 self.assertEqual(rc, 1)
                 self.assertIn("docs/issues/13_べつの名前:", err)
 
+    def test_rename_rotation_reports_moved_content_as_added(self):
+        # 既知の限界を固定する。git の rename 検出は片側にしか無いパスどうしをマッチさせる
+        # ので、中間のパスが両側に存在する回転は rename として出ない (実測: D と M と A に
+        # 分かれる)。移動しただけの既存違反が追加行として報告される。偽陽性の方向なので
+        # 見落としではないが、挙動を変えたときに気づけるようここへ置く
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, ())
+            write(root, f"docs/issues/{PREFIX}1_alpha/issue.md", f"前書き\n古い参照 {SIGIL}11\n")
+            write(root, f"docs/issues/{PREFIX}2_beta/issue.md", "前書き\n無害な行\n")
+            commit(root, "two issues")
+            git(root, "mv", f"docs/issues/{PREFIX}2_beta", f"docs/issues/{PREFIX}3_gamma")
+            git(root, "mv", f"docs/issues/{PREFIX}1_alpha", f"docs/issues/{PREFIX}2_beta")
+            git(root, "add", "-A")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        # 移動先のパスで、移動元にあった既存違反が報告される
+        self.assertIn(f"{PREFIX}2_beta/issue.md:2:", err)
+
+    def test_lone_rename_of_the_same_shape_stays_green(self):
+        # 上の対照。回転でなければ R として検出され、既存違反は報告されない
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, ())
+            write(root, f"docs/issues/{PREFIX}1_alpha/issue.md", f"前書き\n古い参照 {SIGIL}11\n")
+            commit(root, "one issue")
+            git(root, "mv", f"docs/issues/{PREFIX}1_alpha", f"docs/issues/{PREFIX}9_moved")
+            git(root, "add", "-A")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("追加行: 0 行", out)
+
     # --- 11: submodule ----------------------------------------------------------
 
     def test_submodule_entry_does_not_raise(self):
