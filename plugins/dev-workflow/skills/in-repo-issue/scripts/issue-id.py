@@ -347,7 +347,7 @@ def _added_lines(
     return added
 
 
-def _parse_entries(out: bytes, oid_field: int) -> dict[str, tuple[str, str]]:
+def _parse_entries(out: bytes, oid_index: int) -> dict[str, tuple[str, str]]:
     """`<mode> ...<TAB><path>` の NUL 区切りレコードを パス -> (mode, oid) で読む。
 
     ls-files -s は `<mode> <oid> <stage>`、ls-tree は `<mode> <type> <oid>` と oid の位置が
@@ -359,18 +359,18 @@ def _parse_entries(out: bytes, oid_field: int) -> dict[str, tuple[str, str]]:
             continue
         meta, sep, path = record.partition("\t")
         fields = meta.split()
-        if not sep or len(fields) <= oid_field:
+        if not sep or len(fields) <= oid_index:
             continue
-        entries[path] = (fields[0], fields[oid_field])
+        entries[path] = (fields[0], fields[oid_index])
     return entries
 
 
 def _index_entries(root: Path) -> dict[str, tuple[str, str]]:
-    return _parse_entries(_git(root, "ls-files", "-s", "-z"), oid_field=1)
+    return _parse_entries(_git(root, "ls-files", "-s", "-z"), oid_index=1)
 
 
 def _tree_entries(root: Path, ref: str) -> dict[str, tuple[str, str]]:
-    return _parse_entries(_git(root, "ls-tree", "-r", "-z", ref), oid_field=2)
+    return _parse_entries(_git(root, "ls-tree", "-r", "-z", ref), oid_index=2)
 
 
 def _blob_text(root: Path, oid: str) -> str | None:
@@ -421,6 +421,19 @@ def issue_dir_of(path: str) -> tuple[str, str] | None:
     return name, "/".join(parts[: depth + 1])
 
 
+def _dir_name_violations(entries: list[tuple[str, str]]) -> list[str]:
+    """ディレクトリ名が識別子の形式でないものを報告する。
+
+    渡す集合は入口ごとに違う。--check は現ツリーの全 Issue、--check-diff は新しく現れた名前
+    だけを渡す。増分が絞るのは対象の集合であって規則ではないので、判定と文言はここで共有する
+    """
+    return [
+        f"{rel}: ディレクトリ名が {PREFIX}<N>_<title> 形式でない"
+        for rel, name in entries
+        if not ISSUE_DIR.match(name)
+    ]
+
+
 def _number_conflicts(entries: list[tuple[str, str]]) -> list[str]:
     """同じ番号を持つ Issue ディレクトリを報告する。
 
@@ -438,8 +451,11 @@ def _number_conflicts(entries: list[tuple[str, str]]) -> list[str]:
     ]
 
 
-def _issue_dirs_of(paths: list[str]) -> list[tuple[str, str]]:
+def _issue_dirs_from_paths(paths: list[str]) -> list[tuple[str, str]]:
     """追跡下のパス一覧から Issue ディレクトリを (相対パス, 名前) で返す。
+
+    issue_dirs() と同じ形を返すのでタプルの順序もそちらに合わせてある (issue_dir_of は
+    (名前, 相対パス) の順なので、単複の対応に見えて順序が逆になる点に注意)。
 
     issue_dirs() は filesystem を見るので、部分 stage のときに index と食い違う。増分モードは
     走査対象を差分の後側へ統一するのでこちらを使う。追跡されていない Issue ディレクトリ (git が
@@ -497,6 +513,21 @@ def _report(violations: list[str]) -> None:
         print(f"  [x] {v}", file=sys.stderr)
 
 
+def _finish(violations: list[str], summary: str) -> int:
+    """違反と走査の要約を出して終了コードを返す。
+
+    「違反 0 件を緑にする」はこの機構が最も守りたい判定なので、入口ごとに書かない。
+    2 箇所にあると片方だけが緑へずれても、機械検査は何も言わない
+    """
+    _report(violations)
+    print(summary)
+    if violations:
+        print(f"違反 {len(violations)} 件")
+        return 1
+    print("違反なし")
+    return 0
+
+
 def run_next(root: Path) -> int:
     found = collect_numbers(root)
     violations = _duplicates(found)
@@ -508,12 +539,8 @@ def run_next(root: Path) -> int:
 
 
 def run_check(root: Path) -> int:
-    violations: list[str] = []
     entries = issue_dirs(root)
-    for rel, name in entries:
-        if not ISSUE_DIR.match(name):
-            violations.append(f"{rel}: ディレクトリ名が {PREFIX}<N>_<title> 形式でない")
-
+    violations = _dir_name_violations(entries)
     violations.extend(_number_conflicts(entries))
 
     tracked = _tracked_files(root)
@@ -536,36 +563,29 @@ def run_check(root: Path) -> int:
         scanned += 1
         violations.extend(v.message for v in scan_text(text, rel))
 
-    _report(violations)
-    print(
+    return _finish(
+        violations,
         f"検査した Issue ディレクトリ: {len(entries)} 個 / 走査したファイル: {scanned} 個 "
-        f"(拡張子で除外 {excluded} / 読めずに飛ばした {unreadable})"
+        f"(拡張子で除外 {excluded} / 読めずに飛ばした {unreadable})",
     )
-    if violations:
-        print(f"違反 {len(violations)} 件")
-        return 1
-    print("違反なし")
-    return 0
 
 
 def run_check_diff(root: Path, base: str | None) -> int:
     if base is None:
         rng, label = "--cached", "index"
-        entries = _index_entries(root)
+        blobs = _index_entries(root)
     else:
         # three-dot にする。two-dot だと base 側にしか無いコミットが「削除」として差分へ
         # 混ざる (実測)。見たいのは分岐点から現在までの変更なので merge-base 基準が正しい
         rng = label = f"{base}...HEAD"
-        entries = _tree_entries(root, "HEAD")
-
-    violations: list[str] = []
+        blobs = _tree_entries(root, "HEAD")
 
     # ディレクトリ名は、新しく現れた名前だけを見る。起点を issue.md に限るのは、配下の
     # 任意ファイルを起点にすると旧記法のディレクトリを触るたび赤くなるため。
     # rename で位置だけが変わったもの (docs/issues 直下から closed/ への移動) を外すのは
     # 名前が 1 文字も変わっていないためで、ここを分けないと旧記法の Issue を閉じるという
     # 日常操作のたびに赤くなり、増分の ratchet が成立しない (実測)
-    checked: list[str] = []
+    new_dirs: list[tuple[str, str]] = []
     for _kind, old, path in _diff_records(root, rng, "--diff-filter=AR"):
         got = issue_dir_of(path)
         if got is None:
@@ -577,11 +597,10 @@ def run_check_diff(root: Path, base: str | None) -> int:
             was = issue_dir_of(old)
             if was is not None and was[0] == name:
                 continue
-        checked.append(rel)
-        if not ISSUE_DIR.match(name):
-            violations.append(f"{rel}: ディレクトリ名が {PREFIX}<N>_<title> 形式でない")
+        new_dirs.append((rel, name))
 
-    violations.extend(_number_conflicts(_issue_dirs_of(list(entries))))
+    violations = _dir_name_violations(new_dirs)
+    violations.extend(_number_conflicts(_issue_dirs_from_paths(list(blobs))))
 
     scanned = excluded = unreadable = submodules = 0
     added_total = 0
@@ -591,7 +610,7 @@ def run_check_diff(root: Path, base: str | None) -> int:
         if Path(path).suffix in SKIP_SUFFIXES:
             excluded += 1
             continue
-        entry = entries.get(path)
+        entry = blobs.get(path)
         if entry is None:
             # 差分に出たパスが index / tree に無い状態。--diff-filter=d で削除を除いてある
             # ので通常は起きないが、起きたときに黙って数を合わせず要約へ出す
@@ -617,19 +636,14 @@ def run_check_diff(root: Path, base: str | None) -> int:
             if v.kind == KIND_UNCLOSED_FENCE or v.lineno in added:
                 violations.append(v.message)
 
-    _report(violations)
     # 何を何件見たかを必ず出す。これが無いと配線ミス (base が常に HEAD と一致する等) と
     # 正常な空コミットが同じ見た目になる
-    print(
+    return _finish(
+        violations,
         f"差分 {label}: 追加行: {added_total} 行 / 走査したファイル: {scanned} 個 / "
-        f"検査した Issue ディレクトリ: {len(checked)} 個 "
-        f"(拡張子で除外 {excluded} / 読めずに飛ばした {unreadable} / submodule {submodules})"
+        f"検査した Issue ディレクトリ: {len(new_dirs)} 個 "
+        f"(拡張子で除外 {excluded} / 読めずに飛ばした {unreadable} / submodule {submodules})",
     )
-    if violations:
-        print(f"違反 {len(violations)} 件")
-        return 1
-    print("違反なし")
-    return 0
 
 
 def run_check_text(source: str) -> int:
