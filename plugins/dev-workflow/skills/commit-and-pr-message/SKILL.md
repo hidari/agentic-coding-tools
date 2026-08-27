@@ -123,8 +123,14 @@ gh pr create --body-file .cache/pr-<slug>.md --title "<1 行>" && gh pr view --j
 | `gh issue create --title "<1 行>" --body-file .cache/issue-<slug>.md` | `gh issue view <num> --json body` |
 | `gh release create <tag> --title "<1 行>" --notes-file .cache/notes-<slug>.md` | `gh release view <tag> --json body` |
 | `git tag -a <tag> -F .cache/tag-<slug>.txt` | `git tag -n99 -l <tag>` |
+| `gh pr merge <num> --squash --subject "<1 行>" --body-file .cache/merge-<slug>.md` | `git log -1 --format=%B origin/main` |
 
-`--title` と同じく `gh issue create --title` / `git tag <tag>` もインラインなので句点を入れない。
+`--title` と同じく `gh issue create --title` / `git tag <tag>` / `gh pr merge --subject` も
+インラインなので句点を入れない。
+
+**`gh pr merge --subject` は省略しないこと。**省略すると GitHub が subject を生成し、その形が
+in-repo Issue の識別子規約に違反する。書くべき形の canonical は `dev-workflow:in-repo-issue` の
+`## PR / コミット規約` 節で、本 skill は形を再掲しない。
 
 フッタの既定は面ごとに次のとおり。harness がこれと異なる指示を出したらそちらが優先。
 
