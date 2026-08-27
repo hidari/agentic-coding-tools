@@ -142,7 +142,7 @@ localized な文字列を判定に混ぜると環境依存で壊れる。
 クローズ・reopen の手順は skill `dev-workflow:in-repo-issue` が canonical。
 - `<ID>` の形式と採番規則は再掲しない。canonical は
 `plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py` の docstring で、採番は
-`--next`、GitHub の番号記法が混入していないかの検査は `--check` / `--check-text` が行う。
+`--next`、GitHub の数字記法が混入していないかの検査は同 docstring が列挙する検査入口が行う。
 - PR タイトルと PR 本文には対象 Issue を指す記載を規約どおり入れる。どちらの書式も再掲しない。
 canonical は `dev-workflow:in-repo-issue` の「PR / コミット規約」節で、自動クローズの起動条件と
 抽出規則は同 skill の Phase C が持つ。

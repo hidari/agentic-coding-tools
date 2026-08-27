@@ -1,5 +1,5 @@
 ---
-status: open
+status: in_progress
 ---
 
 # feat: in-repo Issue の検査を配布先で走る状態にする
@@ -81,9 +81,9 @@ canonical は同ディレクトリの spec が持つ。ここには層の名前�
 
 ## タスク
 
-- [ ] 層 0: main への直 push を止める repository ruleset を入れる
-- [ ] 層 0: semver tag と release note を導入する。pin の機構は SHA のまま
-- [ ] 層 1: `--check-diff` を実装する。テスト 11 項目を pin する
+- [x] 層 0: main への直 push を止める repository ruleset を入れる
+- [x] 層 0: semver tag と release note を導入する。pin の機構は SHA のまま
+- [x] 層 1: `--check-diff` を実装する。spec のテスト方針表の全項目を pin する
 - [ ] 層 2: SKILL.md へ加入判定と配線手順を書く。hook block は固定テンプレートにする
 - [ ] 層 4: template の写しを置く要求を SKILL.md から外す
 - [ ] 層 3 の完成後、規模の小さい配布先から実地で取り付けを通す
