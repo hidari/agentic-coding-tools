@@ -24,6 +24,21 @@ profile の schema 適合を検証する経路も配布側に無い。agent の�
 実測したマシンでは `jsonschema` も `yaml` も入っていなかった。
 つまり既定経路は常に目視側になる。
 
+#### 追記 (2026-08-28): parse の実行可能性を probe 4 本で再確認した
+
+ISSUE-31 の検証で隔離コピーへ通した probe 4 本が、いずれも独立に `python3` の PyYAML 不在を
+踏んだ。4 本とも自力で別の手段を調達しており、内訳は Ruby の Psych が 1 本、
+`uv run --with pyyaml` が 3 本 (オプションの組み合わせは 3 本とも異なる)。
+
+つまり「構造化 parse せよ」という要求だけなら実行者が満たせる。壊れているのは要求ではなく、
+特定の実装を名指しした例示の方である。
+
+monkey 側の `commands/monkey-qa.md` には PR #30 で調達手段を書き足し、agent 側は具体的な
+コマンドを持たず要求だけを述べる形へ変えた (canonical を dispatcher 側の 1 箇所に保つため)。
+`commands/security-redteam.md` は `import sys, yaml` を含む Python 断片を手順として直接
+埋め込んでおり、こちらは未対応のまま残っている。上の「既定経路は常に目視側になる」は
+security 側では今も成立する。
+
 ### security-blue-red-team: 防御は厚い。残る穴は 1 点
 
 `agents/red-team-agent.md` は対象の照合をかなり厚く書いている。
@@ -65,11 +80,15 @@ monkey 側は材料そのものが schema に存在しない。
       現状は消費側が自作するしかなく、作った消費側でも自動経路へ配線されていない
 - [ ] schema のテストを走らせる経路を作る。テストは 2 本存在するが、
       pre-commit にも CI にも実行系の言及が 0 件で一度も走っていない
+- [ ] `commands/security-redteam.md` が埋め込む parse 断片を、実行環境に PyYAML が無くても
+      成立する形にする。monkey 側は PR #30 で対応済み
 
 ## 関連
 
 - ISSUE-31: monkey-explorer-agent が production ガードの写しを持たない。
   本 Issue は写しの問題ではなく判定の入力そのものを扱う
+- ISSUE-40: Phase 1 の recipe 実行と submit 禁止の制約が衝突する。`submit_allowlist` の
+  入力契約が変われば向こうの裁定にも影響する
 - ISSUE-13: 両取り付けの同時撤去を機構で検出できない
 - ISSUE-36: skill と plugin が消費側へ要求する取り付けを棚卸しする。本 Issue の出所
 - dotfiles の ISSUE-46: 両リポジトリの Issue をマイルストーンへ整理し着手順を決める
