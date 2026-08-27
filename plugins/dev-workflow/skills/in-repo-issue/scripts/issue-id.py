@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""in-repo Issue の識別子を採番し、GitHub の番号記法との混同を検出する。
+"""in-repo Issue の識別子を採番し、GitHub の数字記法との混同を検出する。
 
 in-repo Issue は `docs/issues/<dir>/` というディレクトリなので GitHub の Issue/PR カウンタを
-消費しない。にもかかわらず参照を GitHub と同じ番号記法で書くと、同じ番号空間の GitHub
+消費しない。にもかかわらず参照を GitHub と同じ数字記法で書くと、同じ番号空間の GitHub
 オブジェクトとどちらを指すのか文脈からしか判別できなくなる。GitHub の autolink が既定で
 反応するのは数字記法だけなので、識別子を `ISSUE-<N>` にすれば距離ではなく種類で分離できる。
 番号がいくつまで伸びても交わらない。
@@ -26,8 +26,9 @@ in-repo Issue は `docs/issues/<dir>/` というディレクトリなので GitH
 
 終了コードは 0 (合格) / 1 (違反あり) / 2 (検査不能)。2 を 1 と分けるのは
 scripts/check-leak-guard-rules.py と同じ理由で、「規約違反」と「検査を走らせられなかった」を
-同じ赤にすると git が無い状態がルール違反に見えるため。追跡下のファイルが 1 件も無い場合も
-2 にする。違反 0 件で緑にすると「何も見ていない」が「合格」に化ける。
+同じ赤にすると git が無い状態がルール違反に見えるため。--check は追跡下のファイルが 1 件も
+無い場合も 2 にする。違反 0 件で緑にすると「何も見ていない」が「合格」に化ける。
+--check-diff の空差分は 0 で返す。差分が無いことは正常な状態で、走査の要約が空を明示する。
 
 免除の範囲 (広げすぎると静かに全件素通りする):
 
@@ -43,7 +44,8 @@ scripts/check-leak-guard-rules.py と同じ理由で、「規約違反」と「�
 - 重複判定の鍵は入口ごとに違う。--next は現ツリーと全 ref を混ぜるので、ディレクトリ名から
   接頭辞を除いた部分を同一性の鍵にする (active と closed の間の移動も、移行に伴う接頭辞の
   付与も同じ Issue とみなす)。--check は現ツリーだけを見るのでパスを鍵にし、同じ名前が
-  active と closed の両方にある形も重複として報告する
+  active と closed の両方にある形も重複として報告する。--check-diff は差分の後側 (index か
+  HEAD の tree) のパスを鍵にするので、未追跡の Issue ディレクトリを数に入れない
 - その帰結として、--next はブランチ間でタイトル部の改名を伴う移動を別の Issue と見て重複を
   報告する (偽陽性側に倒している)。重複と判定されると --next は識別子を出さず exit 1 で
   止まる。つまり新規起票が一切できなくなるので、Issue ディレクトリを rename するときは
@@ -159,6 +161,22 @@ def _mask_inline_code(line: str) -> str:
     return "".join(out)
 
 
+def _split_lines(text: str) -> list[str]:
+    """`\n` だけで行を割る。
+
+    str.splitlines() は `\v` `\f` `\x1c`-`\x1e` NEL `U+2028` `U+2029` と単独の `\r` も行境界に
+    するが、git の diff が行区切りにするのは `\n` だけである (実測: `b\fSEE` を含む追加は
+    hunk では 1 行、splitlines では 2 行になる)。ずれると増分モードで違反の行番号が追加行集合
+    から外れ、違反 0 件の緑で返る。--check の行番号も git と食い違うので、両方ここへ寄せる。
+
+    末尾の改行が作る空要素は落とす。落とさないと最終行の次に存在しない行が 1 つ増える
+    """
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def _scan_line(line: str, label: str, lineno: int) -> list[Violation]:
     found = []
     for m in GITHUB_REF.finditer(line):
@@ -187,7 +205,7 @@ def scan_text(text: str, label: str) -> list[Violation]:
     violations: list[Violation] = []
     fence_len = 0
     fence_opened_at = 0
-    for lineno, line in enumerate(text.splitlines(), 1):
+    for lineno, line in enumerate(_split_lines(text), 1):
         marker = FENCE_LINE.match(line)
         if fence_len:
             if marker and not marker.group(2).strip() and len(marker.group(1)) >= fence_len:
@@ -266,31 +284,58 @@ def _tracked_files(root: Path) -> list[str]:
     return [p for p in out.decode("utf-8", "replace").split("\0") if p]
 
 
-def _diff_names(root: Path, rng: str, *filters: str) -> list[str]:
-    """差分に出るパスを返す。
+def _diff_records(root: Path, rng: str, *filters: str) -> list[tuple[str, str | None, str]]:
+    """差分のレコードを (種別, 旧パス, 新パス) で返す。旧パスは rename / copy のときだけ入る。
 
-    -z を使うのは _ls_tree と同じ理由で、diff のヘッダ (`+++ b/...`) は非 ASCII を含むパスを
-    C クォートするため (実測: `+++ "b/docs/issues/ISSUE-50_\\346\\227\\245..."`)。Issue
-    ディレクトリはタイトル部を含むので非 ASCII が主流ケースになる。ヘッダでパスを対応付ける
-    実装は、その全部を落としたうえでエラーではなく短い正常な結果を返す
+    -M を明示するのは rename 検出を diff.renames の設定から切り離すためで、既定に任せると
+    マシンの設定で検査結果が変わる (実測: 設定を off にしても -M があれば R100 が出る)。
+    罠 3 で --diff-filter=AR にしたのは症状への対処で、-M が原因への対処にあたる。
+
+    旧パスが要るのは「名前が変わったのか、位置だけ変わったのか」を分けるため。Issue を
+    docs/issues 直下から closed/ へ移す操作は名前を変えないので、名前検査の対象にできない。
+
+    -z を使うのは _ls_tree と同じ理由で、既定出力は非 ASCII を含むパスを C クォートする
+    (実測)。-z の --name-status は 種別とパスを NUL で区切って並べ、R と C だけ
+    種別・旧パス・新パスの 3 要素になる (実測)
     """
-    out = _git(root, "diff", rng, *filters, "-z", "--name-only")
-    return [p for p in out.decode("utf-8", "replace").split("\0") if p]
+    out = _git(root, "diff", rng, "-M", *filters, "-z", "--name-status")
+    fields = [f for f in out.decode("utf-8", "replace").split("\0") if f]
+    records: list[tuple[str, str | None, str]] = []
+    i = 0
+    # 末尾が欠けたレコードは落とす。数を合わせるより読めた分だけを返す方が安全
+    while i + 1 < len(fields):
+        kind = fields[i][:1]
+        if kind in ("R", "C") and i + 2 < len(fields):
+            records.append((kind, fields[i + 1], fields[i + 2]))
+            i += 3
+        else:
+            records.append((kind, None, fields[i + 1]))
+            i += 2
+    return records
 
 
-def _added_lines(root: Path, rng: str, path: str) -> set[int]:
+def _added_lines(
+    root: Path, rng: str, path: str, old_path: str | None = None
+) -> set[int]:
     """path の差分で後側に増えた行番号を返す。
 
     pathspec は :(literal) で渡す。既定の pathspec は `*` `?` `[` を glob として解釈するので、
     それらを含むパスが別のファイルに当たるか 1 件も当たらない。
 
+    rename のときは旧パスも渡す。新パスだけに絞ると git は rename の対応付けを失い
+    `new file mode` として全行を追加行で返す (実測)。Issue を closed/ へ移す操作がこれに当たり、
+    本文の既存違反が丸ごと「追加行」として再浮上する。旧パスを添えると、内容が同じ移動は
+    hunk 0 件、内容を変えた移動は変えた行だけになる。
+
     --text を付けるのは、gitattributes で `-diff` が付いたファイルを git が binary として扱い
-    `Binary files a/x and b/x differ` を返して hunk を 1 件も出さないため (実測)。hunk が空だと
-    追加行集合も空になり、そのファイルの違反が全部免除される。結果は違反 0 件の緑で返るので
-    出力を見ても気づけない。ここへ来るのは _blob_text が UTF-8 として読めたファイルだけなので、
-    --text が本物の binary を展開することはない
+    hunk を 1 件も出さないため (実測)。hunk が空だと追加行集合も空になり、そのファイルの違反が
+    全部免除される。結果は違反 0 件の緑で返るので出力を見ても気づけない。ここへ来るのは
+    _blob_text が UTF-8 として読めたファイルだけなので、--text が本物の binary を展開しない
     """
-    out = _git(root, "diff", rng, "-U0", "--text", "--", f":(literal){path}")
+    specs = [f":(literal){path}"]
+    if old_path is not None:
+        specs.append(f":(literal){old_path}")
+    out = _git(root, "diff", rng, "-M", "-U0", "--text", "--", *specs)
     added: set[int] = set()
     for raw in out.decode("utf-8", "replace").splitlines():
         m = HUNK_HEADER.match(raw)
@@ -397,8 +442,9 @@ def _issue_dirs_of(paths: list[str]) -> list[tuple[str, str]]:
     """追跡下のパス一覧から Issue ディレクトリを (相対パス, 名前) で返す。
 
     issue_dirs() は filesystem を見るので、部分 stage のときに index と食い違う。増分モードは
-    走査対象を差分の後側へ統一するのでこちらを使う。git は空ディレクトリを追跡しないため、
-    中身の無い Issue ディレクトリだけが issue_dirs() との差になる
+    走査対象を差分の後側へ統一するのでこちらを使う。追跡されていない Issue ディレクトリ (git が
+    追跡しない空ディレクトリを含む) が issue_dirs() との差になる。--check 側は backstop なので
+    追跡前のものも見る。この非対称は意図したもので、両側にテストを置いてある
     """
     found: dict[str, str] = {}
     for path in paths:
@@ -514,18 +560,23 @@ def run_check_diff(root: Path, base: str | None) -> int:
 
     violations: list[str] = []
 
-    # ディレクトリ名は、新しく置かれた issue.md を持つ Issue だけを見る。
-    # --diff-filter に R を含めるのは、rename 検出が有効だと A が空になり、しかも
-    # diff.renames の on/off で結果が変わるため。マシンの設定で検査結果が変わるのは
-    # それ自体が欠陥で、移行期の主要操作が接頭辞付与の rename なので静かに素通りする
+    # ディレクトリ名は、新しく現れた名前だけを見る。起点を issue.md に限るのは、配下の
+    # 任意ファイルを起点にすると旧記法のディレクトリを触るたび赤くなるため。
+    # rename で位置だけが変わったもの (docs/issues 直下から closed/ への移動) を外すのは
+    # 名前が 1 文字も変わっていないためで、ここを分けないと旧記法の Issue を閉じるという
+    # 日常操作のたびに赤くなり、増分の ratchet が成立しない (実測)
     checked: list[str] = []
-    for path in _diff_names(root, rng, "--diff-filter=AR"):
+    for _kind, old, path in _diff_records(root, rng, "--diff-filter=AR"):
         got = issue_dir_of(path)
         if got is None:
             continue
         name, rel = got
         if path != f"{rel}/{ISSUE_FILE}":
             continue
+        if old is not None:
+            was = issue_dir_of(old)
+            if was is not None and was[0] == name:
+                continue
         checked.append(rel)
         if not ISSUE_DIR.match(name):
             violations.append(f"{rel}: ディレクトリ名が {PREFIX}<N>_<title> 形式でない")
@@ -536,7 +587,7 @@ def run_check_diff(root: Path, base: str | None) -> int:
     added_total = 0
     # d (小文字) は「削除以外」。削除されたファイルは index からも消えるので内容が取れず、
     # 入口で落とさないと「読めずに飛ばした」に化けて理由が要約から読めなくなる
-    for path in _diff_names(root, rng, "--diff-filter=d"):
+    for _kind, old, path in _diff_records(root, rng, "--diff-filter=d"):
         if Path(path).suffix in SKIP_SUFFIXES:
             excluded += 1
             continue
@@ -556,7 +607,7 @@ def run_check_diff(root: Path, base: str | None) -> int:
         if text is None:
             unreadable += 1
             continue
-        added = _added_lines(root, rng, path)
+        added = _added_lines(root, rng, path, old)
         added_total += len(added)
         scanned += 1
         for v in scan_text(text, path):
@@ -593,7 +644,7 @@ def run_check_text(source: str) -> int:
             return 2
     violations = scan_text(text, label)
     _report([v.message for v in violations])
-    print(f"走査した行: {len(text.splitlines())} 行 / 違反 {len(violations)} 件")
+    print(f"走査した行: {len(_split_lines(text))} 行 / 違反 {len(violations)} 件")
     return 1 if violations else 0
 
 

@@ -312,6 +312,18 @@ class ScanText(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assert_location(found[0], "probe.md:4")
 
+    def test_form_feed_is_not_a_line_boundary(self):
+        # git の diff が行区切りにするのは \n だけ。splitlines に合わせると増分モードの
+        # 行番号が git とずれ、追加行に載った違反が絞り込みから落ちる
+        found = self.flags(f"1 行目\n2 行目\x0c違反 {SIGIL}8\n")
+        self.assertEqual(len(found), 1)
+        self.assert_location(found[0], "probe.md:2")
+
+    def test_lone_carriage_return_is_not_a_line_boundary(self):
+        found = self.flags(f"1 行目\n2 行目\r違反 {SIGIL}8\n")
+        self.assertEqual(len(found), 1)
+        self.assert_location(found[0], "probe.md:2")
+
     def test_unclosed_fence_is_reported(self):
         text = "\n".join(["前書き", fence(), f"fix {SIGIL}8", ""])
         found = self.flags(text)
@@ -417,6 +429,18 @@ class CheckRepository(unittest.TestCase):
         self.assertIn("番号 8 が重複している", err)
         self.assertIn(f"docs/issues/{PREFIX}8_開いている課題", err)
         self.assertIn(f"docs/issues/closed/{PREFIX}8_閉じた課題", err)
+
+    def test_untracked_issue_directory_is_flagged(self):
+        # --check は filesystem を見る。増分モードと同じ index ベースへ寄せると、
+        # 作りかけの Issue ディレクトリが検査から落ちる。全走査の backstop としては
+        # 追跡前でも見える方が正しく、増分モード側とは意図的に非対称にしてある
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            write(root, "docs/issues/13_未追跡の課題/issue.md")
+            rc, out, err = run(["--check", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertIn("docs/issues/13_未追跡の課題:", err)
 
     def test_stylesheets_are_excluded(self):
         # 色指定は数字記法と同じ形になるので走査から外す
@@ -525,6 +549,18 @@ class CheckDiff(unittest.TestCase):
             self.stage(root, "notes.md", "無害な行\n")
             rc, out, err = run(["--check-diff", "--root", str(root)])
         self.assertEqual(rc, 0, err)
+
+    def test_editing_an_existing_legacy_issue_does_not_flag_its_name(self):
+        # 名前検査の対象を M まで広げると、旧記法の Issue の本文を直すたびに赤くなる。
+        # 移行期に最も多い操作がこれなので、ここで ratchet が崩れる
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, ("13_旧記法の課題",))
+            self.stage(root, "docs/issues/13_旧記法の課題/issue.md", "本文を書き換えた\n")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("Issue ディレクトリ: 0 個", out)
+        self.assertIn("走査したファイル: 1 個", out)
 
     def test_adding_a_file_to_a_legacy_directory_does_not_flag_the_name(self):
         # 名前検査の起点は issue.md の追加だけ。配下の任意ファイルで起点にすると、
@@ -753,6 +789,100 @@ class CheckDiff(unittest.TestCase):
                 self.assertEqual(rc, 0, err)
                 self.assertIn("Issue ディレクトリ: 1 個", out)
 
+    # --- rename で位置だけが変わる操作 (Issue を閉じる) --------------------------
+
+    def test_closing_a_legacy_issue_does_not_flag_its_name(self):
+        # docs/issues 直下から closed/ への移動は名前を変えない。ここを名前検査の対象に
+        # すると、旧記法の Issue を閉じるという日常操作のたびに赤くなり ratchet が壊れる
+        for renames in ("true", "false"):
+            with self.subTest(renames=renames), TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                init_repo(root, ("13_旧記法の課題",))
+                git(root, "config", "diff.renames", renames)
+                (root / "docs" / "issues" / "closed").mkdir(parents=True, exist_ok=True)
+                git(
+                    root,
+                    "mv",
+                    "docs/issues/13_旧記法の課題",
+                    "docs/issues/closed/13_旧記法の課題",
+                )
+                git(root, "add", "-A")
+                rc, out, err = run(["--check-diff", "--root", str(root)])
+                self.assertEqual(rc, 0, err)
+                self.assertIn("Issue ディレクトリ: 0 個", out)
+
+    def test_closing_an_issue_does_not_resurface_its_existing_violations(self):
+        # per-file の pathspec は rename の対応付けを壊し、git が new file mode として
+        # 全行を追加行で返す。本文の既存違反が丸ごと再浮上する (実測)
+        for renames in ("true", "false"):
+            with self.subTest(renames=renames), TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                init_repo(root, ())
+                git(root, "config", "diff.renames", renames)
+                write(
+                    root,
+                    f"docs/issues/{PREFIX}77_古い課題/issue.md",
+                    f"前書き\n古い参照 {SIGIL}77\n",
+                )
+                commit(root, "legacy issue")
+                (root / "docs" / "issues" / "closed").mkdir(parents=True, exist_ok=True)
+                git(
+                    root,
+                    "mv",
+                    f"docs/issues/{PREFIX}77_古い課題",
+                    f"docs/issues/closed/{PREFIX}77_古い課題",
+                )
+                git(root, "add", "-A")
+                rc, out, err = run(["--check-diff", "--root", str(root)])
+                self.assertEqual(rc, 0, err)
+                self.assertIn("追加行: 0 行", out)
+
+    def test_content_changed_during_a_move_reports_only_the_new_line(self):
+        # 移動と編集が同じコミットに入る形。変えた行だけが追加行になること
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, ())
+            write(
+                root,
+                f"docs/issues/{PREFIX}55_課題/issue.md",
+                f"前書き\n古い参照 {SIGIL}55\n",
+            )
+            commit(root, "legacy issue")
+            (root / "docs" / "issues" / "closed").mkdir(parents=True, exist_ok=True)
+            git(
+                root,
+                "mv",
+                f"docs/issues/{PREFIX}55_課題",
+                f"docs/issues/closed/{PREFIX}55_課題",
+            )
+            write(
+                root,
+                f"docs/issues/closed/{PREFIX}55_課題/issue.md",
+                f"前書き\n古い参照 {SIGIL}55\n新しい参照 {SIGIL}99\n",
+            )
+            git(root, "add", "-A")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertIn("追加行: 1 行", out)
+        # 3 行目 (新しく足した行) だけが報告され、2 行目の既存違反は報告されない。
+        # 識別子で見るとディレクトリ名側の一致を拾うので行番号で見る
+        self.assertIn("/issue.md:3:", err)
+        self.assertNotIn("/issue.md:2:", err)
+        self.assertIn("違反 1 件", out)
+
+    def test_renaming_a_bad_name_into_another_bad_name_is_still_flagged(self):
+        # 位置だけの移動を外す条件が広すぎないこと。名前が変われば検査対象に戻る
+        for renames in ("true", "false"):
+            with self.subTest(renames=renames), TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                init_repo(root, ("13_もとの名前",))
+                git(root, "config", "diff.renames", renames)
+                git(root, "mv", "docs/issues/13_もとの名前", "docs/issues/13_べつの名前")
+                git(root, "add", "-A")
+                rc, out, err = run(["--check-diff", "--root", str(root)])
+                self.assertEqual(rc, 1)
+                self.assertIn("docs/issues/13_べつの名前:", err)
+
     # --- 11: submodule ----------------------------------------------------------
 
     def test_submodule_entry_does_not_raise(self):
@@ -812,6 +942,21 @@ class CheckDiff(unittest.TestCase):
             rc, out, err = run(["--check-diff", "--root", str(root)])
         self.assertEqual(rc, 1)
         self.assertIn("doc.md:2:", err)
+
+    def test_line_boundaries_follow_git_not_python(self):
+        # Python の splitlines は \f / 単独の \r / \v も行境界にするが git は \n だけ。
+        # ずれると追加行に載った違反が絞り込みから落ち、違反 0 件の緑で返る (実測)
+        for name, sep in (("form feed", "\x0c"), ("lone CR", "\r"), ("vertical tab", "\x0b")):
+            with self.subTest(separator=name), TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                init_repo(root, (f"{PREFIX}1_最初の課題",))
+                write(root, "doc.md", "1 行目\n")
+                commit(root, "base")
+                self.stage(root, "doc.md", f"1 行目\n2 行目{sep}違反 {SIGIL}8\n")
+                rc, out, err = run(["--check-diff", "--root", str(root)])
+                self.assertEqual(rc, 1)
+                self.assertIn("doc.md:2:", err)
+                self.assertIn("追加行: 1 行", out)
 
     def test_untracked_issue_directory_does_not_trigger_a_duplicate(self):
         # 番号の重複も走査対象を差分の後側へ揃える。worktree を見ると、まだ index に無い
@@ -941,8 +1086,8 @@ class ArgumentSurface(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 2)
 
     def test_abbreviated_flag_is_rejected(self):
-        # プローブは曖昧でない前方一致にする。--che は --check と --check-text の両方に
-        # 前方一致するので allow_abbrev の既定 (True) でも ambiguous option で
+        # プローブは曖昧でない前方一致にする。--che は --check 系の複数へ前方一致する
+        # ので allow_abbrev の既定 (True) でも ambiguous option で
         # SystemExit(2) になり、機構と無関係に緑になる (実測)。--nex は --next にしか
         # 前方一致しないので既定では受理され、typo が静かに採番モードへ落ちる。
         # --root を完全形で添えてあるのは、受理されてしまう変異下でも実リポジトリを
