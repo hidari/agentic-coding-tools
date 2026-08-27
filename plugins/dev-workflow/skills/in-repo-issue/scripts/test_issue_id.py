@@ -7,6 +7,10 @@ tempfile + git init の fixture リポジトリで検証する。実ツリーに
 検査対象を壊す変異だけでなく、検査機構そのものを壊す変異 (免除定数を空にする・フェンス
 閉じ忘れの報告を落とす・ls-tree の -r を外す) と、免除が広がりすぎる方向の変異
 (後読みへ英数字を足す) が赤になることを狙って pin を置く。
+
+増分モード (--check-diff) は「見る範囲を狭める」機構なので、狙う方向は緩めすぎる側に寄る。
+本来止めるべき新規違反が素通りする経路を pin の重点にし、対照として「既存違反は報告しない」
+も同時に置く。ratchet 側だけを見ると、何も報告しない実装でも緑になる。
 """
 
 from __future__ import annotations
@@ -231,7 +235,9 @@ class NextIdentifier(unittest.TestCase):
 
 class ScanText(unittest.TestCase):
     def flags(self, text: str, label: str = "probe.md") -> list[str]:
-        return issue_id.scan_text(text, label)
+        # scan_text は増分モードのフィルタ用に (行番号, 種別, メッセージ) を返す。
+        # 位置と種別を直接 pin するのは Located クラスの担当で、ここは文言だけを見る
+        return [v.message for v in issue_id.scan_text(text, label)]
 
     def assert_location(self, violation: str, expected: str) -> None:
         self.assertEqual(violation.split(": ", 1)[0], expected)
@@ -322,6 +328,33 @@ class ScanText(unittest.TestCase):
         # 4 連で開いた中の 3 連は閉じにならない。閉じ扱いすると以降の行が誤検出される
         text = "\n".join([fence(4), fence(3), f"fix {SIGIL}8", fence(3), fence(4), ""])
         self.assertEqual(self.flags(text), [])
+
+
+class LocatedViolation(unittest.TestCase):
+    """走査結果が行番号と種別を構造として持つこと。
+
+    増分モードは行番号で違反を絞り、フェンス閉じ忘れだけを絞りから外す。メッセージ文字列を
+    パースして両者を得る実装だと、文言を変えた瞬間にフィルタが黙って全通しへ倒れる。
+    """
+
+    def test_bare_reference_carries_its_line_and_kind(self):
+        found = issue_id.scan_text(f"一行目\n二行目 {SIGIL}8\n", "probe.md")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].lineno, 2)
+        self.assertEqual(found[0].kind, issue_id.KIND_BARE_REF)
+
+    def test_unclosed_fence_has_a_distinct_kind(self):
+        # 種別が同じだと増分モードが閉じ忘れを行番号で落とせる (罠 1 の入口)
+        found = issue_id.scan_text("\n".join(["前書き", fence(), f"fix {SIGIL}8", ""]), "p.md")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].kind, issue_id.KIND_UNCLOSED_FENCE)
+        self.assertNotEqual(issue_id.KIND_UNCLOSED_FENCE, issue_id.KIND_BARE_REF)
+
+    def test_message_and_lineno_agree(self):
+        # 同じ行番号を 2 つの形で持つので、食い違わないことを見る
+        found = issue_id.scan_text(f"a\nb\nc {SIGIL}8\n", "probe.md")
+        self.assertEqual(len(found), 1)
+        self.assertTrue(found[0].message.startswith(f"probe.md:{found[0].lineno}: "))
 
 
 class CheckRepository(unittest.TestCase):
@@ -462,6 +495,443 @@ class CheckText(unittest.TestCase):
         self.assertIn("読めない", err)
 
 
+class CheckDiff(unittest.TestCase):
+    """増分モード (--check-diff) の仕様 pin。
+
+    11 件は spec のテスト方針表に対応する。重点は緩めすぎる方向で、
+    「範囲を絞ったせいで新規違反が素通りする」経路を潰す。
+    """
+
+    def stage(self, root: Path, rel: str, text: str = "本文\n") -> None:
+        write(root, rel, text)
+        git(root, "add", "-A")
+
+    # --- 1: 新規 Issue ディレクトリの名前違反 ---------------------------------
+
+    def test_new_issue_directory_with_legacy_name_is_flagged(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            self.stage(root, "docs/issues/13_旧形式の課題/issue.md")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertIn("docs/issues/13_旧形式の課題:", err)
+
+    def test_existing_legacy_directory_is_not_flagged(self):
+        # ratchet の本体。取り付けた瞬間に既存 938 件が赤くなるのを避ける理由がここ
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, ("13_旧形式の課題",))
+            self.stage(root, "notes.md", "無害な行\n")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+
+    def test_adding_a_file_to_a_legacy_directory_does_not_flag_the_name(self):
+        # 名前検査の起点は issue.md の追加だけ。配下の任意ファイルで起点にすると、
+        # 旧記法ディレクトリを触るたび赤くなり ratchet が成立しない
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, ("13_旧形式の課題",))
+            self.stage(root, "docs/issues/13_旧形式の課題/13-spec.md")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("Issue ディレクトリ: 0 個", out)
+
+    # --- 2: 追加行の数字記法 ---------------------------------------------------
+
+    def test_added_line_with_a_bare_reference_is_flagged(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            self.stage(root, "notes.md", f"直したのは {SIGIL}8\n")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertIn("notes.md:1:", err)
+        self.assertIn("違反 1 件", out)
+
+    # --- 3: --base 指定時の range ----------------------------------------------
+
+    def test_base_ref_sees_only_the_branch_side(self):
+        # three-dot にしないと base 側だけにあるコミットが差分へ混ざる (実測)
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            git(root, "checkout", "-q", "-b", "feat")
+            write(root, "feature.md", f"新しい違反 {SIGIL}8\n")
+            commit(root, "feat")
+            git(root, "checkout", "-q", "main")
+            write(root, "on-main.md", "main 側の無害な変更\n")
+            commit(root, "main only")
+            git(root, "checkout", "-q", "feat")
+            rc, out, err = run(["--check-diff", "--base", "main", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertIn("feature.md:1:", err)
+        self.assertIn("main...HEAD", out)
+        # base 側のファイルは差分に入らない
+        self.assertIn("走査したファイル: 1 個", out)
+
+    def test_base_ref_with_no_difference_is_green(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            rc, out, err = run(["--check-diff", "--base", "main", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("追加行: 0 行", out)
+
+    # --- 4: フェンス内の追加行は免除 -------------------------------------------
+
+    def test_added_line_inside_a_fence_is_exempt(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            body = "\n".join([fence(), f"git commit -m 'fix {SIGIL}8'", fence(), ""])
+            self.stage(root, "notes.md", body)
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+
+    # --- 5: 既存行は報告しない (ratchet) ---------------------------------------
+
+    def test_pre_existing_violation_on_an_untouched_line_is_not_reported(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            write(root, "notes.md", f"古い違反 {SIGIL}8\n")
+            commit(root, "legacy violation")
+            self.stage(root, "notes.md", f"古い違反 {SIGIL}8\n無害な追記\n")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("追加行: 1 行", out)
+
+    def test_touching_a_line_that_holds_a_violation_reports_it(self):
+        # 5 の裏。既存違反でも、その行を書き換えたら追加行になるので報告される
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            write(root, "notes.md", f"古い違反 {SIGIL}8\n")
+            commit(root, "legacy violation")
+            self.stage(root, "notes.md", f"直した違反 {SIGIL}8\n")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertIn("notes.md:1:", err)
+
+    # --- 6: 番号の重複は全体で見る ---------------------------------------------
+
+    def test_duplicate_number_is_seen_across_the_whole_tree(self):
+        # 増分でも全体を見る規則。緩めると同じ番号の Issue が静かに 2 つできる
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}8_開いている課題",))
+            self.stage(root, f"docs/issues/closed/{PREFIX}8_閉じた課題/issue.md")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertIn("番号 8 が重複している", err)
+
+    def test_duplicate_number_between_two_untouched_directories_is_still_seen(self):
+        # 6 の要。差分に出ないディレクトリどうしの重複も見る。増分で絞ると落ちる経路
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(
+                root, (f"{PREFIX}8_開いている課題", f"closed/{PREFIX}8_閉じた課題")
+            )
+            self.stage(root, "notes.md", "無害な行\n")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertIn("番号 8 が重複している", err)
+
+    # --- 7: base の閉じ忘れフェンス (罠 1) --------------------------------------
+
+    def test_unclosed_fence_in_base_does_not_turn_the_increment_green(self):
+        # base のフェンスが開きっぱなしだと、追加行の違反は「フェンス内」として消え、
+        # 閉じ忘れ違反は旧行番号に付くので行番号フィルタでも消える。完全な緑になる
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            write(root, "doc.md", "\n".join(["前書き", fence(), "開いたまま", ""]))
+            commit(root, "unclosed fence")
+            self.stage(
+                root,
+                "doc.md",
+                "\n".join(["前書き", fence(), "開いたまま", f"あとで {SIGIL}8", ""]),
+            )
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertIn("閉じていない", err)
+
+    def test_unclosed_fence_opened_by_the_increment_is_reported(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            self.stage(root, "doc.md", "\n".join(["前書き", fence(), "開いたまま", ""]))
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertIn("閉じていない", err)
+
+    # --- 8: partial staging (罠 4) ---------------------------------------------
+
+    def test_unstaged_violation_is_not_reported(self):
+        # index を走査しないと、worktree の未 stage 違反で偽陽性になる
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            write(root, "doc.md", "1 行目\n2 行目\n")
+            commit(root, "base")
+            write(root, "doc.md", "1 行目\n2 行目\n3 行目\n")
+            git(root, "add", "doc.md")
+            # stage したあとで、上の行へ未 stage の違反を足す
+            write(root, "doc.md", f"違反 {SIGIL}8\n1 行目\n2 行目\n3 行目\n")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+
+    def test_staged_violation_is_reported_even_if_the_worktree_hides_it(self):
+        # 8 の裏。worktree を走査していると、コミットされる違反を見落とす
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            write(root, "doc.md", "1 行目\n")
+            commit(root, "base")
+            write(root, "doc.md", f"1 行目\n違反 {SIGIL}8\n")
+            git(root, "add", "doc.md")
+            write(root, "doc.md", "1 行目\n直したので worktree には無い\n")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertIn("doc.md:2:", err)
+
+    # --- 9: 非 ASCII のパス (罠 2) ---------------------------------------------
+
+    def test_violation_under_a_non_ascii_directory_is_found(self):
+        # diff のヘッダは非 ASCII パスを C クォートする。ヘッダでパスを対応付ける実装だと
+        # 日本語タイトルの Issue が全部落ちる。主流ケースなので端ケースではない
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            rel = f"docs/issues/{PREFIX}50_日本語のタイトル/issue.md"
+            self.stage(root, rel, f"参照は {SIGIL}8\n")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertIn(f"{rel}:1:", err)
+        self.assertIn("走査したファイル: 1 個", out)
+
+    def test_non_ascii_directory_name_violation_is_found(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            self.stage(root, "docs/issues/50_日本語のタイトル/issue.md")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertIn("docs/issues/50_日本語のタイトル:", err)
+
+    # --- 10: rename (罠 3) ------------------------------------------------------
+
+    def test_rename_into_a_bad_name_is_flagged_regardless_of_rename_detection(self):
+        # --diff-filter=A は rename 検出下で空になる。マシンの git 設定で検査結果が
+        # 変わるのはそれ自体が欠陥なので、両設定で同じ結果になることを pin する
+        for renames in ("true", "false"):
+            with self.subTest(renames=renames), TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                init_repo(root, (f"{PREFIX}43_元の課題",))
+                git(root, "config", "diff.renames", renames)
+                git(
+                    root,
+                    "mv",
+                    f"docs/issues/{PREFIX}43_元の課題",
+                    "docs/issues/43_接頭辞を落とした",
+                )
+                git(root, "add", "-A")
+                rc, out, err = run(["--check-diff", "--root", str(root)])
+                self.assertEqual(rc, 1)
+                self.assertIn("docs/issues/43_接頭辞を落とした:", err)
+
+    def test_rename_into_a_good_name_is_green_regardless_of_rename_detection(self):
+        for renames in ("true", "false"):
+            with self.subTest(renames=renames), TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                init_repo(root, ("43_旧形式",))
+                git(root, "config", "diff.renames", renames)
+                git(root, "mv", "docs/issues/43_旧形式", f"docs/issues/{PREFIX}43_旧形式")
+                git(root, "add", "-A")
+                rc, out, err = run(["--check-diff", "--root", str(root)])
+                self.assertEqual(rc, 0, err)
+                self.assertIn("Issue ディレクトリ: 1 個", out)
+
+    # --- 11: submodule ----------------------------------------------------------
+
+    def test_submodule_entry_does_not_raise(self):
+        # gitlink は diff に hunk 付きで出るが blob を持たないので内容取得が失敗する。
+        # 例外にすると差分に submodule が含まれるだけで検査全体が rc 2 になる
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            sha = git_out(root, "rev-parse", "HEAD")
+            git(root, "update-index", "--add", "--cacheinfo", f"160000,{sha},child")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("submodule 1", out)
+
+    def test_submodule_alongside_a_real_violation_still_reports_it(self):
+        # submodule の skip が、同じ差分の他のファイルまで落とさないこと
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            sha = git_out(root, "rev-parse", "HEAD")
+            git(root, "update-index", "--add", "--cacheinfo", f"160000,{sha},child")
+            self.stage(root, "notes.md", f"違反 {SIGIL}8\n")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertIn("notes.md:1:", err)
+
+    # --- pathspec と走査対象の一致 ----------------------------------------------
+
+    def test_glob_characters_in_a_path_do_not_pull_in_another_file(self):
+        # pathspec を素で渡すと `[` が文字クラスとして効き、note[1].md の行番号を引くつもりで
+        # note1.md の hunk まで混ざる (実測)。混ざった行番号は既存違反を「追加行」に見せる
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            write(root, "note1.md", "古い\n")
+            write(root, "note[1].md", f"既存の違反 {SIGIL}8\n")
+            commit(root, "base")
+            # note1.md の 1 行目を書き換える。glob が当たると added に 1 が混ざり、
+            # note[1].md の 1 行目にある既存違反が報告されてしまう
+            write(root, "note1.md", "新しい\n")
+            write(root, "note[1].md", f"既存の違反 {SIGIL}8\n無害な追記\n")
+            git(root, "add", "-A")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("走査したファイル: 2 個", out)
+
+    def test_gitattributes_suppressing_diff_does_not_exempt_the_file(self):
+        # `-diff` 属性が付くと git は binary 扱いで hunk を出さず、追加行集合が空になる。
+        # そのファイルの違反が全部免除され、しかも違反 0 件の緑で返る (実測)
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            write(root, "doc.md", "1 行目\n")
+            write(root, ".gitattributes", "*.md -diff\n")
+            commit(root, "base")
+            self.stage(root, "doc.md", f"1 行目\n違反 {SIGIL}8\n")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertIn("doc.md:2:", err)
+
+    def test_untracked_issue_directory_does_not_trigger_a_duplicate(self):
+        # 番号の重複も走査対象を差分の後側へ揃える。worktree を見ると、まだ index に無い
+        # 作りかけの Issue ディレクトリが重複として報告される
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}8_開いている課題",))
+            write(root, f"docs/issues/{PREFIX}8_作りかけ/issue.md")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+
+    def test_last_line_of_a_hunk_is_inside_the_added_set(self):
+        # 追加行の範囲を 1 行短く取ると、hunk の末尾に置いた違反が静かに落ちる
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            write(root, "doc.md", "1 行目\n")
+            commit(root, "base")
+            self.stage(root, "doc.md", f"1 行目\n無害な追記\n末尾に違反 {SIGIL}8\n")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertIn("doc.md:3:", err)
+        self.assertIn("追加行: 2 行", out)
+
+    def test_hunk_marker_inside_an_added_line_is_not_read_as_a_header(self):
+        # HUNK_HEADER の行頭固定を外すと、追加行の本文にある `@@ -1 +9 @@` が hunk ヘッダに
+        # 見え、実在しない行番号が追加行集合へ入る
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            write(root, "doc.md", f"1 行目\n2 行目の既存違反 {SIGIL}8\n")
+            commit(root, "base")
+            self.stage(
+                root,
+                "doc.md",
+                f"1 行目\n2 行目の既存違反 {SIGIL}8\n差分の話 @@ -1 +2 @@ を引用する\n",
+            )
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("追加行: 1 行", out)
+
+    # --- 走査の要約と終了コード -------------------------------------------------
+
+    def test_empty_diff_is_green_and_still_reports_the_range(self):
+        # 配線ミス (base が常に HEAD と一致する等) と正常な空コミットを区別するために、
+        # 何を何件見たかを必ず出す。0 件を黙って緑にすると両者が同じ見た目になる
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("差分 index", out)
+        self.assertIn("追加行: 0 行", out)
+        self.assertIn("走査したファイル: 0 個", out)
+        self.assertIn("違反なし", out)
+
+    def test_unknown_base_ref_is_exit_2(self):
+        # 検査不能 (2) を違反 (1) と混ぜない。base が解決できない CI を規約違反に見せない
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            rc, out, err = run(
+                ["--check-diff", "--base", "no-such-ref", "--root", str(root)]
+            )
+        self.assertEqual(rc, 2)
+        self.assertIn("git diff", err)
+
+    def test_non_git_root_is_exit_2(self):
+        with TemporaryDirectory() as tmp:
+            rc, out, err = run(["--check-diff", "--root", tmp])
+        self.assertEqual(rc, 2)
+
+    def test_deleted_file_is_not_scanned(self):
+        # 削除されたファイルは index から消えるので内容が取れない。入口で落とさないと
+        # 「読めずに飛ばした」に化けて、飛ばした理由が要約から読めなくなる
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            write(root, "doomed.md", "消える\n")
+            commit(root, "add doomed")
+            git(root, "rm", "-q", "doomed.md")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("走査したファイル: 0 個", out)
+        self.assertIn("読めずに飛ばした 0", out)
+
+    def test_stylesheet_is_excluded(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            self.stage(root, "theme.css", "a { color: " + SIGIL + "336699; }\n")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("拡張子で除外 1", out)
+
+    def test_unreadable_blob_is_exit_2(self):
+        # 壊れたリポジトリを「読めずに飛ばした」へ数えると違反 0 件の緑になる。
+        # 検査不能は 1 ではなく 2 で返す
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            real = git_out(root, "rev-parse", "HEAD:README.md")
+            # 実在しない oid を同じ長さで作る。長さを literal で書くとハッシュ方式に依存する
+            fake = ("0" if real[0] != "0" else "1") + real[1:]
+            git(root, "update-index", "--add", "--cacheinfo", f"100644,{fake},broken.md")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 2)
+        self.assertIn("cat-file", err)
+
+    def test_undecodable_file_is_counted_as_skipped(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            (root / "blob.dat").write_bytes(b"\xff\xfe\x00\x80")
+            git(root, "add", "-A")
+            rc, out, err = run(["--check-diff", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("読めずに飛ばした 1", out)
+
+
 class ArgumentSurface(unittest.TestCase):
     def test_no_mode_is_rejected(self):
         # 入口を指定しない呼び出しが「何もせず緑」にならないこと
@@ -481,6 +951,25 @@ class ArgumentSurface(unittest.TestCase):
             err = io.StringIO()
             with redirect_stderr(err), self.assertRaises(SystemExit) as ctx:
                 issue_id.main(["--nex", "--root", tmp])
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_base_without_check_diff_is_rejected(self):
+        # 静かに無視すると「base を指定したのに staged を見ていた」形になり、
+        # CI が意図と違う範囲を緑にする
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            err = io.StringIO()
+            with redirect_stderr(err), self.assertRaises(SystemExit) as ctx:
+                issue_id.main(["--check", "--base", "main", "--root", str(root)])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("--base", err.getvalue())
+
+    def test_check_and_check_diff_are_mutually_exclusive(self):
+        with TemporaryDirectory() as tmp:
+            err = io.StringIO()
+            with redirect_stderr(err), self.assertRaises(SystemExit) as ctx:
+                issue_id.main(["--check", "--check-diff", "--root", tmp])
         self.assertEqual(ctx.exception.code, 2)
 
 

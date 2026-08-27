@@ -10,12 +10,19 @@ in-repo Issue は `docs/issues/<dir>/` というディレクトリなので GitH
 この規約の canonical はこのファイル。SKILL.md も CLAUDE.md も regex も接頭辞も再掲せず、
 ファイル名で参照する。
 
-規則は 1 つ、エンジンは 1 つ、入口は 3 つ。
+規則は 1 つ、エンジンは 1 つ、入口は 4 つ。
 
   規則:     数字記法は GitHub 専用。直前が `PR ` (自リポの PR) か `owner/repo` (他リポ) の
             ときだけ許す。in-repo Issue を指す唯一の形は `ISSUE-<N>`
   エンジン: scan_text() 1 本。入口ごとに規則が分岐しない
-  入口:     --next (採番) / --check (リポジトリ走査) / --check-text (テキスト 1 本)
+  入口:     --next (採番) / --check (リポジトリ全走査) / --check-diff (差分だけ) /
+            --check-text (テキスト 1 本)
+
+--check-diff は見る範囲だけを差分へ絞る。規則もエンジンも --check と共有する。既存の違反を
+どこにも記録せずに免除するので、増分が見落とした違反はそのまま恒久的な baseline になる。
+これは設計上の選択で、検査の取り付けと既存ディレクトリの一括 rename を切り離すために
+引き受けている。範囲を絞る対象は「ディレクトリ名の形式」と「数字記法」だけで、番号の重複は
+絞っても逃げられる先が無いので全体を見たままにする。
 
 終了コードは 0 (合格) / 1 (違反あり) / 2 (検査不能)。2 を 1 と分けるのは
 scripts/check-leak-guard-rules.py と同じ理由で、「規約違反」と「検査を走らせられなかった」を
@@ -41,6 +48,8 @@ scripts/check-leak-guard-rules.py と同じ理由で、「規約違反」と「�
   報告する (偽陽性側に倒している)。重複と判定されると --next は識別子を出さず exit 1 で
   止まる。つまり新規起票が一切できなくなるので、Issue ディレクトリを rename するときは
   番号もタイトル部も保存し、接頭辞の付与だけに留めること
+- --check-diff の免除は記録に残らないので、件数を監査できない。--check が全走査の backstop
+  になる。取り付ける側は増分だけに頼らないこと
 """
 
 from __future__ import annotations
@@ -50,6 +59,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 PREFIX = "ISSUE-"
 ISSUE_DIR = re.compile(r"^" + re.escape(PREFIX) + r"([0-9]+)_")
@@ -70,12 +80,41 @@ ISSUE_ROOT = ("docs", "issues")
 CLOSED = "closed"
 TEMPLATES = "templates"
 
+# 増分モードでディレクトリ名の検査を起こす唯一のファイル。配下の任意ファイルを起点にすると、
+# 旧記法のディレクトリを触るたびに赤くなり、増分の ratchet が成立しない
+ISSUE_FILE = "issue.md"
+
+# gitlink (submodule) の mode。差分には hunk 付きで出るが blob を持たないので内容が取れない
+GITLINK_MODE = "160000"
+
 SKIP_SUFFIXES = {".css", ".scss"}
 
 # フェンスは N 連バッククォート (3 個以上) で開き、同じ N 個以上で閉じる (CommonMark)。
 # 開き行は情報文字列を持てるがバッククォートは含められない。閉じ行はバッククォートだけ。
 # 3 連で開いて 4 連で閉じる形は「閉じている」であって閉じ忘れではない
 FENCE_LINE = re.compile(r"^ {0,3}(`{3,})([^`]*)$")
+
+# `@@ -<旧開始>,<旧行数> +<新開始>,<新行数> @@` の新側だけを読む。行数は 1 のとき省略される
+HUNK_HEADER = re.compile(r"^@@ -[0-9]+(?:,[0-9]+)? \+([0-9]+)(?:,([0-9]+))? @@")
+
+KIND_BARE_REF = "bare-ref"
+KIND_UNCLOSED_FENCE = "unclosed-fence"
+
+
+class Violation(NamedTuple):
+    """走査で見つけた違反 1 件。
+
+    message は位置を含む完成した表示文字列で、lineno と kind は増分モードが絞り込みに使う。
+    行番号を 2 つの形で持つが、両方を 1 箇所で組むので食い違わない。message を parse して
+    行番号を取り出す実装だと、label にコロンを含むパスで静かに壊れる。
+
+    kind を持つのは、閉じ忘れフェンスだけを行番号の絞り込みから外すため。メッセージの文言で
+    見分ける実装は、文言を変えた瞬間に絞り込みが黙って全通しへ倒れる。
+    """
+
+    lineno: int
+    kind: str
+    message: str
 
 
 class GitError(RuntimeError):
@@ -120,7 +159,7 @@ def _mask_inline_code(line: str) -> str:
     return "".join(out)
 
 
-def _scan_line(line: str, label: str, lineno: int) -> list[str]:
+def _scan_line(line: str, label: str, lineno: int) -> list[Violation]:
     found = []
     for m in GITHUB_REF.finditer(line):
         before = line[: m.start()]
@@ -131,17 +170,21 @@ def _scan_line(line: str, label: str, lineno: int) -> list[str]:
         if CROSS_REPO_REF.search(before):
             continue
         found.append(
-            f"{label}:{lineno}: {m.group(0)} は GitHub の番号空間を指す。"
-            f"in-repo Issue なら {PREFIX}{m.group(1)} と書く。"
-            f"自リポの PR なら '{GITHUB_REF_ALLOWED_PREFIX}' を、"
-            "他リポなら 'owner/repo' を直前に置く"
+            Violation(
+                lineno,
+                KIND_BARE_REF,
+                f"{label}:{lineno}: {m.group(0)} は GitHub の番号空間を指す。"
+                f"in-repo Issue なら {PREFIX}{m.group(1)} と書く。"
+                f"自リポの PR なら '{GITHUB_REF_ALLOWED_PREFIX}' を、"
+                "他リポなら 'owner/repo' を直前に置く",
+            )
         )
     return found
 
 
-def scan_text(text: str, label: str) -> list[str]:
-    """テキスト 1 本を走査し、違反を 1 件 1 行の文字列で返す。"""
-    violations: list[str] = []
+def scan_text(text: str, label: str) -> list[Violation]:
+    """テキスト 1 本を走査し、違反を返す。"""
+    violations: list[Violation] = []
     fence_len = 0
     fence_opened_at = 0
     for lineno, line in enumerate(text.splitlines(), 1):
@@ -157,9 +200,13 @@ def scan_text(text: str, label: str) -> list[str]:
         violations.extend(_scan_line(_mask_inline_code(line), label, lineno))
     if fence_len:
         violations.append(
-            f"{label}:{fence_opened_at}: コードフェンスが閉じていない "
-            f"(バッククォート {fence_len} 個以上で閉じる)。"
-            "閉じ忘れは以降の全行を無検査にする"
+            Violation(
+                fence_opened_at,
+                KIND_UNCLOSED_FENCE,
+                f"{label}:{fence_opened_at}: コードフェンスが閉じていない "
+                f"(バッククォート {fence_len} 個以上で閉じる)。"
+                "閉じ忘れは以降の全行を無検査にする",
+            )
         )
     return violations
 
@@ -219,6 +266,82 @@ def _tracked_files(root: Path) -> list[str]:
     return [p for p in out.decode("utf-8", "replace").split("\0") if p]
 
 
+def _diff_names(root: Path, rng: str, *filters: str) -> list[str]:
+    """差分に出るパスを返す。
+
+    -z を使うのは _ls_tree と同じ理由で、diff のヘッダ (`+++ b/...`) は非 ASCII を含むパスを
+    C クォートするため (実測: `+++ "b/docs/issues/ISSUE-50_\\346\\227\\245..."`)。Issue
+    ディレクトリはタイトル部を含むので非 ASCII が主流ケースになる。ヘッダでパスを対応付ける
+    実装は、その全部を落としたうえでエラーではなく短い正常な結果を返す
+    """
+    out = _git(root, "diff", rng, *filters, "-z", "--name-only")
+    return [p for p in out.decode("utf-8", "replace").split("\0") if p]
+
+
+def _added_lines(root: Path, rng: str, path: str) -> set[int]:
+    """path の差分で後側に増えた行番号を返す。
+
+    pathspec は :(literal) で渡す。既定の pathspec は `*` `?` `[` を glob として解釈するので、
+    それらを含むパスが別のファイルに当たるか 1 件も当たらない。
+
+    --text を付けるのは、gitattributes で `-diff` が付いたファイルを git が binary として扱い
+    `Binary files a/x and b/x differ` を返して hunk を 1 件も出さないため (実測)。hunk が空だと
+    追加行集合も空になり、そのファイルの違反が全部免除される。結果は違反 0 件の緑で返るので
+    出力を見ても気づけない。ここへ来るのは _blob_text が UTF-8 として読めたファイルだけなので、
+    --text が本物の binary を展開することはない
+    """
+    out = _git(root, "diff", rng, "-U0", "--text", "--", f":(literal){path}")
+    added: set[int] = set()
+    for raw in out.decode("utf-8", "replace").splitlines():
+        m = HUNK_HEADER.match(raw)
+        if not m:
+            continue
+        start = int(m.group(1))
+        count = 1 if m.group(2) is None else int(m.group(2))
+        added.update(range(start, start + count))
+    return added
+
+
+def _parse_entries(out: bytes, oid_field: int) -> dict[str, tuple[str, str]]:
+    """`<mode> ...<TAB><path>` の NUL 区切りレコードを パス -> (mode, oid) で読む。
+
+    ls-files -s は `<mode> <oid> <stage>`、ls-tree は `<mode> <type> <oid>` と oid の位置が
+    違うだけで、他は同じ形をしている
+    """
+    entries: dict[str, tuple[str, str]] = {}
+    for record in out.decode("utf-8", "replace").split("\0"):
+        if not record:
+            continue
+        meta, sep, path = record.partition("\t")
+        fields = meta.split()
+        if not sep or len(fields) <= oid_field:
+            continue
+        entries[path] = (fields[0], fields[oid_field])
+    return entries
+
+
+def _index_entries(root: Path) -> dict[str, tuple[str, str]]:
+    return _parse_entries(_git(root, "ls-files", "-s", "-z"), oid_field=1)
+
+
+def _tree_entries(root: Path, ref: str) -> dict[str, tuple[str, str]]:
+    return _parse_entries(_git(root, "ls-tree", "-r", "-z", ref), oid_field=2)
+
+
+def _blob_text(root: Path, oid: str) -> str | None:
+    """blob の中身を返す。UTF-8 で読めなければ None。
+
+    cat-file の失敗は握らない。gitlink を mode で除いたあとの oid は index / tree が持って
+    いるものなので、失敗はリポジトリの破損を意味する。握って「読めずに飛ばした」に数えると
+    壊れたリポジトリが違反 0 件の緑になる。実在しない oid は update-index で index へ入り、
+    パス列挙にも差分にも出るので、この経路は到達不能ではない (実測)
+    """
+    try:
+        return _git(root, "cat-file", "blob", oid).decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
 # --- Issue ディレクトリ --------------------------------------------------------
 
 
@@ -251,6 +374,38 @@ def issue_dir_of(path: str) -> tuple[str, str] | None:
     if name == TEMPLATES:
         return None
     return name, "/".join(parts[: depth + 1])
+
+
+def _number_conflicts(entries: list[tuple[str, str]]) -> list[str]:
+    """同じ番号を持つ Issue ディレクトリを報告する。
+
+    絞っても逃げられる先が無いので、増分モードでも全体を見たまま共有する
+    """
+    by_number: dict[int, list[str]] = {}
+    for rel, name in entries:
+        m = ANY_ISSUE_DIR.match(name)
+        if m:
+            by_number.setdefault(int(m.group(1)), []).append(rel)
+    return [
+        f"番号 {number} が重複している: {' | '.join(sorted(rels))}"
+        for number, rels in sorted(by_number.items())
+        if len(rels) > 1
+    ]
+
+
+def _issue_dirs_of(paths: list[str]) -> list[tuple[str, str]]:
+    """追跡下のパス一覧から Issue ディレクトリを (相対パス, 名前) で返す。
+
+    issue_dirs() は filesystem を見るので、部分 stage のときに index と食い違う。増分モードは
+    走査対象を差分の後側へ統一するのでこちらを使う。git は空ディレクトリを追跡しないため、
+    中身の無い Issue ディレクトリだけが issue_dirs() との差になる
+    """
+    found: dict[str, str] = {}
+    for path in paths:
+        got = issue_dir_of(path)
+        if got:
+            found[got[1]] = got[0]
+    return sorted(found.items())
 
 
 def _identity(name: str) -> str:
@@ -313,14 +468,7 @@ def run_check(root: Path) -> int:
         if not ISSUE_DIR.match(name):
             violations.append(f"{rel}: ディレクトリ名が {PREFIX}<N>_<title> 形式でない")
 
-    by_number: dict[int, list[str]] = {}
-    for rel, name in entries:
-        m = ANY_ISSUE_DIR.match(name)
-        if m:
-            by_number.setdefault(int(m.group(1)), []).append(rel)
-    for number, rels in sorted(by_number.items()):
-        if len(rels) > 1:
-            violations.append(f"番号 {number} が重複している: {' | '.join(sorted(rels))}")
+    violations.extend(_number_conflicts(entries))
 
     tracked = _tracked_files(root)
     if not tracked:
@@ -340,12 +488,91 @@ def run_check(root: Path) -> int:
             unreadable += 1
             continue
         scanned += 1
-        violations.extend(scan_text(text, rel))
+        violations.extend(v.message for v in scan_text(text, rel))
 
     _report(violations)
     print(
         f"検査した Issue ディレクトリ: {len(entries)} 個 / 走査したファイル: {scanned} 個 "
         f"(拡張子で除外 {excluded} / 読めずに飛ばした {unreadable})"
+    )
+    if violations:
+        print(f"違反 {len(violations)} 件")
+        return 1
+    print("違反なし")
+    return 0
+
+
+def run_check_diff(root: Path, base: str | None) -> int:
+    if base is None:
+        rng, label = "--cached", "index"
+        entries = _index_entries(root)
+    else:
+        # three-dot にする。two-dot だと base 側にしか無いコミットが「削除」として差分へ
+        # 混ざる (実測)。見たいのは分岐点から現在までの変更なので merge-base 基準が正しい
+        rng = label = f"{base}...HEAD"
+        entries = _tree_entries(root, "HEAD")
+
+    violations: list[str] = []
+
+    # ディレクトリ名は、新しく置かれた issue.md を持つ Issue だけを見る。
+    # --diff-filter に R を含めるのは、rename 検出が有効だと A が空になり、しかも
+    # diff.renames の on/off で結果が変わるため。マシンの設定で検査結果が変わるのは
+    # それ自体が欠陥で、移行期の主要操作が接頭辞付与の rename なので静かに素通りする
+    checked: list[str] = []
+    for path in _diff_names(root, rng, "--diff-filter=AR"):
+        got = issue_dir_of(path)
+        if got is None:
+            continue
+        name, rel = got
+        if path != f"{rel}/{ISSUE_FILE}":
+            continue
+        checked.append(rel)
+        if not ISSUE_DIR.match(name):
+            violations.append(f"{rel}: ディレクトリ名が {PREFIX}<N>_<title> 形式でない")
+
+    violations.extend(_number_conflicts(_issue_dirs_of(list(entries))))
+
+    scanned = excluded = unreadable = submodules = 0
+    added_total = 0
+    # d (小文字) は「削除以外」。削除されたファイルは index からも消えるので内容が取れず、
+    # 入口で落とさないと「読めずに飛ばした」に化けて理由が要約から読めなくなる
+    for path in _diff_names(root, rng, "--diff-filter=d"):
+        if Path(path).suffix in SKIP_SUFFIXES:
+            excluded += 1
+            continue
+        entry = entries.get(path)
+        if entry is None:
+            # 差分に出たパスが index / tree に無い状態。--diff-filter=d で削除を除いてある
+            # ので通常は起きないが、起きたときに黙って数を合わせず要約へ出す
+            unreadable += 1
+            continue
+        mode, oid = entry
+        if mode == GITLINK_MODE:
+            submodules += 1
+            continue
+        # 走査するのは差分の後側の内容。worktree を走査すると部分 stage で行番号がずれ、
+        # コミットされる違反が絞り込みから落ちる (逆向きの偽陽性も同じ根から出る)
+        text = _blob_text(root, oid)
+        if text is None:
+            unreadable += 1
+            continue
+        added = _added_lines(root, rng, path)
+        added_total += len(added)
+        scanned += 1
+        for v in scan_text(text, path):
+            # 閉じ忘れは行番号で絞らない。base のフェンスが開いたままだと、追加行の違反は
+            # 「フェンス内」として消え、閉じ忘れ自体は旧行番号に付くので絞り込みでも消える。
+            # 両方消えると完全な緑になる (実測)。閉じ忘れが出た増分は検証不能とみなす
+            if v.kind == KIND_UNCLOSED_FENCE or v.lineno in added:
+                violations.append(v.message)
+
+    _report(violations)
+    # 何を何件見たかを必ず出す。これが無いと配線ミス (base が常に HEAD と一致する等) と
+    # 正常な空コミットが同じ見た目になる
+    print(
+        f"差分 {label}: 追加行: {added_total} 行 / 走査したファイル: {scanned} 個 / "
+        f"検査した Issue ディレクトリ: {len(checked)} 個 "
+        f"(拡張子で除外 {excluded} / 読めずに飛ばした {unreadable} / submodule {submodules})"
     )
     if violations:
         print(f"違反 {len(violations)} 件")
@@ -365,7 +592,7 @@ def run_check_text(source: str) -> int:
             print(f"[x] {source} を読めない: {e}", file=sys.stderr)
             return 2
     violations = scan_text(text, label)
-    _report(violations)
+    _report([v.message for v in violations])
     print(f"走査した行: {len(text.splitlines())} 行 / 違反 {len(violations)} 件")
     return 1 if violations else 0
 
@@ -379,20 +606,32 @@ def main(argv: list[str] | None = None) -> int:
     )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--next", action="store_true", help="次の識別子を 1 行で印字する")
-    mode.add_argument("--check", action="store_true", help="リポジトリを走査する")
+    mode.add_argument("--check", action="store_true", help="リポジトリ全体を走査する")
+    mode.add_argument("--check-diff", action="store_true", help="差分だけを走査する")
     mode.add_argument(
         "--check-text", metavar="PATH", help="テキスト 1 本を走査する (- で標準入力)"
+    )
+    parser.add_argument(
+        "--base", metavar="REF", help="--check-diff の基準 ref (既定: index と HEAD の差分)"
     )
     parser.add_argument(
         "--root", metavar="PATH", help="リポジトリの root (既定: git rev-parse --show-toplevel)"
     )
     args = parser.parse_args(argv)
+    if args.base is not None and not args.check_diff:
+        # 静かに無視すると「base を指定したのに index を見ていた」形になり、意図と違う範囲で
+        # 緑が出る。範囲の取り違えは出力を見ても気づけない
+        parser.error("--base は --check-diff と一緒にしか使えない")
 
     try:
         if args.check_text is not None:
             return run_check_text(args.check_text)
         root = resolve_root(args.root)
-        return run_next(root) if args.next else run_check(root)
+        if args.next:
+            return run_next(root)
+        if args.check_diff:
+            return run_check_diff(root, args.base)
+        return run_check(root)
     except GitError as e:
         print(f"[x] {e}", file=sys.stderr)
         return 2

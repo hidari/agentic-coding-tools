@@ -14,7 +14,7 @@ description: リポジトリ内 Markdown (`docs/issues/<ID>_<title>/issue.md`) �
 | 補助資料 | 同ディレクトリ内の任意ファイル。 命名はプロジェクト規約に従う (`dev-workflow:issue-scoped-artifacts` 採用時は `<ID>-spec.md` / `<ID>-plan.md`) |
 | クローズ済み | `docs/issues/closed/` (`status: closed` の保管庫。 通常は編集しない。 例外: Phase F reopen) |
 | テンプレ | `docs/issues/templates/issue.md` (コピー元) |
-| GitHub の `#<数字>` | GitHub の Issue / PR だけを指す番号空間。 in-repo Issue には使わない。 混入は `issue-id.py --check` / `--check-text` が検出する |
+| GitHub の `#<数字>` | GitHub の Issue / PR だけを指す番号空間。 in-repo Issue には使わない。 混入は `issue-id.py` の検査入口が検出する |
 
 ## 初期化 (新規プロジェクト)
 
@@ -393,7 +393,7 @@ GitHub は既定で subject の末尾へ括弧付きの数字記法を付ける�
 | 「frontmatter は適当でいい」 | NG。 `^status: open$` の grep が生命線。 クォート/コロンのフォーマット崩壊で grep が壊れる |
 | 「クローズ時 status だけ更新」 | NG。 `status: closed` への遷移と Phase D.2 の git mv (`closed/` 配下へ) は常にセット |
 | 「`## タスク` 不在でも自動 close したい」 | NG。 チェックリスト不在 Issue は手動 close。 自動 close はタスク全消化を判定する仕組みで、 起点が無いと暴走する |
-| 「in-repo Issue を `#<数字>` で参照する」 | NG。 数字記法は GitHub の Issue / PR の番号空間で、 同じ番号の GitHub オブジェクトと文脈でしか区別できない。 GitHub 側の autolink も発火する。 in-repo Issue は `--next` が発行する識別子だけで指す。 混入は `issue-id.py --check` / `--check-text` が検出する |
+| 「in-repo Issue を `#<数字>` で参照する」 | NG。 数字記法は GitHub の Issue / PR の番号空間で、 同じ番号の GitHub オブジェクトと文脈でしか区別できない。 GitHub 側の autolink も発火する。 in-repo Issue は `--next` が発行する識別子だけで指す。 混入は `issue-id.py` の検査入口が検出する |
 | 「`## 関連` 節から Issue 本体へリンクを張る」 | NG。 参照先の `closed/` への移動でパスの深さが変わり、 リンクだけが両方向とも切れる。 書式の canonical は「Issue 間の参照」節 |
 | 「他リポジトリの Issue を識別子だけで指す」 | NG。 番号は各リポジトリが独立に採番するので、 同じ番号が自リポジトリにも在ると静かにそちらへ解決される。 リンクは成立するのでエラーにならない。 リポジトリ名を前置すること |
 | 「reopen で識別子を採り直す」 | NG。 reopen は元の識別子を維持したまま `closed/` から戻す。 過去コミット内の参照がブレる |
@@ -403,7 +403,7 @@ GitHub は既定で subject の末尾へ括弧付きの数字記法を付ける�
 
 ## 関連
 
-- `scripts/issue-id.py` (本 skill 同梱): 識別子の採番 (`--next`) と記法の検査 (`--check` / `--check-text`)。 形式と採番規則の canonical
+- `scripts/issue-id.py` (本 skill 同梱): 識別子の採番と記法の検査。 入口の一覧・形式・採番規則・各入口が何を見るかの canonical
 - `dev-workflow:git-branch-switcher`: Issue 起票後、 必ずブランチ作成
 - `dev-workflow:pre-merge-quality-gate`: Phase 5 から本 skill の Phase C を呼ぶ
 - プロジェクト `CLAUDE.md`: `docs/issues/` 配置のオーバーライドが必要な場合のみ
