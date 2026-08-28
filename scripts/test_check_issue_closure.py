@@ -167,5 +167,45 @@ class InvariantA(FixtureCase):
         self.assertNotIn("Traceback", err)
 
 
+class FormatVariants(unittest.TestCase):
+    """行頭アンカーの素朴な正規表現だと、完了済み Issue が 9 通りで素通りする
+    (fixture で実測)。GitHub 上では完了済みとして正常に描画されるので、レビューでも
+    気づけない。吸収する範囲を仕様として固定する。
+    """
+
+    def _scan(self, body: str, heading: str = "## タスク"):
+        return checker.scan_tasks(f"{heading}\n\n{body}\n")
+
+    def test_uppercase_x_counts_as_checked(self):
+        self.assertEqual(self._scan("- [X] 済み"), (True, 1, 0))
+
+    def test_asterisk_and_plus_markers_count(self):
+        self.assertEqual(self._scan("* [x] 済み\n+ [x] 済み"), (True, 2, 0))
+
+    def test_indented_list_counts(self):
+        self.assertEqual(self._scan("  - [x] 済み"), (True, 1, 0))
+
+    def test_fullwidth_space_is_unchecked(self):
+        self.assertEqual(self._scan("- [　] 未"), (True, 1, 1))
+
+    def test_heading_level_and_spacing_variants(self):
+        self.assertTrue(self._scan("- [x] 済み", heading="### タスク")[0])
+        self.assertTrue(self._scan("- [x] 済み", heading="##タスク")[0])
+
+    def test_boxes_inside_a_code_fence_are_ignored(self):
+        body = "- [x] 済み\n\n```\n- [ ] 囮\n```"
+        self.assertEqual(self._scan(body), (True, 1, 0))
+
+    def test_boxes_inside_an_html_comment_are_ignored(self):
+        body = "- [x] 済み\n\n<!--\n- [ ] 囮\n-->"
+        self.assertEqual(self._scan(body), (True, 1, 0))
+
+    def test_a_box_outside_the_task_section_still_counts(self):
+        # 節の外へ囮を 1 個置くだけで免除される形にしない。C.3 も全文を数える
+        body = "- [x] 済み"
+        text = f"## タスク\n\n{body}\n\n## 関連\n\n- [ ] 囮\n"
+        self.assertEqual(checker.scan_tasks(text), (True, 2, 1))
+
+
 if __name__ == "__main__":
     unittest.main()
