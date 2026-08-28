@@ -253,33 +253,47 @@ class FormatVariants(unittest.TestCase):
 
 
 class ExitCodes(unittest.TestCase):
-    """終了コードの写像を subprocess で pin する。関数を直接呼ぶテストだけだと
-    「違反ありで return 0」の 1 行の変異が全緑のまま生き残る。
+    """subprocess 経由で起動した main() の終了コード (0/2) と、argparse エラーによる rc 2
+    を pin する。
+
+    rc 1 (違反あり) を見ているのは InvariantA (FixtureCase._run 経由で subprocess へ rc を
+    渡す) と InvariantB なので、ここでは二重に pin しない。同じ規則の二重管理を避け、
+    関数を直接呼ぶテストだけでは見えない層 (外部コマンドの実行と argparse の動作) に
+    focus する。manifest が InvariantA のテストを追跡しているため、将来 InvariantA が
+    変わって rc 1 の pin が失われると manifest 不一致で検出される。
     """
 
-    def _rc(self, root: Path) -> int:
-        return subprocess.run(
+    def _run(self, root: Path) -> tuple[int, str, str]:
+        proc = subprocess.run(
             [sys.executable, str(ROOT / CHECKER), "--root", str(root)],
             capture_output=True, text=True, env=GIT_ENV,
-        ).returncode
+        )
+        return proc.returncode, proc.stdout, proc.stderr
 
     def test_no_issue_directory_at_all_is_two(self):
+        # 走査対象ゼロは正常ではなく CheckError となり rc 2。別の理由で同じ rc になっても
+        # 検知できるよう stderr の内容で「実際に Issue ディレクトリが無い」ことを確認
         with tempfile.TemporaryDirectory() as tmp:
             fx = Fixture(tmp)
             (fx.root / "README.md").write_text("probe\n", encoding="utf-8")
             fx.commit()
-            self.assertEqual(self._rc(fx.root), 2)
+            rc, _, err = self._run(fx.root)
+            self.assertEqual(rc, 2)
+            self.assertIn("走査対象ゼロ", err)
 
     def test_no_active_issue_is_zero_not_two(self):
-        # 「open な Issue が 1 件も無い」は正常な状態なので検査不能にしない
+        # 「open な Issue が 1 件も無い」は正常な状態なので検査不能にしない (rc 0)。
+        # closed issue だけで active 0 であることを stdout で確認
         with tempfile.TemporaryDirectory() as tmp:
             fx = Fixture(tmp)
             fx.add_issue("closed/ISSUE-1_probe", issue_md("closed", ["- [x] 済み"]))
             fx.commit()
-            self.assertEqual(self._rc(fx.root), 0)
+            rc, out, _ = self._run(fx.root)
+            self.assertEqual(rc, 0)
+            self.assertIn("active 0 個", out)
 
     def test_abbreviated_flag_is_rejected(self):
-        # 短縮形が別モードへ静かに落ちるのを防ぐ
+        # 短縮形が別モードへ静かに落ちるのを防ぐ。argparse が allow_abbrev=False で rc 2
         proc = subprocess.run(
             [sys.executable, str(ROOT / CHECKER), "--ro", "."],
             capture_output=True, text=True, env=GIT_ENV,
