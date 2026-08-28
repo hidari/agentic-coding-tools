@@ -42,6 +42,8 @@ gh pr view <num> --json title,body  # PR メタ情報
 
 `<base>` は通常 `main`、`<num>` は対象 PR 番号。
 
+PR をこれから作る経路では、Issue のクローズをこの PR へ同梱するかの判定に要る事実 (main が保護されているか) もここで集める。判定の手順は `dev-workflow:in-repo-issue` の「クローズ経路: feature PR 同梱を優先」節が持つので、写さずにそちらを読む。
+
 ### Phase 1: 並列でレビュー実行
 
 simplify / code-reviewer / boy-scout-sweep / dev-workflow:e2e-scenario-impact-check は独立しているので **同じメッセージ内で 4 つ並列に launch する**。
@@ -83,7 +85,7 @@ simplify / code-reviewer / boy-scout-sweep / dev-workflow:e2e-scenario-impact-ch
 
 ### Phase 2: 指摘事項の判断
 
-各指摘を 5 軸で分類:
+各指摘を 6 軸で分類:
 
 | 分類 | 対応 |
 |---|---|
@@ -92,6 +94,7 @@ simplify / code-reviewer / boy-scout-sweep / dev-workflow:e2e-scenario-impact-ch
 | **Boy Scout** (rot コメント / タスク参照 / 履歴説明 / 識別子で表現済み WHAT / 隣接ファイルとの軽微な表記揺れ) | 触ったファイル内なら今回 PR で修正、 PR スコープを大きく超えるなら別 issue 起票。CLAUDE.md MUST ルール |
 | **Nice-to-have** (簡素化 / dead code 除去 / テスト fixture) | スコープに余裕があれば修正、なければ follow-up issue を起票 |
 | **False positive / 過剰抽象化** | スキップ。短い理由を明記 |
+| **クローズ同梱** (この PR が Issue のタスクを全消化するか) | 同梱するなら Phase 3 で `dev-workflow:in-repo-issue` の D.1〜D.4 を適用する。判定は Phase 0 で集めた事実に基づく |
 
 CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度の重複は定数化を強制しない。
 
@@ -108,14 +111,15 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 ### Phase 3: 修正反映 + 再検証
 
 1. 修正を適用 (Edit / Write)
-2. `make format` (該当エリアのみ)
-3. `make ci-<area>` で全テスト pass を確認
+2. 同梱すると判断したなら `dev-workflow:in-repo-issue` の D.1〜D.4 を feature ブランチのコミットへ含める。Phase 4 (執行) ではなくここへ置くのは、同梱が issue.md の編集と `git mv` と相対リンクの補正というファイル変更を伴うため。Phase 4 に置くと、この Phase の再検証を通らない変更が PR へ入る
+3. `make format` (該当エリアのみ)
+4. `make ci-<area>` で全テスト pass を確認
    - area 名はプロジェクトの `Makefile` に依存する。`ci-frontend` / `ci-backend` のようにデプロイ単位で切られていることが多い
    - 不明なら `make help` か `Makefile` を grep して該当 target を探す
-4. UI 変更なら **chrome-devtools-mcp で実ブラウザ動作確認** (CLAUDE.md MUST: フロントエンド変更は実ブラウザで確認)
+5. UI 変更なら **chrome-devtools-mcp で実ブラウザ動作確認** (CLAUDE.md MUST: フロントエンド変更は実ブラウザで確認)
    - 主要ツール: `mcp__plugin_chrome-devtools-mcp_chrome-devtools__navigate_page`, `take_snapshot`, `take_screenshot`, `list_console_messages`, `click`, `hover`, `fill`
    - フロントエンド再起動後は `isolatedContext` パラメータを必ず使う (CLAUDE.md MUST)
-5. 必要なら追加コミット (同じブランチに積むか、既にマージ済みなら follow-up ブランチ)
+6. 必要なら追加コミット (同じブランチに積むか、既にマージ済みなら follow-up ブランチ)
 
 ### Phase 4: マージ / PR 作成実行
 
@@ -163,6 +167,7 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 ## 関連
 
 - `dev-workflow:commit-and-pr-message` (sibling skill): コミット本文と PR 本文の書き方と渡し方。Phase 4 で `gh pr create` する直前に使う
+- `dev-workflow:in-repo-issue` (sibling skill): Issue のライフサイクル。Phase 0 の同梱判定と Phase 5 の自動クローズがここを参照する
 - `simplify` (built-in skill): 4 並列レビューと修正適用
 - `feature-dev:code-reviewer` (subagent): バグ・logic・security の confidence-based filtering
 - `dev-workflow:e2e-scenario-impact-check` (sibling skill): フロント変更が E2E シナリオテストを壊す可能性を静的検出。Phase 1 の 4 つ目並列タスク
