@@ -253,6 +253,81 @@ class FormatVariants(unittest.TestCase):
         self.assertEqual(checker.scan_tasks(text), (True, 1, 0))
 
 
+class ParityWithPhaseC3(unittest.TestCase):
+    """C.3 のスニペットと新検査の判定が一致すること。
+
+    照合は literal ではなく挙動で行う。両者は同じ literal を共有したまま分岐構造で
+    判定が割れていた (箱 0 個の Issue を C.3 は close へ送り、新検査は免除する)。
+    fixture にフェンスと HTML コメントを含めないのは、C.3 が grep なので追跡できず、
+    そこだけは意図的に新検査が厳しいため。
+
+    全角スペースによる字下げのケースは含めない。`[[:blank:]]` が U+3000 を blank
+    として扱うかは locale 依存な一方、全角スペース字下げは markdown のリストとして
+    描画されない実在しない構文なので、pin すると locale 依存の赤を作るだけになる。
+    """
+
+    CASES = (
+        ("## タスク\n\n- [ ] 未\n", False),
+        ("## タスク\n\n- [x] 済み\n", True),
+        ("## タスク\n\n", False),          # 箱 0 個
+        ("# 見出し\n\n- [x] 済み\n", False),  # タスク節なし
+        ("## タスク\n\n\t- [x] 済み\n", True),  # タブ字下げ。[ \t] だと取りこぼす (R5)
+        ("## タスク\n\ntt- [x] 囮\n", False),  # t 始まりの囮。[ \t] だと誤ヒットし箱として数える (R5)
+        ("## タスク\n\n- [x] 済み\n- [　] 未\n", False),  # 全角スペースの箱が残っている (R7)
+    )
+
+    def _snippet_says_close(self, text: str, *, lc_all: str | None = None) -> bool:
+        """SKILL.md の C.3 スニペットを逐語で再現する。
+
+        `grep` を PATH 解決に任せるのは C.3 自身がそうしているため。subprocess.run は
+        シェル関数を継承しないので、この開発機でも実際には /usr/bin/grep を、CI の
+        ubuntu では GNU grep を叩く (コントローラが実測して確認)。lc_all は R7 の
+        回帰網 (test_snippet_is_locale_independent) が LC_ALL を上書きするために使う。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "issue.md"
+            path.write_text(text, encoding="utf-8")
+
+            env = dict(os.environ)
+            if lc_all is not None:
+                env["LC_ALL"] = lc_all
+
+            def count(pattern: str) -> int:
+                proc = subprocess.run(
+                    ["grep", "-cE", pattern, str(path)],
+                    capture_output=True, text=True, env=env,
+                )
+                return int(proc.stdout.strip() or 0)
+
+            has_task = count(r"^#{2,3} *タスク *$")
+            boxes = count(r"^[[:blank:]]*[-*+] \[( |　|x|X)\]")
+            unchecked = count(r"^[[:blank:]]*[-*+] \[( |　)\]")
+            if not has_task or boxes == 0:
+                return False
+            return unchecked == 0
+
+    def test_snippet_and_checker_agree(self):
+        for text, expected in self.CASES:
+            with self.subTest(text=text):
+                has_heading, total, unchecked = checker.scan_tasks(text)
+                checker_says = has_heading and total >= 1 and unchecked == 0
+                self.assertEqual(checker_says, expected)
+                self.assertEqual(self._snippet_says_close(text), expected)
+
+    def test_snippet_is_locale_independent(self):
+        """R7 の回帰網。LC_ALL=C でも既定ロケールでも新検査と一致すること。
+
+        交替 `( |　|x|X)` を文字クラス `[ 　xX]` へ戻す変異を当てると、全角スペースの
+        箱が残るケースだけ C ロケールで判定がずれ (箱がバイト単位に分解され `unchecked`
+        が過小に出る)、ここが赤くなる。
+        """
+        for text, expected in self.CASES:
+            with self.subTest(text=text, lc_all="C"):
+                self.assertEqual(self._snippet_says_close(text, lc_all="C"), expected)
+            with self.subTest(text=text, lc_all=None):
+                self.assertEqual(self._snippet_says_close(text, lc_all=None), expected)
+
+
 class ExitCodes(unittest.TestCase):
     """subprocess 経由で起動した main() の終了コード (0/2) と、argparse エラーによる rc 2
     を pin する。

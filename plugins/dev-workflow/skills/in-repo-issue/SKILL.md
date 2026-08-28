@@ -220,15 +220,21 @@ C.3 該当 Issue の `## タスク` チェックリスト判定 (`${ID}` は C.1
 ISSUE_PATH=$(find docs/issues -mindepth 2 -maxdepth 3 -path "*/${ID}_*/issue.md" | head -1)
 [ -z "$ISSUE_PATH" ] && { echo "${ID} が見つからない"; exit 0; }
 case "$ISSUE_PATH" in docs/issues/closed/*) echo "既に closed"; exit 0 ;; esac
-has_task_section=$(grep -c '^## タスク' "$ISSUE_PATH")
-unchecked=$(grep -c '^- \[ \]' "$ISSUE_PATH")
+has_task_section=$(grep -cE '^#{2,3} *タスク *$' "$ISSUE_PATH")
+boxes=$(grep -cE '^[[:blank:]]*[-*+] \[( |　|x|X)\]' "$ISSUE_PATH")
+unchecked=$(grep -cE '^[[:blank:]]*[-*+] \[( |　)\]' "$ISSUE_PATH")
 ```
 
 `ls docs/issues/${ID}_*/issue.md docs/issues/closed/${ID}_*/issue.md` のようにグロブを並べる形は使わないこと。 マッチしないグロブがあったときの挙動がシェルの状態に依存する。 zsh の既定 (`nomatch`) では**片方がマッチしないだけでコマンド全体が中止され、 マッチした側の出力も出ない**ため、 実在する Issue が「見つからない」に化けて Phase C が黙って no-op になる。 `nonomatch` を設定したシェルと bash では出る (3 者を実測して確認)。 `find` は設定に依存せず、 0 件なら空を返す。
 
+字下げの判定に `[ \t]` ではなく `[[:blank:]]` を使うこと。 POSIX の bracket expression の中では `\` が特別扱いを失うため、 `[ \t]` は「タブ」ではなく {空白, `\`, `t`} を意味してしまう。 実測 (`/usr/bin/grep`): タブ字下げの `- [x]` を `[ \t]` 版は取りこぼす (0 件) のに対し `[[:blank:]]` 版は拾う (1 件)。 逆に `tt- [x]` のような `t` から始まる行を `[ \t]` 版は誤ヒットさせる (1 件) が `[[:blank:]]` 版はしない (0 件)。 この開発機のシェルの `grep` は Claude Code が挟む ugrep のシェル関数で `\t` をタブとして解釈するため、 手で叩くと差が見えない。 `subprocess.run(["grep", ...])` はシェル関数を継承しないので、 確認するときは `/usr/bin/grep` を明示すること。
+
+箱の中身を文字クラス `[ 　xX]` ではなく交替 `( |　|x|X)` で書くこと。 bracket expression の中に全角スペース (U+3000) を置くと、 非 UTF-8 ロケールではバイト単位に分解され一致しなくなる。 C.3 は apm で配布され任意の環境のエージェントが実行するので、 ロケールを前提にできない。 実測 (`/usr/bin/grep`、 全角スペース箱 1 + `[x]` 1 + 半角スペース箱 1 + タブ字下げ `[X]` 1 の fixture、 期待は boxes=4 / unchecked=2): 文字クラス版は `ja_JP.UTF-8` では 4/2 だが `C` では 3/1 に化ける。 交替版はどちらでも 4/2 のまま変わらない。 `- [x] 済` と `- [　] 未` を持つ Issue は、 文字クラス版だと `C` ロケールで `unchecked=0` になり close 対象と誤判定される。
+
 分岐:
 
 - `has_task_section == 0`: 自動 close 対象外。 「`<ID>` にチェックリスト未定義、 手動 close 推奨」とログ出力のみ
+- `boxes == 0`: チェックリストが空なので自動 close 対象外
 - `unchecked > 0`: status を `in_progress` に更新するだけ、 close しない。 「`<ID>` にまだ未完タスクがある」とログ
 - `unchecked == 0`: Phase D を実行
 
