@@ -18,6 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CHECKER = "scripts/check-issue-closure.py"
+HOOK_ID = "issue-closure"
 
 GIT_ENV = {
     **os.environ,
@@ -334,23 +335,32 @@ class Attachment(unittest.TestCase):
             if line.strip() and not line.strip().startswith("#")
         ]
 
-    def test_pre_commit_runs_the_checker(self):
-        self.assertIn(f"entry: {CHECKER}", self._lines(PRE_COMMIT_CONFIG))
-
-    def test_pre_commit_hook_does_not_take_filenames(self):
-        # 母集団は全 Issue なので、変更ファイルだけを渡されると走査集合が縮む。
-        # YAML のマッピングはキー順序に意味を持たないので、固定オフセットの窓では
-        # 順序を変えただけの無害な編集を誤って FAIL させ (偽陽性)、逆に窓が次の
-        # hook まで届くと隣の hook が同じキーを持つ配置に変わったときだけ緑になる
-        # (偽陰性: 自分の hook からキーを消しても隣の値を拾ってしまう)。
-        # 境界を「次の `- id:` 行の直前 (無ければ末尾)」に取るのは、repo: local の
+    def _hook_block(self, path: Path, hook_id: str) -> list[str]:
+        # hook の同一性は `- id:` 行から始まる。起点を `entry:` 行に取ると、
+        # entry より前に置かれたキーが窓の外へ落ちる (実機で再現: pass_filenames /
+        # always_run を entry より前へ動かすと、取り付けは有効なままなのに
+        # FAIL した = 偽陽性)。YAML のマッピングはキー順序に意味を持たないので、
+        # hook 内のどこにキーを書いても pin は同じ結果を返す必要がある。
+        # 終端を「次の `- id:` 行の直前 (無ければ末尾)」に取るのは、repo: local の
         # hooks リストで各 hook が必ず `- id:` から始まるため。
-        lines = self._lines(PRE_COMMIT_CONFIG)
-        start = lines.index(f"entry: {CHECKER}")
+        lines = self._lines(path)
+        start = lines.index(f"- id: {hook_id}")
         end = start + 1
         while end < len(lines) and not lines[end].startswith("- id:"):
             end += 1
-        block = lines[start:end]
+        return lines[start:end]
+
+    def test_pre_commit_runs_the_checker(self):
+        # ファイル全体ではなく hook のブロックに絞るのは、hook id を
+        # 別の名前へ変えても entry 行さえどこかに残っていれば緑になる抜け道を
+        # 塞ぐため。「issue-closure という id を持つ hook が、この entry を
+        # 持つ」ことまで pin する。
+        block = self._hook_block(PRE_COMMIT_CONFIG, HOOK_ID)
+        self.assertIn(f"entry: {CHECKER}", block)
+
+    def test_pre_commit_hook_does_not_take_filenames(self):
+        # 母集団は全 Issue なので、変更ファイルだけを渡されると走査集合が縮む
+        block = self._hook_block(PRE_COMMIT_CONFIG, HOOK_ID)
         self.assertIn("pass_filenames: false", block)
         self.assertIn("always_run: true", block)
 
