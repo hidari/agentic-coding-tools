@@ -40,6 +40,8 @@ winvm resolve-ip --vm <名前 or UUID>
 
 失敗時は理由を区別して出す（VM 未登録なら登録済みの名前一覧、停止中なら `status=stopped` と起動コマンド）。
 
+APIPA (link-local) を掴んでいるときは標準エラーへ警告を 1 行出す。標準出力と終了コードは変えないので `$(winvm resolve-ip ...)` で値を取る使い方は壊れず、`ProxyCommand` 経由で呼ばれた場合は ssh の呼び出し元にこの行が出る（実測）。原因の切り分けは `doctor` が持つ。
+
 ### `doctor`
 
 ```

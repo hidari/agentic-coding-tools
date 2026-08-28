@@ -220,9 +220,11 @@ skills/devops/windows-vm-verification/test_winvm.py::test_winvm.CmdPush.test_pus
 skills/devops/windows-vm-verification/test_winvm.py::test_winvm.CmdPush.test_scp_failure_is_exit_1_without_a_size_check
 skills/devops/windows-vm-verification/test_winvm.py::test_winvm.CmdPush.test_size_mismatch_is_exit_1_showing_both_sizes
 skills/devops/windows-vm-verification/test_winvm.py::test_winvm.CmdPush.test_vanished_remote_after_push_is_exit_1
+skills/devops/windows-vm-verification/test_winvm.py::test_winvm.CmdResolveIp.test_apipa_warns_on_stderr_without_touching_stdout_or_exit_code
 skills/devops/windows-vm-verification/test_winvm.py::test_winvm.CmdResolveIp.test_argument_beats_env_var
 skills/devops/windows-vm-verification/test_winvm.py::test_winvm.CmdResolveIp.test_env_var_supplies_identifier
 skills/devops/windows-vm-verification/test_winvm.py::test_winvm.CmdResolveIp.test_missing_identifier_is_exit_2
+skills/devops/windows-vm-verification/test_winvm.py::test_winvm.CmdResolveIp.test_normal_ip_resolves_without_any_warning
 skills/devops/windows-vm-verification/test_winvm.py::test_winvm.CmdResolveIp.test_prints_ip_for_running_vm
 skills/devops/windows-vm-verification/test_winvm.py::test_winvm.CmdResolveIp.test_prlctl_failure_is_exit_1_and_does_not_print_an_ip
 skills/devops/windows-vm-verification/test_winvm.py::test_winvm.CmdResolveIp.test_resolves_by_uuid_too

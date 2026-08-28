@@ -39,15 +39,56 @@ stdout と exit code は不変のまま、APIPA を検知したときだけ stde
 
 ## タスク
 
-- [ ] `test_winvm.py` に「resolve-ip が APIPA のとき stdout は IP のみ・exit 0 のまま、
+- [x] `test_winvm.py` に「resolve-ip が APIPA のとき stdout は IP のみ・exit 0 のまま、
       stderr に警告が出る」テストを追加する。stdout に警告が混ざらないことを negative case で pin する
-- [ ] 追加したテストが現行実装で赤くなることを確認する
-- [ ] `cmd_resolve_ip` に警告を実装する。接頭辞は `警告:` (終端しない通知。規約は
+- [x] 追加したテストが現行実装で赤くなることを確認する
+- [x] `cmd_resolve_ip` に警告を実装する。接頭辞は `警告:` (終端しない通知。規約は
       `StderrMessagePrefix` テストが canonical)
-- [ ] 変異注入で確認する: 警告の分岐を外すと追加したテストが赤くなること。
+- [x] 変異注入で確認する: 警告の分岐を外すと追加したテストが赤くなること。
       あわせて警告を stdout 側へ出す変異で、stdout を pin した assertion が赤くなること
-- [ ] ControlMaster を使っている場合に警告が何回出るかを実機で確認する。毎接続で出ると
+- [x] ControlMaster を使っている場合に警告が何回出るかを実機で確認する。毎接続で出ると
       うるさいので、master 確立時の 1 回で済むなら現状のままでよい
+
+## 実測 (2026-08-28)
+
+### ProxyCommand の stderr は呼び出し元に出る
+
+提案が「(実測)」として引いていた前提を自分で再現した。存在しない host へ
+`ProxyCommand=sh -c 'echo <目印> >&2; exit 1'` で繋ぐと、目印が ssh の呼び出し元の端末に出る。
+警告が人の目に届く経路はこれで確定した。
+
+### ControlMaster 下では master 確立時の 1 回だけ
+
+`ControlMaster auto` / `ControlPersist 60s` で同一 host へ 3 回続けて接続し、ProxyCommand が
+起動した回数をログの行数で数えた。**3 接続に対して 1 回**。警告が接続のたびに出ることはなく、
+抑制機構は要らない。ssh-config.template のコメントが「prlctl の起動も 1 回で済む」と
+書いていたのと一致する。
+
+測ったのは ssh 自身の多重化の意味論なので、接続先には認証が通る任意の host を使った
+(APIPA を再現するには VM 内で DHCP を壊す必要があり、そこまでしても測る対象は変わらない)。
+
+### live smoke
+
+実 `prlctl` を通す経路 (subprocess 起動 → JSON パース → VM 引き当て) は停止中 VM と
+未登録名の 2 つで通した。IP が返る成功パスは VM が停止中のため未実行で、そこは
+`FakeRunner` を通したユニットテストが覆っている。
+
+### 変異注入
+
+7 件を 1 件ずつ隔離して当て、全て KILLED。baseline が緑であることを先に確認している。
+
+| 変異 | 赤くなったテスト |
+| --- | --- |
+| 警告の分岐を殺す | resolve-ip の APIPA テスト |
+| 警告を stdout へ出す | 同上 (stdout の exact 比較) |
+| 判定を常に真にする | 正常系が無警告であることの対照 |
+| 判定を常に偽にする | resolve-ip と **doctor の両方** |
+| 帯を link-local から private へすり替える | 正常系の対照 |
+| 警告から VM 名を落とす | resolve-ip の APIPA テスト |
+| 警告へ doctor の説明を写す | 同上 (二重管理の検査) |
+
+「判定を常に偽にする」で doctor 側も同時に赤くなることが、抽出した `is_apipa` が
+両方の呼び出し元で本当に共有されている証拠になっている。
 
 ## 関連
 
