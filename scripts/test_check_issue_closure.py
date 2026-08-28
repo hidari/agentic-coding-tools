@@ -26,8 +26,19 @@ ROOT = Path(__file__).resolve().parent.parent
 CHECKER = "scripts/check-issue-closure.py"
 HOOK_ID = "issue-closure"
 
+# os.environ をそのまま流さず GIT_* を落としてから足し直す。fixture は tempdir で
+# `git add` を走らせるが、GIT_INDEX_FILE を継承すると書き込み先がその指し先になり、
+# 呼び出し元のリポジトリの index を fixture の内容で上書きする (実測: 実際にこの
+# リポジトリの index が 23159 byte / 123 件から 4837 byte / 1 件へ壊れた。壊れた
+# index が持っていた唯一のエントリは本ファイルの fixture のパスだった)。
+#
+# テストの終了コードでは検出できない。上書きしたまま緑を返す (実測: 同条件で
+# scripts/test_check_issue_closure.py は 34 件 OK のまま指し先を 267 byte にする)。
+# 判定にはテストの rc ではなく指し先ファイルのハッシュを使うこと。
+#
+# 個別の変数名を並べないのは、git が変数を増やしたとき列挙だけが古びるため。
 GIT_ENV = {
-    **os.environ,
+    **{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
     "GIT_CONFIG_GLOBAL": os.devnull,
     "GIT_CONFIG_SYSTEM": os.devnull,
     "GIT_AUTHOR_NAME": "probe",
@@ -141,9 +152,9 @@ class InvariantA(FixtureCase):
 class InvariantB(FixtureCase):
     """配置 (closed/ に居るか) と frontmatter の status が食い違わないこと。
 
-    不変条件 A だけだと `git mv` 1 回で緑に戻せてしまう。Phase D の 3 手のうち D.2 だけを
-    実行し D.1 (frontmatter の書き換え) を落とすと、`closed/` に居るのに `status: open` と
-    いう状態が残り、この検査以外にそれを見る層が無い。
+    不変条件 A だけだと `git mv` 1 回で緑に戻せてしまう。Phase D のうち D.2 だけを実行し
+    D.1 (frontmatter の書き換え) を落とすと、`closed/` に居るのに `status: open` という
+    状態が残り、この検査以外にそれを見る層が無い。
     """
 
     def test_closed_dir_with_open_status_is_a_violation(self):
@@ -366,10 +377,9 @@ def _extract_c3_lines(path: Path) -> list[str]:
     なければ黙って空へ倒さず例外を送出する。抽出 0 件を「一致した」とみなすと、
     この pin 自身が「0 件の緑は健全ではなくそもそも見ていない」を体現してしまう。
 
-    コントローラの実測: 以前の実装は grep -cE のパターンをこのテストへ literal で
-    べた書きしており、SKILL.md の実物へ変異 (交替→文字クラス、[[:blank:]]→[ \\t])
-    を当てても pin は緑のまま素通りした。この関数と _snippet_says_close はその
-    修正として、SKILL.md を実際に読んで実行する形に置き換えたもの。
+    パターンをこのテストへ literal でべた書きしないのは、そうすると SKILL.md の実物へ
+    変異 (交替→文字クラス、[[:blank:]]→[ \\t]) を当てても pin が緑のまま素通りするため
+    (実測)。SKILL.md を読んで実際に実行する形だけが、そこを見ている。
     """
     text = path.read_text(encoding="utf-8")
     block = None
@@ -626,7 +636,10 @@ class Attachment(unittest.TestCase):
 
 
 HEADING = re.compile(r"^#{1,6} +(\S.*)$")
-SECTION_REFERENCE = re.compile(r"「([^」]+)」節")
+# 参照先の skill を名指ししている形だけを見る。`「X」節` 単体は同じ文書内の節を指す用法が
+# 既に 8 箇所あり (in-repo-issue に 5 / retrospective-codify に 2 / commit-and-pr-message
+# に 1)、区別せずに拾うと参照先が別文書だと誤診して赤くなる
+CROSS_SKILL_REFERENCE = re.compile(r"`([a-z0-9-]+):([a-z0-9-]+)` の「([^」]+)」節")
 
 
 def _prose_lines(path: Path) -> list[str]:
@@ -640,41 +653,75 @@ def _prose_lines(path: Path) -> list[str]:
     return lines
 
 
+def _reference_sources() -> list[Path]:
+    """他 skill の節を名指ししうる文書。母集団はファイルシステムの glob そのものが持つ。"""
+    found = [ROOT / "CLAUDE.md"]
+    found += sorted(ROOT.glob("plugins/**/SKILL.md"))
+    found += sorted(ROOT.glob("skills/**/SKILL.md"))
+    return [path for path in found if path.is_file()]
+
+
 class SectionReferences(unittest.TestCase):
-    """gate が名指しする in-repo-issue の節が実在すること。
+    """`<plugin>:<skill>` の「<節名>」節 という名指しの参照先が実在すること。
 
     gate は同梱の判定も手順も写さず節名で名指しして読ませる形を採っており、散文層はこの
-    参照へ依存する。参照先の見出しが変わっても gate 側は何も言わないので、手順が宙に浮いた
-    まま緑で通る。値をどちらかへ二重に持たせるのではなく参照の整合だけを見る形は、Issue 間の
-    参照に対して scripts/check-related-refs.py が既に採っている。
+    参照へ依存する。参照先の見出しが変わっても名指しした側は何も言わないので、手順が宙に
+    浮いたまま緑で通る。値をどちらかへ二重に持たせるのではなく参照の整合だけを見る形は、
+    Issue 間の参照に対して scripts/check-related-refs.py が既に採っている。
 
-    走査を特定の Phase へ絞らないのは、同じ節を指す名指しが Phase 0 (事実収集) と Phase 2
-    (判断) と Phase 3 (適用) に分かれて置かれているため。参照は制約の写しではないので複数
-    あってよいが、絞ると絞った外の 1 本だけが宙に浮ける。
+    参照元を gate に限らないのは、同じ形の名指しをリポジトリ直下の CLAUDE.md も持つため。
+    参照元も参照先も名前で列挙せず、参照そのものから解決する。
+
+    照合を skill 名まで含めて行うのは、`「X」節` だけを見ると同じ文書内の節を指す用法まで
+    拾ってしまい、実在する参照を「別文書に無い」と誤診するため。
     """
 
-    def _referenced_names(self) -> list[str]:
-        names = SECTION_REFERENCE.findall("\n".join(_prose_lines(GATE_SKILL_MD)))
-        if not names:
+    def _references(self) -> list[tuple[Path, str, str]]:
+        found = []
+        for source in _reference_sources():
+            text = "\n".join(_prose_lines(source))
+            for plugin, skill, section in CROSS_SKILL_REFERENCE.findall(text):
+                target = ROOT / "plugins" / plugin / "skills" / skill / "SKILL.md"
+                found.append((source, target, section))
+        if not found:
             # 抽出 0 件を「名指しした節が全て実在した」とみなさない。0 件の緑は健全ではなく
             # そもそも見ていない
             raise AssertionError(
-                f"{GATE_SKILL_MD} に「<節名>」節 の形の参照が 1 つも無い"
+                "`<plugin>:<skill>` の「<節名>」節 の形の参照が 1 つも見つからない"
             )
-        return names
+        return found
+
+    def test_gate_names_the_bundling_skill(self):
+        """gate が同梱の手順を持つ skill を名指ししていること。
+
+        参照先の実在だけを見ると、gate 側が名指しを丸ごと落としても他の文書の参照が残る限り
+        緑のまま通る。それは ISSUE-41 が直した欠陥 (同梱の入口が gate のどの Phase にも無い)
+        の再生産になる。節名は pin しない (見出しは動いてよく、動いたことは上の検査が見る)。
+        """
+        text = "\n".join(_prose_lines(GATE_SKILL_MD))
+        targets = {
+            f"{plugin}:{skill}"
+            for plugin, skill, _ in CROSS_SKILL_REFERENCE.findall(text)
+        }
+        self.assertIn("dev-workflow:in-repo-issue", targets)
 
     def test_referenced_sections_exist(self):
-        headings = [
-            m.group(1).strip() for m in map(HEADING.match, _prose_lines(SKILL_MD)) if m
-        ]
-        for name in self._referenced_names():
-            with self.subTest(name=name):
+        for source, target, section in self._references():
+            with self.subTest(source=source.name, section=section):
+                self.assertTrue(
+                    target.is_file(), f"{source} が名指しする {target} が無い"
+                )
+                headings = [
+                    m.group(1).strip()
+                    for m in map(HEADING.match, _prose_lines(target))
+                    if m
+                ]
                 # 完全一致ではなく前方一致で見るのは、見出しが括弧つきの補足を続けて持つため
                 # (実測: 名指しは「クローズ経路: feature PR 同梱を優先」、見出しは
                 # `### クローズ経路: feature PR 同梱を優先 (main 直 push を避ける)`)
                 self.assertTrue(
-                    any(heading.startswith(name) for heading in headings),
-                    f"{SKILL_MD} に「{name}」で始まる見出しが無い",
+                    any(heading.startswith(section) for heading in headings),
+                    f"{source} が名指しする「{section}」で始まる見出しが {target} に無い",
                 )
 
 

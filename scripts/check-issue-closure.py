@@ -346,8 +346,9 @@ def main(argv: list[str] | None = None) -> int:
     for line in (*result.missing_notes, *result.unreadable_notes, *result.unscanned_notes):
         print(f"  [-] {line}", file=sys.stderr)
     # active / closed が母集団で、括弧の中はその部分集合。「うち」で括るのは、並べて書くと
-    # 互いに排他な状態が 5 つあるように読めるため。3 つは互いにも排他ではない (閉じ忘れ
-    # フェンスを持つ issue.md は status も読めないことがある)
+    # 互いに排他な状態が 5 つあるように読めるため。括弧の中も後ろ 2 つは同居しうる
+    # (閉じ忘れフェンスを持つ issue.md は status も読めないことがある)。issue.md が無い
+    # 側だけは continue でそこから先へ進まないので、他の 2 つとは排他になる
     print(
         f"検査した Issue: active {result.active} 個 / closed {result.closed} 個"
         f" (うち issue.md が無い {len(result.missing_notes)} 個"
