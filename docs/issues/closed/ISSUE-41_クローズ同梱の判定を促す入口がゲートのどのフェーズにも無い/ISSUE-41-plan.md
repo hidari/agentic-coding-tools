@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3 標準ライブラリのみ (argparse / importlib / re / subprocess)。テストは `unittest`。
 
-**Spec:** `docs/issues/ISSUE-41_クローズ同梱の判定を促す入口がゲートのどのフェーズにも無い/ISSUE-41-spec.md`
+**Spec:** `ISSUE-41-spec.md` (同じディレクトリ)
 
 ## Global Constraints
 

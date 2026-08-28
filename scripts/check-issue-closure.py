@@ -139,6 +139,23 @@ def scan_tasks(text: str) -> tuple[bool, int, int]:
     return _scan_lines_for_tasks(lines)
 
 
+def is_completed(has_heading: bool, total: int, unchecked: int) -> bool:
+    """走査結果から「この Issue を完了とみなすか」を返す。
+
+    判定式をここへ名前で置くのは、collect() のインラインの条件式とテスト側の写しに分裂して
+    いたため (実測: collect() の条件から箱 0 個のガードを外しても、テストが同じ式を自前で
+    持っていたので 359 件が全て緑のまま通った)。規則のコピーが 2 つあると、片方だけ壊れた
+    ことをどの検査も見ない。呼ぶ側は collect() とテストの両方で、必ずこの関数を通す。
+
+    箱が 0 個のときに完了とみなさないのは、チェックリストが空の Issue が自動 close の対象外
+    だから。「未チェックが 0」は箱が 1 つも無いときにも成り立つので、その形を除かないと
+    `## タスク` の見出しだけ書いて中身が空の Issue が「全て消化済み」に化ける
+    (メッセージも「箱 0 個 / 未チェック 0」という矛盾した文面になる)。 in-repo-issue skill の
+    C.3 が持つ `boxes == 0` 分岐と同じ判断で、ParityWithPhaseC3 が両者の一致を検証する。
+    """
+    return has_heading and total >= 1 and unchecked == 0
+
+
 def read_status(text: str) -> str | None:
     """frontmatter の status を返す。読めなければ None。
 
@@ -278,7 +295,7 @@ def collect(root: Path) -> CollectResult:
             )
             continue
         has_heading, total, unchecked = _scan_lines_for_tasks(lines)
-        if has_heading and total >= 1 and unchecked == 0:
+        if is_completed(has_heading, total, unchecked):
             violations.append(
                 f"{rel_dir}: タスクが全て消化済みなのに active に居る "
                 f"(箱 {total} 個 / 未チェック 0)。クローズを同じ PR へ同梱する"

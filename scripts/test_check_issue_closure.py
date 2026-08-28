@@ -118,6 +118,20 @@ class InvariantA(FixtureCase):
             "closed/ISSUE-1_probe", issue_md("closed", ["- [x] 済み"])))
         self.assertEqual(rc, 0)
 
+    def test_task_section_with_zero_boxes_passes(self):
+        """`## タスク` はあるが箱が 0 個の active な Issue は違反にしない。
+
+        「未チェックが 0」は箱が 1 つも無いときにも成り立つので、箱 0 個のガードが無いと
+        中身が空のタスク節を「全て消化済み」と読む。 純粋関数を直に叩かず CLI 経由で回すのは、
+        この分岐が collect() の中にあるため。 純粋関数 (scan_tasks) を直に叩くテストと
+        述語 (is_completed) を叩くテストだけでは、 collect() がその述語を通っていることを
+        pin できない (実測: collect() のガードを外しても両者は緑のままだった)。
+        """
+        rc, out, err = self._run(lambda fx: fx.add_issue(
+            "ISSUE-1_probe", issue_md("open", [])))
+        self.assertEqual(rc, 0, err)
+        self.assertIn("違反 0 件", out)
+
 
 class InvariantB(FixtureCase):
     """配置 (closed/ に居るか) と frontmatter の status が食い違わないこと。
@@ -366,8 +380,9 @@ class ParityWithPhaseC3(unittest.TestCase):
     def test_snippet_and_checker_agree(self):
         for text, expected in self.CASES:
             with self.subTest(text=text):
-                has_heading, total, unchecked = checker.scan_tasks(text)
-                checker_says = has_heading and total >= 1 and unchecked == 0
+                # 式を写さず、プロダクトコードの述語をそのまま呼ぶ。写すと collect() 側の
+                # 判定を壊しても両者が同じだけ壊れるので、差が出ずに緑のまま通る (実測)
+                checker_says = checker.is_completed(*checker.scan_tasks(text))
                 self.assertEqual(checker_says, expected)
                 self.assertEqual(self._snippet_says_close(text), expected)
 
