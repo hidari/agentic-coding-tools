@@ -53,6 +53,9 @@ STOPPED_VM = "Fixture Host - macOS"
 
 # DHCP が応答しなかった VM。ipAddresses は埋まるので「IP は取れている」経路を通る。
 APIPA_LIST_JSON = PRLCTL_LIST_JSON.replace('"ip": "10.211.55.3"', '"ip": "169.254.10.20"')
+# 置換元の値を再掲する形なので、フィクスチャ側を変えると replace が黙って no-op になる
+# (_with_bundle の docstring が同じ理由でこの形を避けている)。空振りを import 時に落とす。
+assert APIPA_LIST_JSON != PRLCTL_LIST_JSON
 
 
 def config_pvs(isolated: str) -> str:
@@ -321,21 +324,20 @@ class CmdResolveIp(unittest.TestCase):
         self.assertEqual(out.strip(), "10.211.55.3")
 
     def test_apipa_warns_on_stderr_without_touching_stdout_or_exit_code(self):
-        # このコマンドは ssh の ProxyCommand から呼ばれ、stdout がそのまま nc の
-        # 接続先になる。警告を stdout へ混ぜると接続先ごと壊れるので、値だけが
-        # 出ることを exact 比較で pin する。exit code を 0 のまま保つ判断は
-        # ISSUE-9 で決めたもので、1 にすると nc が空文字を掴んで別の壊れ方をする。
+        # stdout がそのまま nc の接続先になるので、値だけが出ることを exact 比較で
+        # pin する。stdout と exit code を変えない理由は cmd_resolve_ip 側の
+        # コメントが持つ。
         self.run = FakeRunner({tuple(winvm.prlctl_list_argv()): (0, APIPA_LIST_JSON, "")})
         rc, out, err = self._resolve(RUNNING_VM)
         self.assertEqual(rc, 0)
         self.assertEqual(out.strip(), "169.254.10.20")
         self.assertIn("警告:", err)
         self.assertIn("169.254.10.20", err)
-        # 次に何を叩けばいいかまで書く。名前を出さないと doctor に渡す値を
-        # 利用者が組み立て直すことになる。
+        # 名前を出さないと doctor に渡す値を利用者が組み立て直すことになる。
         self.assertIn("doctor", err)
         self.assertIn(RUNNING_VM, err)
-        # 原因の説明は doctor の hint が canonical。ここへ写すと二重管理になる。
+        # 原因の説明の canonical は doctor の hint で、ここへ写すと二重管理になる。
+        # ただし見ているのは hint に出る 2 語だけの tripwire で、言い換えは捕まらない。
         self.assertNotIn("DHCP", err)
         self.assertNotIn("troubleshooting", err)
 
@@ -449,7 +451,7 @@ class CollectDoctorChecks(unittest.TestCase):
 
     def test_apipa_address_fails_and_points_at_dhcp(self):
         # 読めた値の意味を見ずに OK へ倒さないことを pin する。帯そのものの意味は
-        # winvm.py 側のコメントが持つ。
+        # is_apipa の docstring が持つ。
         checks = self._checks(list_json=APIPA_LIST_JSON)
         c = self._by_label(checks, "IP")
         self.assertEqual(c.observed, "169.254.10.20")
