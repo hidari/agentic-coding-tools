@@ -338,10 +338,19 @@ class Attachment(unittest.TestCase):
         self.assertIn(f"entry: {CHECKER}", self._lines(PRE_COMMIT_CONFIG))
 
     def test_pre_commit_hook_does_not_take_filenames(self):
-        # 母集団は全 Issue なので、変更ファイルだけを渡されると走査集合が縮む
+        # 母集団は全 Issue なので、変更ファイルだけを渡されると走査集合が縮む。
+        # YAML のマッピングはキー順序に意味を持たないので、固定オフセットの窓では
+        # 順序を変えただけの無害な編集を誤って FAIL させ (偽陽性)、逆に窓が次の
+        # hook まで届くと隣の hook が同じキーを持つ配置に変わったときだけ緑になる
+        # (偽陰性: 自分の hook からキーを消しても隣の値を拾ってしまう)。
+        # 境界を「次の `- id:` 行の直前 (無ければ末尾)」に取るのは、repo: local の
+        # hooks リストで各 hook が必ず `- id:` から始まるため。
         lines = self._lines(PRE_COMMIT_CONFIG)
         start = lines.index(f"entry: {CHECKER}")
-        block = lines[start : start + 3]
+        end = start + 1
+        while end < len(lines) and not lines[end].startswith("- id:"):
+            end += 1
+        block = lines[start:end]
         self.assertIn("pass_filenames: false", block)
         self.assertIn("always_run: true", block)
 
