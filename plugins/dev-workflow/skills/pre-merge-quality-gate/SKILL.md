@@ -42,7 +42,7 @@ gh pr view <num> --json title,body  # PR メタ情報
 
 `<base>` は通常 `main`、`<num>` は対象 PR 番号。
 
-PR をこれから作る経路では、Issue のクローズをこの PR へ同梱するかの判定に要る事実 (main への直 push を禁じる方針かどうか) もここで集める。判定の手順は `dev-workflow:in-repo-issue` の「クローズ経路: feature PR 同梱を優先」節が持つので、写さずにそちらを読む。
+PR をこれから作る経路では、Issue のクローズをこの PR へ同梱するかの判定に要る事実 (main への直 push を禁じているか) もここで集める。判定の手順は `dev-workflow:in-repo-issue` の「クローズ経路: feature PR 同梱を優先」節が持つので、写さずにそちらを読む。
 
 ### Phase 1: 並列でレビュー実行
 
