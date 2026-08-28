@@ -317,5 +317,41 @@ class BorrowedNames(unittest.TestCase):
             checker._notation = None
 
 
+PRE_COMMIT_CONFIG = ROOT / ".pre-commit-config.yaml"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+
+
+class Attachment(unittest.TestCase):
+    """検査機構そのものと、その取り付けは別に pin する。取り付けを外す変更は
+    機構のテストでは捕まらない。stdlib に YAML パーサが無いのでコメント行を
+    除いた行で照合する。
+    """
+
+    def _lines(self, path: Path) -> list[str]:
+        return [
+            line.strip()
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+
+    def test_pre_commit_runs_the_checker(self):
+        self.assertIn(f"entry: {CHECKER}", self._lines(PRE_COMMIT_CONFIG))
+
+    def test_pre_commit_hook_does_not_take_filenames(self):
+        # 母集団は全 Issue なので、変更ファイルだけを渡されると走査集合が縮む
+        lines = self._lines(PRE_COMMIT_CONFIG)
+        start = lines.index(f"entry: {CHECKER}")
+        block = lines[start : start + 3]
+        self.assertIn("pass_filenames: false", block)
+        self.assertIn("always_run: true", block)
+
+    def test_ci_runs_the_checker_with_an_explicit_name(self):
+        # job 名がこの step を覆えないので、step に name を置いて実態を名乗らせる
+        lines = self._lines(CI_WORKFLOW)
+        run = f"run: python3 {CHECKER}"
+        self.assertIn(run, lines)
+        self.assertTrue(lines[lines.index(run) - 1].startswith("- name:"))
+
+
 if __name__ == "__main__":
     unittest.main()

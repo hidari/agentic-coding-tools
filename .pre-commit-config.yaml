@@ -124,6 +124,15 @@ repos:
         pass_filenames: false
         always_run: true
 
+      # 上の 2 本が記法と参照を見るのに対し、これはライフサイクルの状態を見る。
+      # 母集団は issue-id.py の issue_dirs を借りるので pass_filenames は取らない。
+      - id: issue-closure
+        name: 閉じ忘れと配置と status の整合を検査する
+        language: system
+        entry: scripts/check-issue-closure.py
+        pass_filenames: false
+        always_run: true
+
       # 捕捉するのは「CLAUDE.md の上書きが効かず、成果物が上流 skill の既定パスへ落ちる」
       # 失敗モードだけ。Issue ディレクトリ配下に置かれたファイルの名前違反 (識別子の無い
       # spec.md、別 Issue の識別子を前置したファイル) は見ない。ディレクトリ名から識別子を
