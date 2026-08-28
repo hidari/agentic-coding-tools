@@ -1,10 +1,15 @@
-"""check-issue-closure.py の仕様。
+"""check-issue-closure.py の仕様と、この検査が単独では成り立たない依存の pin。
 
 git を歩くので実ツリーではなく tempfile + git init の fixture で検証する。実ツリーに
 依存すると、現ツリーがたまたま合格していることに寄りかかった dead pin になる。
 GIT_CONFIG_GLOBAL / GIT_CONFIG_SYSTEM を潰すのは、global の core.excludesfile が
 `*.md` を ignore していると git ls-files の走査集合だけが縮むため (同じ理由と形を
 scripts/test_check_related_refs.py が持つ)。
+
+検査スクリプト本体の仕様に加えて、周りが動いたときに黙って効かなくなる継ぎ目もここへ集める。
+pre-commit と ci.yml への取り付け (Attachment)、in-repo-issue C.3 との判定一致
+(ParityWithPhaseC3)、gate の散文が名指しする節の実在 (SectionReferences) がそれで、
+どれも機構そのものは無傷のまま失効する形を捕まえる。
 """
 from __future__ import annotations
 
@@ -136,9 +141,9 @@ class InvariantA(FixtureCase):
 class InvariantB(FixtureCase):
     """配置 (closed/ に居るか) と frontmatter の status が食い違わないこと。
 
-    本タスク着手前はこの検査が status を一度も読んでいなかった (scripts/ と plugins/ を
-    `status:` で走査して確認。ヒットはテストの fixture 文字列だけだった)。したがって
-    `git mv` だけして frontmatter を書き換えない状態はどこからも見えなかった。
+    不変条件 A だけだと `git mv` 1 回で緑に戻せてしまう。Phase D の 3 手のうち D.2 だけを
+    実行し D.1 (frontmatter の書き換え) を落とすと、`closed/` に居るのに `status: open` と
+    いう状態が残り、この検査以外にそれを見る層が無い。
     """
 
     def test_closed_dir_with_open_status_is_a_violation(self):
@@ -154,19 +159,98 @@ class InvariantB(FixtureCase):
         self.assertIn("status", err)
 
     def test_unreadable_status_is_counted_not_passed(self):
-        # 読めなかったものを合格へ倒さない。件数に出して沈黙させない
-        rc, out, _ = self._run(lambda fx: fx.add_issue(
+        # 読めなかったものを合格へ倒さない。件数と、どの Issue かを名指しする注記に出す
+        rc, out, err = self._run(lambda fx: fx.add_issue(
             "ISSUE-1_probe", "# 見出しだけ\n\n## タスク\n\n- [ ] 未\n"))
         self.assertEqual(rc, 0)
         self.assertIn("status が読めない 1 個", out)
+        self.assertIn("[-] docs/issues/ISSUE-1_probe", err)
+
+    def test_status_with_a_trailing_comment_is_read(self):
+        """frontmatter スキーマが例示する末尾コメント付きの status を読めること。
+
+        in-repo-issue の「frontmatter スキーマ」節は `status: open  # open / in_progress /
+        closed` の形で例示しているので、それを写した issue.md が実際に現れる。読めないと
+        status が None になり、その Issue は不変条件 B の検査から静かに外れる。
+        """
+        rc, out, err = self._run(lambda fx: fx.add_issue(
+            "ISSUE-1_probe",
+            "---\nstatus: closed  # open / in_progress / closed\n---\n\n"
+            "# probe\n\n## タスク\n\n- [ ] 未\n"))
+        self.assertEqual(rc, 1)
+        self.assertIn("status が closed なのに active に居る", err)
+        self.assertIn("status が読めない 0 個", out)
+
+    def test_frontmatter_without_a_closing_marker_is_unreadable(self):
+        """閉じ `---` が現れない文書では、本文の status: 行を frontmatter の値にしないこと。
+
+        拾うと、frontmatter を持たない Issue の本文にたまたま現れた語で配置の整合を判定する。
+        """
+        rc, out, err = self._run(lambda fx: fx.add_issue(
+            "ISSUE-1_probe",
+            "---\n\n# probe\n\nstatus: closed\n\n## タスク\n\n- [ ] 未\n"))
+        self.assertEqual(rc, 0, err)
+        self.assertIn("status が読めない 1 個", out)
+        self.assertIn("[-] docs/issues/ISSUE-1_probe", err)
+
+
+class Population(FixtureCase):
+    """どの Issue ディレクトリが母集団に入るか。
+
+    判定 (InvariantA / InvariantB) を pin するテストは母集団の中身しか見ないので、母集団が
+    縮んだり膨らんだりしても緑のまま通る。母集団は借用先 issue-id.py の issue_dirs と
+    issue_md_path が決めるので、ここだけが借用の実効を見る層になる。
+    """
+
+    def test_templates_directory_is_out_of_the_population(self):
+        """templates/ 配下は全て [x] でも母集団に入らない。
+
+        実ツリーのテンプレートは箱が全て未チェックなので、除外を外しても実ツリーに対しては
+        違反が出ない。fixture 側へ全て [x] のテンプレートを置いて初めて除外が pin される。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_probe", issue_md("open", ["- [ ] 未"]))
+            fx.add_issue("templates", issue_md("open", ["- [x] 済み"]))
+
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("active 1 個", out)
+        self.assertIn("違反 0 件", out)
+
+    def test_capitalized_issue_md_is_in_the_population(self):
+        """`Issue.md` で作られた Issue も走査される。
+
+        macOS の既定は core.ignorecase=true で、追跡名は作成時の綴りが記録される。名前の
+        大小を無視しないと、この Issue は「issue.md が無い」へ落ちて不変条件 A と B の
+        両方から静かに抜ける。
+        """
+        rc, out, err = self._run(lambda fx: fx.add_issue(
+            "ISSUE-1_probe", issue_md("open", ["- [x] 済み"]), filename="Issue.md"))
+        self.assertEqual(rc, 1)
+        self.assertIn("ISSUE-1_probe", err)
+        self.assertIn("issue.md が無い 0 個", out)
+
+    def test_issue_directory_without_an_issue_md_is_named(self):
+        """issue.md を持たない Issue ディレクトリは合格へ倒さず、識別子つきで注記に出す。
+
+        件数だけだと、どの Issue が走査できていないのか出力から特定できない。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_probe", issue_md("open", ["- [ ] 未"]))
+            fx.add_issue("ISSUE-2_probe", "# spec\n", filename="ISSUE-2-spec.md")
+
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("active 2 個", out)
+        self.assertIn("issue.md が無い 1 個", out)
+        self.assertIn("[-] docs/issues/ISSUE-2_probe", err)
 
 
 class UnscannableInputs(FixtureCase):
     """走査できなかった入力 (閉じ忘れフェンス・非 UTF-8) は違反にも合格にもせず件数へ出す。
 
-    D4: 元は InvariantA に同居していたが、検証しているのは「タスクの完了漏れ」ではなく
-    「そもそも安全に走査できない」という別種の不変条件なので独立させた。中身は移動のみで
-    変えていない。
+    InvariantA と分けるのは、検証しているのが「タスクの完了漏れ」ではなく「そもそも安全に
+    走査できない」という別種の不変条件だから。
     """
 
     def test_unclosed_fence_is_unscanned_not_a_violation(self):
@@ -192,8 +276,8 @@ class UnscannableInputs(FixtureCase):
     def test_cp932_issue_is_unscanned_not_a_crash(self):
         """UTF-8 で読めない issue.md は例外を伝播させず「走査できなかった」件数へ寄せる。
 
-        修正前は UnicodeDecodeError が未捕捉のまま抜け、Python 既定の rc 1 が
-        「違反あり」と誤認される形になっていた (コントローラの実測)。
+        捕捉しないと UnicodeDecodeError がそのまま抜け、Python 既定の rc 1 が「違反あり」と
+        誤認される (実測)。
         """
         text = issue_md("open", ["- [x] 済み"])
         rc, out, err = self._run(
@@ -212,9 +296,7 @@ class FormatVariants(unittest.TestCase):
     気づけない。吸収する範囲を仕様として固定する。
 
     書式ゆれとは別に、箱を数える範囲がタスク節の内側に限られないことも合わせてここで
-    固定する (節の外へ囮を 1 個置くだけで免除される形にしない。D5: このクラスは書式ゆれ
-    9 通りだけでなく scan_tasks の挙動全般を対象にしているため、節スコープを持たない
-    このテストも守備範囲に含める)。
+    固定する (節の外へ囮を 1 個置くだけで免除される形にしない)。
     """
 
     def _scan(self, body: str, heading: str = "## タスク"):
@@ -255,8 +337,7 @@ class FormatVariants(unittest.TestCase):
 
         単純トグルだと 3 連の行を閉じと誤認し、直後の本物のタスク節がフェンス内へ
         吸い込まれて消える (コントローラの実測)。CommonMark どおり、開始と同じ長さ以上の
-        情報文字列なしの行でなければ閉じないことを確かめる。D4: 元は InvariantA に
-        居たが、検証対象は scan_tasks の書式吸収なので FormatVariants へ移した。
+        情報文字列なしの行でなければ閉じないことを確かめる。
         """
         text = (
             "````\n"
@@ -277,9 +358,8 @@ def _extract_c3_lines(path: Path) -> list[str]:
 
     行の中身 (grep -cE に渡す正規表現) を Python 側で再度パースして値だけを吸い出す
     のではなく、行そのものを後段で実際に bash へ渡して実行させる
-    (_snippet_says_close)。他言語のデータをこちらの regex で text-parse せず、その
-    言語自身に解釈させる (testing-practices.md) ことで、bash のクォート規約をテスト側に
-    二重実装して drift させることを避ける。
+    (_snippet_says_close)。他言語のデータをこちらの regex で text-parse せずその言語自身に
+    解釈させることで、bash のクォート規約をテスト側に二重実装して drift させることを避ける。
 
     フェンスは `has_task_section=` を含む最初の ```bash ブロックとして特定する
     (SKILL.md 内でこの変数名が現れるのはここだけ)。3 本のどれか 1 本でも見つから
@@ -337,9 +417,9 @@ class ParityWithPhaseC3(unittest.TestCase):
         ("## タスク\n\n- [x] 済み\n", True),
         ("## タスク\n\n", False),          # 箱 0 個
         ("# 見出し\n\n- [x] 済み\n", False),  # タスク節なし
-        ("## タスク\n\n\t- [x] 済み\n", True),  # タブ字下げ。[ \t] だと取りこぼす (R5)
-        ("## タスク\n\ntt- [x] 囮\n", False),  # t 始まりの囮。[ \t] だと誤ヒットし箱として数える (R5)
-        ("## タスク\n\n- [x] 済み\n- [　] 未\n", False),  # 全角スペースの箱が残っている (R7)
+        ("## タスク\n\n\t- [x] 済み\n", True),  # タブ字下げ。[ \t] だと取りこぼす
+        ("## タスク\n\ntt- [x] 囮\n", False),  # t 始まりの囮。[ \t] だと誤ヒットし箱として数える
+        ("## タスク\n\n- [x] 済み\n- [　] 未\n", False),  # 全角スペースの箱が残っている
     )
 
     def setUp(self):
@@ -353,8 +433,8 @@ class ParityWithPhaseC3(unittest.TestCase):
 
         `grep` を PATH 解決に任せるのは C.3 自身がそうしているため。subprocess.run は
         シェル関数を継承しないので、この開発機でも実際には /usr/bin/grep を、CI の
-        ubuntu では GNU grep を叩く (コントローラが実測して確認)。lc_all は R7 の
-        回帰網 (test_snippet_is_locale_independent) が LC_ALL を上書きするために使う。
+        ubuntu では GNU grep を叩く (コントローラが実測して確認)。lc_all は
+        test_snippet_is_locale_independent が LC_ALL を上書きするために使う。
         """
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "issue.md"
@@ -371,7 +451,15 @@ class ParityWithPhaseC3(unittest.TestCase):
             proc = subprocess.run(
                 ["bash", "-c", script], capture_output=True, text=True, env=env,
             )
-            has_task_s, boxes_s, unchecked_s = proc.stdout.strip().split(":")
+            # rc と stderr を診断へ含めるのは、bash 側が想定外に失敗したときに
+            # unpack の ValueError だけが飛んで原因が読めなくなるため
+            fields = proc.stdout.strip().split(":")
+            if proc.returncode != 0 or len(fields) != 3:
+                raise AssertionError(
+                    f"C.3 のスニペットの実行に失敗した (rc {proc.returncode}): "
+                    f"stdout={proc.stdout!r} stderr={proc.stderr.strip()!r}"
+                )
+            has_task_s, boxes_s, unchecked_s = fields
             has_task, boxes, unchecked = int(has_task_s), int(boxes_s), int(unchecked_s)
             if not has_task or boxes == 0:
                 return False
@@ -387,11 +475,15 @@ class ParityWithPhaseC3(unittest.TestCase):
                 self.assertEqual(self._snippet_says_close(text), expected)
 
     def test_snippet_is_locale_independent(self):
-        """R7 の回帰網。LC_ALL=C でも既定ロケールでも新検査と一致すること。
+        """LC_ALL=C でも既定ロケールでも新検査と一致すること。
 
-        SKILL.md の交替 `( |　|x|X)` が文字クラス `[ 　xX]` へ戻ると、全角スペースの
-        箱が残るケースだけ C ロケールで判定がずれ (箱がバイト単位に分解され
-        `unchecked` が過小に出る)、ここが赤くなる。
+        赤くなるのは `unchecked` 側の交替 `( |　)` が文字クラス `[ 　]` へ戻ったとき。
+        C ロケールでは全角スペースがバイト単位に分解されて箱として数えられず、全角スペースの
+        箱が残るケースで `unchecked` が過小に出る (実測で KILLED)。
+
+        `boxes` 側の交替 `( |　|x|X)` を同じように戻しても、ここは赤くならない (実測で
+        SURVIVED)。`boxes` は `boxes == 0` 分岐にしか効かず、全角スペースの箱は定義上
+        未チェックなので、数え落ちても「close しない」という同じ答えに落ちるため。
         """
         for text, expected in self.CASES:
             with self.subTest(text=text, lc_all="C"):
@@ -478,6 +570,9 @@ class BorrowedNames(unittest.TestCase):
 PRE_COMMIT_CONFIG = ROOT / ".pre-commit-config.yaml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 SKILL_MD = ROOT / "plugins" / "dev-workflow" / "skills" / "in-repo-issue" / "SKILL.md"
+GATE_SKILL_MD = (
+    ROOT / "plugins" / "dev-workflow" / "skills" / "pre-merge-quality-gate" / "SKILL.md"
+)
 
 
 class Attachment(unittest.TestCase):
@@ -528,6 +623,59 @@ class Attachment(unittest.TestCase):
         run = f"run: python3 {CHECKER}"
         self.assertIn(run, lines)
         self.assertTrue(lines[lines.index(run) - 1].startswith("- name:"))
+
+
+HEADING = re.compile(r"^#{1,6} +(\S.*)$")
+SECTION_REFERENCE = re.compile(r"「([^」]+)」節")
+
+
+def _prose_lines(path: Path) -> list[str]:
+    """フェンスと HTML コメントを落とした行を返す。落とすのはプロダクトコードの状態機械。
+
+    落とさないと、bash スニペットの `# コメント` を見出しとして数える。参照先が実在するかを
+    見る検査でそれを許すと、コメント 1 行で偽の緑が作れる。逆に参照する側では、フェンスの中に
+    書かれた節名を prose の参照として数えてしまう。
+    """
+    lines, _ = checker._strip_fences_and_comments(path.read_text(encoding="utf-8"))
+    return lines
+
+
+class SectionReferences(unittest.TestCase):
+    """gate が名指しする in-repo-issue の節が実在すること。
+
+    gate は同梱の判定も手順も写さず節名で名指しして読ませる形を採っており、散文層はこの
+    参照へ依存する。参照先の見出しが変わっても gate 側は何も言わないので、手順が宙に浮いた
+    まま緑で通る。値をどちらかへ二重に持たせるのではなく参照の整合だけを見る形は、Issue 間の
+    参照に対して scripts/check-related-refs.py が既に採っている。
+
+    走査を特定の Phase へ絞らないのは、同じ節を指す名指しが Phase 0 (事実収集) と Phase 2
+    (判断) と Phase 3 (適用) に分かれて置かれているため。参照は制約の写しではないので複数
+    あってよいが、絞ると絞った外の 1 本だけが宙に浮ける。
+    """
+
+    def _referenced_names(self) -> list[str]:
+        names = SECTION_REFERENCE.findall("\n".join(_prose_lines(GATE_SKILL_MD)))
+        if not names:
+            # 抽出 0 件を「名指しした節が全て実在した」とみなさない。0 件の緑は健全ではなく
+            # そもそも見ていない
+            raise AssertionError(
+                f"{GATE_SKILL_MD} に「<節名>」節 の形の参照が 1 つも無い"
+            )
+        return names
+
+    def test_referenced_sections_exist(self):
+        headings = [
+            m.group(1).strip() for m in map(HEADING.match, _prose_lines(SKILL_MD)) if m
+        ]
+        for name in self._referenced_names():
+            with self.subTest(name=name):
+                # 完全一致ではなく前方一致で見るのは、見出しが括弧つきの補足を続けて持つため
+                # (実測: 名指しは「クローズ経路: feature PR 同梱を優先」、見出しは
+                # `### クローズ経路: feature PR 同梱を優先 (main 直 push を避ける)`)
+                self.assertTrue(
+                    any(heading.startswith(name) for heading in headings),
+                    f"{SKILL_MD} に「{name}」で始まる見出しが無い",
+                )
 
 
 if __name__ == "__main__":

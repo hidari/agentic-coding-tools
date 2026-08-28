@@ -39,7 +39,11 @@ TASK_HEADING = re.compile(r"^#{2,3} *タスク *$")
 CHECKBOX = re.compile(r"^[ \t]*[-*+] \[([ 　xX])\]")
 CHECKED = ("x", "X")
 
-STATUS_LINE = re.compile(r"^status: *(\S+) *$")
+# 末尾コメントを許すのは、in-repo-issue の frontmatter スキーマが
+# `status: open  # open / in_progress / closed` の形で例示しているため。これを写した
+# issue.md の status を読めないと、その Issue が不変条件 B の検査から静かに外れる。
+# `#` をスペースに続くときだけコメントとして扱うのは YAML の規則に揃えるため
+STATUS_LINE = re.compile(r"^status: *(\S+)(?: +#.*)? *$")
 
 _notation = None
 
@@ -83,10 +87,9 @@ def _strip_fences_and_comments(text: str) -> tuple[list[str], bool]:
 
     scan_tasks と collect() が同じ状態機械を共有するのは、二重に持つと片方だけ直したときに
     フェンスの意味論がずれるため。collect() は同じ issue.md に対しこの関数を 1 回だけ呼び、
-    返ってきた lines と unclosed の両方を使い回す (D3: 以前は has_unclosed_fence(text) と
-    scan_tasks(text) が独立にこの関数を呼んでおり、同じテキストを 2 回パースしていた)。
-    コメント判定をフェンス判定より先に置く順序は元の実装のまま変えていない (フェンス内の
-    HTML コメント風の行も comment として扱われる、という既存の挙動を維持する)。
+    返ってきた lines と unclosed の両方を使い回す。
+    コメント判定をフェンス判定より先に置くのは、フェンス内の HTML コメント風の行も
+    コメントとして扱うため。
     """
     fence = notation().FENCE_LINE
     fence_len = 0
@@ -115,7 +118,7 @@ def _strip_fences_and_comments(text: str) -> tuple[list[str], bool]:
 def _scan_lines_for_tasks(lines: list[str]) -> tuple[bool, int, int]:
     """フェンス/コメント除去済みの行から (タスク節の有無, 箱の総数, 未チェック数) を返す。
 
-    scan_tasks と collect() の両方から使う共通本体 (D3)。箱の数え方を節の内側に限らないのは
+    scan_tasks と collect() の両方から使う共通本体。箱の数え方を節の内側に限らないのは
     C.3 に揃えるため。節の外へ囮を置くだけで免除される形を作らない。
     """
     has_heading = False
@@ -159,15 +162,21 @@ def is_completed(has_heading: bool, total: int, unchecked: int) -> bool:
 def read_status(text: str) -> str | None:
     """frontmatter の status を返す。読めなければ None。
 
-    frontmatter は先頭の `---` で開いて次の `---` で閉じる。閉じる前だけを見るのは、
-    本文中に status: と書かれた行を拾わないため。
+    frontmatter は先頭の `---` で開いて次の `---` で閉じる。閉じる前だけを見るのと、
+    閉じ `---` が最後まで現れない文書を諦めるのは同じ目的で、どちらも本文中に status: と
+    書かれた行を frontmatter の値として拾わないため。
     """
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         return None
-    for line in lines[1:]:
+    body = lines[1:]
+    for i, line in enumerate(body):
         if line.strip() == "---":
-            return None
+            frontmatter = body[:i]
+            break
+    else:
+        return None
+    for line in frontmatter:
         m = STATUS_LINE.match(line)
         if m:
             return m.group(1)
@@ -200,23 +209,24 @@ def issue_md_path(root: Path, rel_dir: str) -> Path | None:
 
 
 class CollectResult(NamedTuple):
-    """collect() の戻り値 (D1)。
+    """collect() の戻り値。
 
-    active / closed / missing / unreadable は同じ int 型が並ぶので、位置だけのタプルだと
-    取り違えても TypeError にならず件数が静かに入れ替わる。フィールド名を必須にする
-    NamedTuple へ寄せることで取り違えを起こしにくくする。借用元 issue-id.py の
-    Violation(NamedTuple) と同じ形。
+    active / closed は同じ int 型が並ぶので、位置だけのタプルだと取り違えても TypeError に
+    ならず件数が静かに入れ替わる。フィールド名を必須にする NamedTuple へ寄せることで
+    取り違えを起こしにくくする。借用元 issue-id.py の Violation(NamedTuple) と同じ形。
 
-    unscanned (走査できなかった件数) を持たないのは、unscanned_notes と常に同値な
-    冗長な状態だったため (D2)。呼び出し側は len(unscanned_notes) を使う。
+    検査できなかった 3 種 (issue.md が無い / status が読めない / 安全に走査できない) を
+    件数ではなく注記のリストで持つのは、件数を別に持つと注記と常に同値な冗長な状態になり、
+    片方だけ更新する変更が入る余地ができるため。呼び出し側は len() を使う。注記が rel_dir を
+    持つのは、件数だけではどの Issue が壊れているのか出力から特定できないため。
     """
 
     violations: list[str]
     unscanned_notes: list[str]
+    missing_notes: list[str]
+    unreadable_notes: list[str]
     active: int
     closed: int
-    missing: int
-    unreadable: int
 
 
 def collect(root: Path) -> CollectResult:
@@ -231,12 +241,16 @@ def collect(root: Path) -> CollectResult:
     いるので、ここで違反にすると同じ規則の 2 つ目の canonical になる (借用元 issue-id.py
     の _blob_text / run_check も同じ経路を unreadable として数え、違反にはしない)。
 
-    status (frontmatter) が読めない場合は unreadable へ別カウントする。タスクの完了漏れ
+    status (frontmatter) が読めない場合は unreadable_notes へ別に寄せる。タスクの完了漏れ
     (本文) と status の読めなさ (frontmatter) は原因も直し方も別なので、同じ
     unscanned_notes へ混ぜない。スペックの要求どおり「読めなかった」を合格へ倒さず件数へ
     出す。
 
     どれも沈黙させないのは、母集団が縮んだことを出力から見えるようにするため。
+
+    不変条件 B の限界: active 側は status が "closed" と一致するかだけを見るので、
+    `clsoed` のような綴り間違いは active に居たまま素通りする (closed/ 側は "closed" 以外を
+    全て違反にするので綴り間違いも捕まる)。
     """
     n = notation()
     dirs = n.issue_dirs(root)
@@ -244,7 +258,9 @@ def collect(root: Path) -> CollectResult:
         raise CheckError("Issue ディレクトリが 1 件も無い。走査対象ゼロは合格ではない")
     violations: list[str] = []
     unscanned_notes: list[str] = []
-    active = closed = missing = unreadable = 0
+    missing_notes: list[str] = []
+    unreadable_notes: list[str] = []
+    active = closed = 0
     for rel_dir, _ in dirs:
         is_closed = CLOSED_SEGMENT in Path(rel_dir).parts
         if is_closed:
@@ -253,7 +269,7 @@ def collect(root: Path) -> CollectResult:
             active += 1
         path = issue_md_path(root, rel_dir)
         if path is None:
-            missing += 1
+            missing_notes.append(f"{rel_dir}: issue.md が無いので走査できなかった")
             continue
         try:
             text = path.read_text(encoding="utf-8")
@@ -266,7 +282,7 @@ def collect(root: Path) -> CollectResult:
         # 前に置く
         status = read_status(text)
         if status is None:
-            unreadable += 1
+            unreadable_notes.append(f"{rel_dir}: frontmatter の status が読めなかった")
         elif is_closed and status != "closed":
             violations.append(
                 f"{rel_dir}: closed/ に居るのに status が {status}。"
@@ -279,9 +295,6 @@ def collect(root: Path) -> CollectResult:
             )
         if is_closed:
             continue
-        # D3: フェンス除去は _strip_fences_and_comments を 1 回呼ぶだけにする。以前は
-        # has_unclosed_fence(text) と scan_tasks(text) が同じ issue.md に対し独立に
-        # 呼んでおり、同じテキストを 2 回パースしていた
         lines, unclosed = _strip_fences_and_comments(text)
         if unclosed:
             # 閉じ忘れは以降の全行を無検査にする。検査対象を安全に走査できないという
@@ -300,7 +313,14 @@ def collect(root: Path) -> CollectResult:
                 f"{rel_dir}: タスクが全て消化済みなのに active に居る "
                 f"(箱 {total} 個 / 未チェック 0)。クローズを同じ PR へ同梱する"
             )
-    return CollectResult(violations, unscanned_notes, active, closed, missing, unreadable)
+    return CollectResult(
+        violations=violations,
+        unscanned_notes=unscanned_notes,
+        missing_notes=missing_notes,
+        unreadable_notes=unreadable_notes,
+        active=active,
+        closed=closed,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -320,18 +340,20 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     for line in result.violations:
         print(f"  [x] {line}", file=sys.stderr)
-    # 走査できなかった注記は違反と別記号にする。同じ [x] で並べると rc に効かない件数まで
-    # 「違反」に見え、読み手が rc 0 の理由を誤解する
-    for line in result.unscanned_notes:
+    # 検査できなかった注記は違反と別記号にする。同じ [x] で並べると rc に効かない件数まで
+    # 「違反」に見え、読み手が rc 0 の理由を誤解する。3 種を同じ [-] で並べるのは、どれも
+    # 「この Issue は検査できていない」という同じ意味を持つため
+    for line in (*result.missing_notes, *result.unreadable_notes, *result.unscanned_notes):
         print(f"  [-] {line}", file=sys.stderr)
-    # unscanned (走査できなかった件数) は unscanned_notes の長さそのもの (D2)。ここで
-    # len() を経由するのが唯一の消費点で、状態として別に持たない
+    # active / closed が母集団で、括弧の中はその部分集合。「うち」で括るのは、並べて書くと
+    # 互いに排他な状態が 5 つあるように読めるため。3 つは互いにも排他ではない (閉じ忘れ
+    # フェンスを持つ issue.md は status も読めないことがある)
     print(
         f"検査した Issue: active {result.active} 個 / closed {result.closed} 個"
-        f" / issue.md が無い {result.missing} 個"
-        f" / status が読めない {result.unreadable} 個"
-        f" / 走査できなかった {len(result.unscanned_notes)} 個"
-        f" / 違反 {len(result.violations)} 件"
+        f" (うち issue.md が無い {len(result.missing_notes)} 個"
+        f" / status が読めない {len(result.unreadable_notes)} 個"
+        f" / 走査できなかった {len(result.unscanned_notes)} 個)"
+        f"。違反 {len(result.violations)} 件"
     )
     return 1 if result.violations else 0
 
