@@ -252,5 +252,56 @@ class FormatVariants(unittest.TestCase):
         self.assertEqual(checker.scan_tasks(text), (True, 1, 0))
 
 
+class ExitCodes(unittest.TestCase):
+    """終了コードの写像を subprocess で pin する。関数を直接呼ぶテストだけだと
+    「違反ありで return 0」の 1 行の変異が全緑のまま生き残る。
+    """
+
+    def _rc(self, root: Path) -> int:
+        return subprocess.run(
+            [sys.executable, str(ROOT / CHECKER), "--root", str(root)],
+            capture_output=True, text=True, env=GIT_ENV,
+        ).returncode
+
+    def test_no_issue_directory_at_all_is_two(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fx = Fixture(tmp)
+            (fx.root / "README.md").write_text("probe\n", encoding="utf-8")
+            fx.commit()
+            self.assertEqual(self._rc(fx.root), 2)
+
+    def test_no_active_issue_is_zero_not_two(self):
+        # 「open な Issue が 1 件も無い」は正常な状態なので検査不能にしない
+        with tempfile.TemporaryDirectory() as tmp:
+            fx = Fixture(tmp)
+            fx.add_issue("closed/ISSUE-1_probe", issue_md("closed", ["- [x] 済み"]))
+            fx.commit()
+            self.assertEqual(self._rc(fx.root), 0)
+
+    def test_abbreviated_flag_is_rejected(self):
+        # 短縮形が別モードへ静かに落ちるのを防ぐ
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / CHECKER), "--ro", "."],
+            capture_output=True, text=True, env=GIT_ENV,
+        )
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("unrecognized arguments", proc.stderr)
+
+
+class BorrowedNames(unittest.TestCase):
+    """借用先が rename されたら素通りではなく検査不能で落ちること。"""
+
+    def test_missing_borrowed_name_is_check_error(self):
+        original = checker.BORROWED
+        checker.BORROWED = original + ("この名前は存在しない",)
+        checker._notation = None
+        try:
+            with self.assertRaises(checker.CheckError):
+                checker.notation()
+        finally:
+            checker.BORROWED = original
+            checker._notation = None
+
+
 if __name__ == "__main__":
     unittest.main()
