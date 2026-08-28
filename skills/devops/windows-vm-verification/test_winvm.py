@@ -51,6 +51,12 @@ PRLCTL_LIST_JSON = """[
 RUNNING_VM = "Fixture Guest - Windows 11 ARM"
 STOPPED_VM = "Fixture Host - macOS"
 
+# DHCP が応答しなかった VM。ipAddresses は埋まるので「IP は取れている」経路を通る。
+APIPA_LIST_JSON = PRLCTL_LIST_JSON.replace('"ip": "10.211.55.3"', '"ip": "169.254.10.20"')
+# 置換元の値を再掲する形なので、フィクスチャ側を変えると replace が黙って no-op になる
+# (_with_bundle の docstring が同じ理由でこの形を避けている)。空振りを import 時に落とす。
+assert APIPA_LIST_JSON != PRLCTL_LIST_JSON
+
 
 def config_pvs(isolated: str) -> str:
     """実機 config.pvs の骨格。隔離フラグは `./Settings/Tools/IsolatedVm` にある。"""
@@ -317,6 +323,31 @@ class CmdResolveIp(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(out.strip(), "10.211.55.3")
 
+    def test_apipa_warns_on_stderr_without_touching_stdout_or_exit_code(self):
+        # stdout がそのまま nc の接続先になるので、値だけが出ることを exact 比較で
+        # pin する。stdout と exit code を変えない理由は cmd_resolve_ip 側の
+        # コメントが持つ。
+        self.run = FakeRunner({tuple(winvm.prlctl_list_argv()): (0, APIPA_LIST_JSON, "")})
+        rc, out, err = self._resolve(RUNNING_VM)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "169.254.10.20")
+        self.assertIn("警告:", err)
+        self.assertIn("169.254.10.20", err)
+        # 名前を出さないと doctor に渡す値を利用者が組み立て直すことになる。
+        self.assertIn("doctor", err)
+        self.assertIn(RUNNING_VM, err)
+        # 原因の説明の canonical は doctor の hint で、ここへ写すと二重管理になる。
+        # ただし見ているのは hint に出る 2 語だけの tripwire で、言い換えは捕まらない。
+        self.assertNotIn("DHCP", err)
+        self.assertNotIn("troubleshooting", err)
+
+    def test_normal_ip_resolves_without_any_warning(self):
+        # 対照。警告が帯を見ずに常時出るなら上のテストは分岐を見ていない。
+        rc, out, err = self._resolve(RUNNING_VM)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "10.211.55.3")
+        self.assertEqual(err, "")
+
 
 class DoctorReport(unittest.TestCase):
     def test_report_shows_the_observed_value_of_every_check(self):
@@ -420,9 +451,8 @@ class CollectDoctorChecks(unittest.TestCase):
 
     def test_apipa_address_fails_and_points_at_dhcp(self):
         # 読めた値の意味を見ずに OK へ倒さないことを pin する。帯そのものの意味は
-        # winvm.py 側のコメントが持つ。
-        json_text = PRLCTL_LIST_JSON.replace('"ip": "10.211.55.3"', '"ip": "169.254.10.20"')
-        checks = self._checks(list_json=json_text)
+        # is_apipa の docstring が持つ。
+        checks = self._checks(list_json=APIPA_LIST_JSON)
         c = self._by_label(checks, "IP")
         self.assertEqual(c.observed, "169.254.10.20")
         self.assertIs(c.ok, False)

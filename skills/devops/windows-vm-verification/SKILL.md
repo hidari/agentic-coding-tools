@@ -40,6 +40,8 @@ winvm resolve-ip --vm <名前 or UUID>
 
 失敗時は理由を区別して出す（VM 未登録なら登録済みの名前一覧、停止中なら `status=stopped` と起動コマンド）。
 
+APIPA (link-local) を掴んでいるときは標準エラーへ警告を 1 行出す。標準出力と終了コードは変わらないので `$(winvm resolve-ip ...)` で値を取る使い方は壊れない。原因の切り分けは `doctor` が持つ。
+
 ### `doctor`
 
 ```

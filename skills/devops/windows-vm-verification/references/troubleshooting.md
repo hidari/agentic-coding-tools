@@ -20,7 +20,7 @@
 
 ## VM が APIPA になる (DHCP 応答なし)
 
-`winvm doctor` の IP が `169.254.x.x` を返したら DHCP に失敗している。この帯は DHCP から応答が無かったときに OS が自分で振る自己割り当てアドレスで、値が取れていてもネットワークは無い。疑うのは VM 内部ではなくホスト側の Parallels の NAT/DHCP。
+`winvm doctor` の IP が `169.254.x.x` を返したら DHCP に失敗している。SSH 接続時に `winvm resolve-ip` が標準エラーへ警告を出したときも同じ状態で、こちらは `ProxyCommand` から出るので接続がタイムアウトするのを待っている最中に見える。この帯は DHCP から応答が無かったときに OS が自分で振る自己割り当てアドレスで、値が取れていてもネットワークは無い。疑うのは VM 内部ではなくホスト側の Parallels の NAT/DHCP。
 
 実際に踏んだときの原因は、NAT/DHCP デーモン `prl_naptd` がソケットを 1 つも持たないまま生き続けていたこと。プロセス自体は生きているので `ps` には見え、watchdog (`watchdog start 60 20 ... prl_naptd start`) もプロセスの生死しか見ないため、壊れた状態が安定して維持され続けた (実測で 2 日間)。
 

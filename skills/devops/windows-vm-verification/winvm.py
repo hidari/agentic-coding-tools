@@ -126,6 +126,17 @@ def pick_ipv4(network: dict | None) -> str | None:
     return None
 
 
+def is_apipa(ip: str | None) -> bool:
+    """`ip` が APIPA の帯 (169.254/16) にあるか。
+
+    DHCP から応答が無いとき OS が自分で振る帯で、値が取れていてもネットワークは
+    無い。複数の呼び出し元が要る判定なので、帯の定義はここだけに置く。
+    `pick_ipv4` を通った値は妥当性が済んでいるので再 parse で例外は出ないが、
+    IP 未取得の None は `IPv4Address` が送出するので先に弾く。
+    """
+    return ip is not None and ipaddress.IPv4Address(ip).is_link_local
+
+
 def parse_tools(vm: dict) -> tuple[str | None, str | None]:
     """レコードの `GuestTools` から (state, version) を返す。
 
@@ -211,15 +222,26 @@ def cmd_resolve_ip(args: argparse.Namespace, *, run=run_capture) -> int:
             file=sys.stderr,
         )
         return 1
+    name = str(vm.get("Name", vm_id))
     status = str(vm.get("State", "unknown"))
     ip = pick_ipv4(vm.get("Network"))
     if ip is None:
         print(
             f"error: IP を解決できません (status={status})。"
-            f'VM が起動していない場合は prlctl start "{vm.get("Name", vm_id)}" で起動する',
+            f'VM が起動していない場合は prlctl start "{name}" で起動する',
             file=sys.stderr,
         )
         return 1
+    if is_apipa(ip):
+        # stdout と exit code は変えない。このコマンドは ProxyCommand の中で動くので
+        # stdout は nc の接続先そのもので、exit code を 1 にすると nc が空文字を掴む。
+        # ProxyCommand の stderr は ssh の呼び出し元へ素通しされる (実測) ので、
+        # 不透明なタイムアウトを待っている最中の人の目に届く。原因の説明は doctor の
+        # hint が持つ。ここはそこへの入口だけを出す。
+        print(
+            f'警告: {ip} は APIPA。winvm doctor --vm "{name}" で原因を確認する',
+            file=sys.stderr,
+        )
     print(ip)
     return 0
 
@@ -302,10 +324,7 @@ def collect_doctor_checks(
     ip = pick_ipv4(vm.get("Network"))
     tools_state, tools_version = parse_tools(vm)
     isolated = _read_isolation(vm.get("Home"))
-    # 169.254/16 は DHCP から応答が無いとき OS が自分で振る帯で、値が取れていても
-    # ネットワークは無い。pick_ipv4 が妥当性を検証済みなので再 parse で例外は出ないが、
-    # ip が None のときの IPv4Address(None) は送出するので None を先に弾く。
-    apipa = ip is not None and ipaddress.IPv4Address(ip).is_link_local
+    apipa = is_apipa(ip)
 
     checks = [
         Check("VM", f"{name} ({vm.get('ID', '')})", True),
