@@ -111,6 +111,10 @@ branch に実効する rule を直接返す `rules/branches/{branch}` の 2 つ�
       許容するのか避けるのかを決める
 - [x] 変異注入で確認する: 判定の入口を外すと、既定の経路が同梱に触れずに通過できることを
       再現できる形にする
+  - 射程: 変異で赤くなることを確認したのは機械層 (`scripts/check-issue-closure.py` の判定と、
+    その pre-commit / CI 取り付け) に限る。gate SKILL.md の Phase 0 / 2 / 3 へ置いた散文の
+    入口は、記述の整合を見る検査があっても「手順が実際に実行されたか」は見えないので、
+    そこは変異の射程外として [x] にしている
 
 ## 関連
 
@@ -122,3 +126,9 @@ branch に実効する rule を直接返す `rules/branches/{branch}` の 2 つ�
   gate の持たない検証を指している
 - ISSUE-33 — 同じ gate の別の欠陥。出力書式が全レーン skipped でも合格を許す
 - ISSUE-42 — 本 Issue と同じ PR で起票した別件
+- ISSUE-32 — 検査の配布を担当する側。本 Issue が足した `check-issue-closure.py` は
+  そのまま配れないので、層 2 の配線から外す判断が要る
+- ISSUE-43 — 同梱が既定になったことで Phase E の親伝播が起動しなくなる件。spec が
+  「新規 Issue へ切り出す」と決めた分
+- ISSUE-44 — 本 Issue の実装中にコミットを分けようとして踏んだ別件。部分コミットで
+  pre-commit が落ちる。原因のファイルが本 Issue の対象外だったため切り出した
