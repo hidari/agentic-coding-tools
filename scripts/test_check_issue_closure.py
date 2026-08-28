@@ -116,6 +116,43 @@ class InvariantA(FixtureCase):
             "closed/ISSUE-1_probe", issue_md("closed", ["- [x] 済み"])))
         self.assertEqual(rc, 0)
 
+
+class InvariantB(FixtureCase):
+    """配置 (closed/ に居るか) と frontmatter の status が食い違わないこと。
+
+    本タスク着手前はこの検査が status を一度も読んでいなかった (scripts/ と plugins/ を
+    `status:` で走査して確認。ヒットはテストの fixture 文字列だけだった)。したがって
+    `git mv` だけして frontmatter を書き換えない状態はどこからも見えなかった。
+    """
+
+    def test_closed_dir_with_open_status_is_a_violation(self):
+        rc, _, err = self._run(lambda fx: fx.add_issue(
+            "closed/ISSUE-1_probe", issue_md("open", ["- [x] 済み"])))
+        self.assertEqual(rc, 1)
+        self.assertIn("status", err)
+
+    def test_active_dir_with_closed_status_is_a_violation(self):
+        rc, _, err = self._run(lambda fx: fx.add_issue(
+            "ISSUE-1_probe", issue_md("closed", ["- [ ] 未"])))
+        self.assertEqual(rc, 1)
+        self.assertIn("status", err)
+
+    def test_unreadable_status_is_counted_not_passed(self):
+        # 読めなかったものを合格へ倒さない。件数に出して沈黙させない
+        rc, out, _ = self._run(lambda fx: fx.add_issue(
+            "ISSUE-1_probe", "# 見出しだけ\n\n## タスク\n\n- [ ] 未\n"))
+        self.assertEqual(rc, 0)
+        self.assertIn("status が読めない 1 個", out)
+
+
+class UnscannableInputs(FixtureCase):
+    """走査できなかった入力 (閉じ忘れフェンス・非 UTF-8) は違反にも合格にもせず件数へ出す。
+
+    D4: 元は InvariantA に同居していたが、検証しているのは「タスクの完了漏れ」ではなく
+    「そもそも安全に走査できない」という別種の不変条件なので独立させた。中身は移動のみで
+    変えていない。
+    """
+
     def test_unclosed_fence_is_unscanned_not_a_violation(self):
         """全箱チェック済みでも、フェンスが閉じていなければ走査できず違反にもならない。
 
@@ -136,22 +173,6 @@ class InvariantA(FixtureCase):
         self.assertIn("[-]", err)
         self.assertNotIn("[x]", err)
 
-    def test_scan_tasks_respects_closing_fence_length(self):
-        """4 連バッククォートで開いたフェンスは、内側の 3 連の行では閉じない。
-
-        単純トグルだと 3 連の行を閉じと誤認し、直後の本物のタスク節がフェンス内へ
-        吸い込まれて消える (コントローラの実測)。CommonMark どおり、開始と同じ長さ以上の
-        情報文字列なしの行でなければ閉じないことを確かめる。
-        """
-        text = (
-            "````\n"
-            "```\n"
-            "````\n"
-            "\n"
-            "## タスク\n\n- [x] 済み\n"
-        )
-        self.assertEqual(checker.scan_tasks(text), (True, 1, 0))
-
     def test_cp932_issue_is_unscanned_not_a_crash(self):
         """UTF-8 で読めない issue.md は例外を伝播させず「走査できなかった」件数へ寄せる。
 
@@ -168,9 +189,16 @@ class InvariantA(FixtureCase):
 
 
 class FormatVariants(unittest.TestCase):
-    """行頭アンカーの素朴な正規表現だと、完了済み Issue が 9 通りで素通りする
+    """scan_tasks (純粋関数) の挙動全般を pin する。
+
+    行頭アンカーの素朴な正規表現だと、完了済み Issue が 9 通りの書式ゆれで素通りする
     (fixture で実測)。GitHub 上では完了済みとして正常に描画されるので、レビューでも
     気づけない。吸収する範囲を仕様として固定する。
+
+    書式ゆれとは別に、箱を数える範囲がタスク節の内側に限られないことも合わせてここで
+    固定する (節の外へ囮を 1 個置くだけで免除される形にしない。D5: このクラスは書式ゆれ
+    9 通りだけでなく scan_tasks の挙動全般を対象にしているため、節スコープを持たない
+    このテストも守備範囲に含める)。
     """
 
     def _scan(self, body: str, heading: str = "## タスク"):
@@ -205,6 +233,23 @@ class FormatVariants(unittest.TestCase):
         body = "- [x] 済み"
         text = f"## タスク\n\n{body}\n\n## 関連\n\n- [ ] 囮\n"
         self.assertEqual(checker.scan_tasks(text), (True, 2, 1))
+
+    def test_scan_tasks_respects_closing_fence_length(self):
+        """4 連バッククォートで開いたフェンスは、内側の 3 連の行では閉じない。
+
+        単純トグルだと 3 連の行を閉じと誤認し、直後の本物のタスク節がフェンス内へ
+        吸い込まれて消える (コントローラの実測)。CommonMark どおり、開始と同じ長さ以上の
+        情報文字列なしの行でなければ閉じないことを確かめる。D4: 元は InvariantA に
+        居たが、検証対象は scan_tasks の書式吸収なので FormatVariants へ移した。
+        """
+        text = (
+            "````\n"
+            "```\n"
+            "````\n"
+            "\n"
+            "## タスク\n\n- [x] 済み\n"
+        )
+        self.assertEqual(checker.scan_tasks(text), (True, 1, 0))
 
 
 if __name__ == "__main__":

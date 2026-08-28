@@ -19,6 +19,7 @@ import importlib.util
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -80,10 +81,12 @@ def _strip_fences_and_comments(text: str) -> tuple[list[str], bool]:
     3 連の行がある文書で閉じ判定を誤り (3 連の行を「閉じた」と数えてしまう)、直後に続く
     本物のタスク節がフェンス内へ吸い込まれて消える (実測)。
 
-    scan_tasks と has_unclosed_fence が同じ状態機械を共有するのは、二重に持つと片方だけ
-    直したときにフェンスの意味論がずれるため。コメント判定をフェンス判定より先に置く
-    順序は元の実装のまま変えていない (フェンス内の HTML コメント風の行も comment として
-    扱われる、という既存の挙動を維持する)。
+    scan_tasks と collect() が同じ状態機械を共有するのは、二重に持つと片方だけ直したときに
+    フェンスの意味論がずれるため。collect() は同じ issue.md に対しこの関数を 1 回だけ呼び、
+    返ってきた lines と unclosed の両方を使い回す (D3: 以前は has_unclosed_fence(text) と
+    scan_tasks(text) が独立にこの関数を呼んでおり、同じテキストを 2 回パースしていた)。
+    コメント判定をフェンス判定より先に置く順序は元の実装のまま変えていない (フェンス内の
+    HTML コメント風の行も comment として扱われる、という既存の挙動を維持する)。
     """
     fence = notation().FENCE_LINE
     fence_len = 0
@@ -109,13 +112,12 @@ def _strip_fences_and_comments(text: str) -> tuple[list[str], bool]:
     return kept, fence_len != 0
 
 
-def scan_tasks(text: str) -> tuple[bool, int, int]:
-    """(タスク節の有無, 箱の総数, 未チェック数) を返す。
+def _scan_lines_for_tasks(lines: list[str]) -> tuple[bool, int, int]:
+    """フェンス/コメント除去済みの行から (タスク節の有無, 箱の総数, 未チェック数) を返す。
 
-    箱の数え方を節の内側に限らないのは C.3 に揃えるため。節の外へ囮を置くだけで
-    免除される形を作らない。
+    scan_tasks と collect() の両方から使う共通本体 (D3)。箱の数え方を節の内側に限らないのは
+    C.3 に揃えるため。節の外へ囮を置くだけで免除される形を作らない。
     """
-    lines, _ = _strip_fences_and_comments(text)
     has_heading = False
     total = 0
     unchecked = 0
@@ -131,17 +133,28 @@ def scan_tasks(text: str) -> tuple[bool, int, int]:
     return has_heading, total, unchecked
 
 
-def has_unclosed_fence(text: str) -> bool:
-    """コードフェンスが閉じずに文書末尾へ達しているか。
+def scan_tasks(text: str) -> tuple[bool, int, int]:
+    """(タスク節の有無, 箱の総数, 未チェック数) を返す。テストが直接叩く公開関数。"""
+    lines, _ = _strip_fences_and_comments(text)
+    return _scan_lines_for_tasks(lines)
 
-    閉じ忘れは以降の全行を無検査にする。ここでは検査対象を安全に走査できないという
-    シグナルとして使うだけで、違反 (rc 1) としては報告しない。閉じ忘れ自体は
-    issue-id.py --check が全追跡ファイルに対して既に検出・報告しており
-    (KIND_UNCLOSED_FENCE)、pre-commit / CI の両方に取り付け済みなので、ここで違反にすると
-    同じ規則の 2 つ目の canonical になる。呼び出し側は「走査できなかった」件数へ寄せること。
+
+def read_status(text: str) -> str | None:
+    """frontmatter の status を返す。読めなければ None。
+
+    frontmatter は先頭の `---` で開いて次の `---` で閉じる。閉じる前だけを見るのは、
+    本文中に status: と書かれた行を拾わないため。
     """
-    _, unclosed = _strip_fences_and_comments(text)
-    return unclosed
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return None
+        m = STATUS_LINE.match(line)
+        if m:
+            return m.group(1)
+    return None
 
 
 def resolve_root(explicit: str | None) -> Path:
@@ -169,18 +182,44 @@ def issue_md_path(root: Path, rel_dir: str) -> Path | None:
     return None
 
 
-def collect(root: Path) -> tuple[list[str], list[str], int, int, int, int]:
-    """(違反, 走査できなかった注記, active 件数, closed 件数,
-    issue.md が無いディレクトリ数, 走査できなかった件数) を返す。
+class CollectResult(NamedTuple):
+    """collect() の戻り値 (D1)。
 
-    「走査できなかった」に寄せるのは 2 つ: issue.md が読めない (エンコーディング不正など)
-    と、コードフェンスが閉じておらず内容を安全に走査できない場合。どちらも違反 (rc 1) には
-    しない。読めないファイルを Python の既定 (UnicodeDecodeError で未捕捉のまま伝播) に
-    任せると rc が 1 になり、「読めない」が「違反」を名乗ってしまう。閉じ忘れフェンスは
-    issue-id.py --check が既に検出・報告しているので、ここで違反にすると同じ規則の
-    2 つ目の canonical になる (借用元 issue-id.py の _blob_text / run_check も同じ経路を
-    unreadable として数え、違反にはしない)。
-    どちらも沈黙させないのは、母集団が縮んだことを出力から見えるようにするため。
+    active / closed / missing / unreadable は同じ int 型が並ぶので、位置だけのタプルだと
+    取り違えても TypeError にならず件数が静かに入れ替わる。フィールド名を必須にする
+    NamedTuple へ寄せることで取り違えを起こしにくくする。借用元 issue-id.py の
+    Violation(NamedTuple) と同じ形。
+
+    unscanned (走査できなかった件数) を持たないのは、unscanned_notes と常に同値な
+    冗長な状態だったため (D2)。呼び出し側は len(unscanned_notes) を使う。
+    """
+
+    violations: list[str]
+    unscanned_notes: list[str]
+    active: int
+    closed: int
+    missing: int
+    unreadable: int
+
+
+def collect(root: Path) -> CollectResult:
+    """Issue ディレクトリを歩き、不変条件 A (完了漏れ) と不変条件 B (配置と status の
+    整合) を検査する。
+
+    「走査できなかった」(unscanned_notes) に寄せるのは 2 つ: issue.md が読めない
+    (エンコーディング不正など) と、コードフェンスが閉じておらず内容を安全に走査できない
+    場合。どちらも違反 (rc 1) にはしない。読めないファイルを Python の既定
+    (UnicodeDecodeError で未捕捉のまま伝播) に任せると rc が 1 になり、「読めない」が
+    「違反」を名乗ってしまう。閉じ忘れフェンスは issue-id.py --check が既に検出・報告して
+    いるので、ここで違反にすると同じ規則の 2 つ目の canonical になる (借用元 issue-id.py
+    の _blob_text / run_check も同じ経路を unreadable として数え、違反にはしない)。
+
+    status (frontmatter) が読めない場合は unreadable へ別カウントする。タスクの完了漏れ
+    (本文) と status の読めなさ (frontmatter) は原因も直し方も別なので、同じ
+    unscanned_notes へ混ぜない。スペックの要求どおり「読めなかった」を合格へ倒さず件数へ
+    出す。
+
+    どれも沈黙させないのは、母集団が縮んだことを出力から見えるようにするため。
     """
     n = notation()
     dirs = n.issue_dirs(root)
@@ -188,7 +227,7 @@ def collect(root: Path) -> tuple[list[str], list[str], int, int, int, int]:
         raise CheckError("Issue ディレクトリが 1 件も無い。走査対象ゼロは合格ではない")
     violations: list[str] = []
     unscanned_notes: list[str] = []
-    active = closed = missing = unscanned = 0
+    active = closed = missing = unreadable = 0
     for rel_dir, _ in dirs:
         is_closed = CLOSED_SEGMENT in Path(rel_dir).parts
         if is_closed:
@@ -202,25 +241,49 @@ def collect(root: Path) -> tuple[list[str], list[str], int, int, int, int]:
         try:
             text = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError) as e:
-            unscanned += 1
             unscanned_notes.append(f"{rel_dir}: 読めないので走査できなかった ({e})")
             continue
+        # 不変条件 B: 配置 (closed/ に居るか) と frontmatter の status が食い違わないこと。
+        # フェンスの状態に関わらず frontmatter は先頭にあるので、フェンス走査より前に
+        # status を見る。closed 側もここで検査するので、後続の "is_closed: continue" より
+        # 前に置く
+        status = read_status(text)
+        if status is None:
+            unreadable += 1
+        elif is_closed and status != "closed":
+            violations.append(
+                f"{rel_dir}: closed/ に居るのに status が {status}。"
+                "git mv だけして frontmatter を書き換えていない"
+            )
+        elif not is_closed and status == "closed":
+            violations.append(
+                f"{rel_dir}: status が closed なのに active に居る。"
+                "closed/ へ移していない"
+            )
         if is_closed:
             continue
-        if has_unclosed_fence(text):
-            unscanned += 1
+        # D3: フェンス除去は _strip_fences_and_comments を 1 回呼ぶだけにする。以前は
+        # has_unclosed_fence(text) と scan_tasks(text) が同じ issue.md に対し独立に
+        # 呼んでおり、同じテキストを 2 回パースしていた
+        lines, unclosed = _strip_fences_and_comments(text)
+        if unclosed:
+            # 閉じ忘れは以降の全行を無検査にする。検査対象を安全に走査できないという
+            # シグナルとして使うだけで、違反 (rc 1) としては報告しない。閉じ忘れ自体は
+            # issue-id.py --check が全追跡ファイルに対して既に検出・報告しており
+            # (KIND_UNCLOSED_FENCE)、pre-commit / CI の両方に取り付け済みなので、ここで
+            # 違反にすると同じ規則の 2 つ目の canonical になる
             unscanned_notes.append(
                 f"{rel_dir}: コードフェンスが閉じていないので走査できなかった "
                 "(閉じ忘れ自体は issue-id.py --check が別途報告する)"
             )
             continue
-        has_heading, total, unchecked = scan_tasks(text)
+        has_heading, total, unchecked = _scan_lines_for_tasks(lines)
         if has_heading and total >= 1 and unchecked == 0:
             violations.append(
                 f"{rel_dir}: タスクが全て消化済みなのに active に居る "
                 f"(箱 {total} 個 / 未チェック 0)。クローズを同じ PR へ同梱する"
             )
-    return violations, unscanned_notes, active, closed, missing, unscanned
+    return CollectResult(violations, unscanned_notes, active, closed, missing, unreadable)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -234,22 +297,26 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         root = resolve_root(args.root)
-        violations, unscanned_notes, active, closed, missing, unscanned = collect(root)
+        result = collect(root)
     except CheckError as e:
         print(f"[x] {e}", file=sys.stderr)
         return 2
-    for line in violations:
+    for line in result.violations:
         print(f"  [x] {line}", file=sys.stderr)
     # 走査できなかった注記は違反と別記号にする。同じ [x] で並べると rc に効かない件数まで
     # 「違反」に見え、読み手が rc 0 の理由を誤解する
-    for line in unscanned_notes:
+    for line in result.unscanned_notes:
         print(f"  [-] {line}", file=sys.stderr)
+    # unscanned (走査できなかった件数) は unscanned_notes の長さそのもの (D2)。ここで
+    # len() を経由するのが唯一の消費点で、状態として別に持たない
     print(
-        f"検査した Issue: active {active} 個 / closed {closed} 個"
-        f" / issue.md が無い {missing} 個 / 走査できなかった {unscanned} 個"
-        f" / 違反 {len(violations)} 件"
+        f"検査した Issue: active {result.active} 個 / closed {result.closed} 個"
+        f" / issue.md が無い {result.missing} 個"
+        f" / status が読めない {result.unreadable} 個"
+        f" / 走査できなかった {len(result.unscanned_notes)} 個"
+        f" / 違反 {len(result.violations)} 件"
     )
-    return 1 if violations else 0
+    return 1 if result.violations else 0
 
 
 if __name__ == "__main__":
