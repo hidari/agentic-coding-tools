@@ -42,7 +42,7 @@ gh pr view <num> --json title,body  # PR メタ情報
 
 `<base>` は通常 `main`、`<num>` は対象 PR 番号。
 
-PR をこれから作る経路では、Issue のクローズをこの PR へ同梱するかの判定に要る事実 (main が保護されているか) もここで集める。判定の手順は `dev-workflow:in-repo-issue` の「クローズ経路: feature PR 同梱を優先」節が持つので、写さずにそちらを読む。
+PR をこれから作る経路では、Issue のクローズをこの PR へ同梱するかの判定に要る事実 (main への直 push を禁じる方針かどうか) もここで集める。判定の手順は `dev-workflow:in-repo-issue` の「クローズ経路: feature PR 同梱を優先」節が持つので、写さずにそちらを読む。
 
 ### Phase 1: 並列でレビュー実行
 
@@ -85,7 +85,7 @@ simplify / code-reviewer / boy-scout-sweep / dev-workflow:e2e-scenario-impact-ch
 
 ### Phase 2: 指摘事項の判断
 
-各指摘を 6 軸で分類:
+Phase 1 の指摘と gate 自身の判断を、次の軸で分類する:
 
 | 分類 | 対応 |
 |---|---|
@@ -111,7 +111,8 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 ### Phase 3: 修正反映 + 再検証
 
 1. 修正を適用 (Edit / Write)
-2. 同梱すると判断したなら `dev-workflow:in-repo-issue` の D.1〜D.4 を feature ブランチのコミットへ含める。Phase 4 (執行) ではなくここへ置くのは、同梱が issue.md の編集と `git mv` と相対リンクの補正というファイル変更を伴うため。Phase 4 に置くと、この Phase の再検証を通らない変更が PR へ入る
+2. 同梱すると判断したなら `dev-workflow:in-repo-issue` の D.1〜D.4 を feature ブランチのコミットへ含める
+   - Phase 4 (執行) ではなくここへ置くのは、同梱が issue.md の編集と `git mv` と相対リンクの補正というファイル変更を伴うため。Phase 4 に置くと、この Phase の再検証を通らない変更が PR へ入る
 3. `make format` (該当エリアのみ)
 4. `make ci-<area>` で全テスト pass を確認
    - area 名はプロジェクトの `Makefile` に依存する。`ci-frontend` / `ci-backend` のようにデプロイ単位で切られていることが多い
@@ -167,7 +168,7 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 ## 関連
 
 - `dev-workflow:commit-and-pr-message` (sibling skill): コミット本文と PR 本文の書き方と渡し方。Phase 4 で `gh pr create` する直前に使う
-- `dev-workflow:in-repo-issue` (sibling skill): Issue のライフサイクル。Phase 0 の同梱判定と Phase 5 の自動クローズがここを参照する
+- `dev-workflow:in-repo-issue` (sibling skill): Issue のライフサイクル。同梱の判定 (Phase 0 で事実収集、Phase 2 で判断、Phase 3 で適用) と、マージ後の自動クローズ (Phase 5) がここを参照する
 - `simplify` (built-in skill): 4 並列レビューと修正適用
 - `feature-dev:code-reviewer` (subagent): バグ・logic・security の confidence-based filtering
 - `dev-workflow:e2e-scenario-impact-check` (sibling skill): フロント変更が E2E シナリオテストを壊す可能性を静的検出。Phase 1 の 4 つ目並列タスク
