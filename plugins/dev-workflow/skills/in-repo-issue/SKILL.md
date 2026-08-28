@@ -176,11 +176,25 @@ A.5 分割 (親 → 子 Issue):「Plan が複数必要」「PR が PR-A, PR-B �
 
 ### クローズ経路: feature PR 同梱を優先 (main 直 push を避ける)
 
+**保護されているかは classic branch protection API の 404 だけで判定しないこと。** repository
+ruleset は branch protection とは別系統の仕組みで、 classic API には出ない。 両方を見て初めて
+判定できる:
+
+```bash
+gh api "repos/<owner>/<repo>/branches/main/protection" >/dev/null 2>&1; echo "classic rc=$?"
+gh api "repos/<owner>/<repo>/rulesets" --jq '.[] | select(.target=="branch" and .enforcement=="active") | .rules[].type'
+```
+
+判定式は「branch を target とする active な ruleset が `pull_request` rule を持つか」。 出力に
+`pull_request` が現れれば PR が必須ということなので、 この節の同梱経路を選ぶ。 **終了コードを
+見るときはパイプへ繋がないこと。** `| head` のように別コマンドで終端すると `$?` はその終端
+コマンドの rc になり、 `gh` 自身の失敗が消える。
+
 Phase C/D は既定で post-merge に main へ直接 commit して close する。 だが **main への直 push を禁じるプロジェクト** (default branch への push を PR で迂回する方針、 CI-on-PR や auto-mode classifier のガードがある環境) では、 この直 push が方針に反する。
 
 その場合は feature PR にクローズを同梱する:
 
-- feature ブランチ内で Phase D.1〜D.3 と同じ操作 (issue.md を `status: closed` 化 + `git mv` で `closed/` へ移動 + 相対リンクの補正) をコミットに含める。
+- feature ブランチ内で Phase D.1〜D.4 と同じ操作 (issue.md を `status: closed` 化 + `git mv` で `closed/` へ移動 + 相対リンクの補正 + 新パスの明示 stage) をコミットに含める (理由は D.4 参照)。 コミット文言は feature PR 自身のコミットメッセージに委ねる (D 形式の `(PR #<M>)` は同梱時には使わない。 この時点では PR 番号が未確定なため)。
 - PR マージで issue が closed のまま main に入る。 post-merge の別コミット/push は不要で、 CI 追加 run も出ない (別 docs PR だと ci が PR+マージで 2 run 走りコスト増)。
 - マージ後に Phase C が走っても、 対象が `closed/` 配下にあるため C.3 の既存分岐で「既に closed」→ no-op になり破綻しない。
 - 親 Issue の Phase E 伝播 close も、 親を閉じる PR に同梱するか、 直 push が許されない環境では別 PR で行う。
@@ -310,6 +324,12 @@ E.4 承認 → 親に対して Phase D を実行 → 親に祖父母がいれば
 
 クローズ後の再オープン。 `closed → in_progress` への巻き戻しはこの経路でのみ許可される。
 
+F.0 reopen の理由を `## タスク` へ未チェック項目として追記する。 既存の `[x]` は変えない。
+closed の Issue は定義上すべての箱が `[x]` なので、 追記せずに戻すと「タスクは全消化なのに
+active」という状態になり、 C.3 は次に回ったときその Issue を「完了」と判定する。 reopen とは
+まだ終わっていない作業があるという判断なので、 その作業が未チェック項目として書かれるのが
+本来の形にあたる。 箱を `[x]` から戻す形は採らない (reopen 前の作業記録を壊す)。
+
 F.1 frontmatter `status: closed → in_progress`。
 
 F.2 `git mv` で `closed/` から戻す:
@@ -391,6 +411,11 @@ GitHub は既定で subject の末尾へ括弧付きの数字記法を付ける�
 `--title` と同じ制約)。 マージコミットに本文を付けるなら同コマンドの `--body-file` を使う。
 
 既存の履歴に残る違反は直せない。 過去分は履歴として受容し、 以後のマージから適用する。
+
+クローズを実装 PR へ同梱せず別 PR に分けたときは、 subject に PR 番号が 2 つ並ぶ。 D 形式が
+要求する「どの PR がこの Issue を閉じたか」(`(PR #<M>)`) と、 この節の squash 規約が要求する
+「どの PR がこのコミットを作ったか」が別の番号になるため。 同梱が既定になった以上、 分割は
+例外として扱う: 実装 PR の番号とマージされる PR の番号の両方を書く。 同梱すれば 1 つで足りる。
 
 ## Red flags
 
