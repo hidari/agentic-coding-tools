@@ -142,6 +142,11 @@ class Fixture:
         subprocess.run(["git", "-C", str(self.dir), "add", "-A"], check=True, env=GIT_ENV)
 
     def check(self, baseline: dict[str, int] | None = None):
+        # crr.check() はプロセス内で走るので、その中の git 呼び出しは GIT_ENV ではなく
+        # os.environ を読む。呼び出し元が GIT_INDEX_FILE を立てていると (git はパス指定や
+        # -a のコミットで hook へ渡す) 読み取り先が呼び出し元の index になり、ここが赤くなる。
+        # プロダクトが壊れたのではなく環境の継承なので、テスト側を直しに行かないこと。
+        # 手当ての判断は ISSUE-44 が持つ
         self.stage()
         return crr.check(self.dir, baseline or {})
 

@@ -115,6 +115,7 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
    - Phase D を直接名指ししないのは、同梱経路の射程が Phase D 全体とは一致せず、狭める側の canonical が同梱節だから。ここで Phase D を名指しすると gate の宣言だけが canonical より広くなる
    - Phase 4 (執行) ではなくここへ置くのは、同梱が issue.md の編集と `git mv` と相対リンクの補正というファイル変更を伴うため。Phase 4 に置くと、この Phase の再検証を通らない変更が PR へ入る
    - マージ経路から入ったときは、このコミットをリモートの対象ブランチへ push してから Phase 4 へ進む。`gh pr merge` がマージするのはリモート側の内容なので、手元に積んだだけだと同梱が黙って落ちる
+   - その push は必須チェックを pending へ戻す。待たずに Phase 4 へ進むと `gh pr merge` が拒否されるので、`gh pr checks <num> --watch` で緑を見てから進む。同梱をマージ経路で行うとこの再走のぶん CI が余計に走る (作成経路には無い費用で、同梱節が書く費用の比較は作成経路の話)
 3. `make format` (該当エリアのみ)
 4. `make ci-<area>` で全テスト pass を確認
    - area 名はプロジェクトの `Makefile` に依存する。`ci-frontend` / `ci-backend` のようにデプロイ単位で切られていることが多い

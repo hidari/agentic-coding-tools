@@ -674,6 +674,10 @@ class SectionReferences(unittest.TestCase):
 
     照合を skill 名まで含めて行うのは、`「X」節` だけを見ると同じ文書内の節を指す用法まで
     拾ってしまい、実在する参照を「別文書に無い」と誤診するため。
+
+    解決できるのはこのリポジトリの plugins/ 配下にある skill だけ。外部 plugin (superpowers
+    など) の節をこの記法で引用すると、参照先が読めないので赤くなる。実在を確かめられない
+    ものを緑にすると綴り間違いまで素通りするので、そちらへは倒していない。
     """
 
     def _references(self) -> list[tuple[Path, str, str]]:
@@ -695,8 +699,12 @@ class SectionReferences(unittest.TestCase):
         """gate が同梱の手順を持つ skill を名指ししていること。
 
         参照先の実在だけを見ると、gate 側が名指しを丸ごと落としても他の文書の参照が残る限り
-        緑のまま通る。それは ISSUE-41 が直した欠陥 (同梱の入口が gate のどの Phase にも無い)
-        の再生産になる。節名は pin しない (見出しは動いてよく、動いたことは上の検査が見る)。
+        緑のまま通る。節名は pin しない (見出しは動いてよく、動いたことは上の検査が見る)。
+
+        射程はここまで。見ているのは「gate のどこかに 1 本ある」ことだけで、入口が Phase 0 /
+        2 / 3 に在ることは見ていない。3 箇所を消しても Phase 5 の名指しをこの記法へ書き換えれば
+        緑になる。ISSUE-41 が直した状態そのもの (main 時点の gate はこの記法に 0 件しか
+        マッチしない) は捕まるが、同じ状態の別の作り方は捕まらない。
         """
         text = "\n".join(_prose_lines(GATE_SKILL_MD))
         targets = {
@@ -709,7 +717,9 @@ class SectionReferences(unittest.TestCase):
         for source, target, section in self._references():
             with self.subTest(source=source.name, section=section):
                 self.assertTrue(
-                    target.is_file(), f"{source} が名指しする {target} が無い"
+                    target.is_file(),
+                    f"{source} が名指しする {target} が無い。"
+                    "このリポジトリの plugins/ 配下に無い skill は参照先を確かめられない",
                 )
                 headings = [
                     m.group(1).strip()

@@ -181,8 +181,10 @@ ruleset は branch protection とは別系統の仕組みで、 classic API に�
 判定できる:
 
 ```bash
-gh api "repos/<owner>/<repo>/branches/main/protection" >/dev/null 2>&1; echo "classic rc=$?"
-gh api "repos/<owner>/<repo>/rules/branches/main" --jq '.[].type'
+BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')
+[ -n "$BRANCH" ] || { echo "default branch が取れない。ここで止まる"; exit 1; }
+gh api "repos/{owner}/{repo}/branches/$BRANCH/protection" >/dev/null 2>&1; echo "classic rc=$?"
+gh api "repos/{owner}/{repo}/rules/branches/$BRANCH" --jq '.[].type'
 ```
 
 `rulesets` list endpoint (`/rulesets`) はオブジェクトの一覧を返すだけで `rules` キーを
@@ -190,9 +192,13 @@ gh api "repos/<owner>/<repo>/rules/branches/main" --jq '.[].type'
 直接返す `/rules/branches/{branch}` だけなので、 後者を使う。 判定式は「その branch に効いて
 いる rule に `pull_request` が含まれるか」。 endpoint 自身が対象 branch へ絞り込むので、
 `target` / `enforcement` の絞り込みは呼び出し側に要らない。 出力に `pull_request` が現れれば
-PR が必須ということなので、 この節の同梱経路を選ぶ。 **終了コードを見るときはパイプへ繋がない
-こと。** `| head` のように別コマンドで終端すると `$?` はその終端コマンドの rc になり、 `gh`
-自身の失敗が消える。
+PR が必須ということなので、 この節の同梱経路を選ぶ。
+
+**branch 名を literal で書かないこと。** 保護の対象は default branch で、 その名前は プロジェクトごとに違う (このリポジトリの ruleset も `~DEFAULT_BRANCH` を条件にしており branch 名を持たない)。 `{owner}` / `{repo}` は `gh` が現在のリポジトリから解決するので、 手で置換する箇所がどこにも残らない形にできる。
+
+**空の出力を「保護なし」と読まないこと。** この endpoint は branch 名が空でも実在しなくても rc 0 と空を返す (実測)。 つまり branch 名を間違えると判定は静かに否定側へ倒れる。 空を根拠に する前に、 `$BRANCH` に値が入っていることと、 その branch が実在することを確かめる。
+
+**終了コードを見るときはパイプへ繋がないこと。** `| head` のように別コマンドで終端すると `$?` はその終端コマンドの rc になり、 `gh` 自身の失敗が消える。
 
 Phase C/D は既定で post-merge に main へ直接 commit して close する。 だが **main への直 push を禁じるプロジェクト** (default branch への push を PR で迂回する方針、 CI-on-PR や auto-mode classifier のガードがある環境) では、 この直 push が方針に反する。
 
@@ -200,7 +206,7 @@ Phase C/D は既定で post-merge に main へ直接 commit して close する�
 
 - feature ブランチ内で Phase D.1〜D.4 と同じ操作 (issue.md を `status: closed` 化 + `git mv` で `closed/` へ移動 + 相対リンクの補正 + 新パスの明示 stage) をコミットに含める (理由は D.4 参照)。 コミット文言は feature PR 自身のコミットメッセージに委ねる (D 形式の `(PR #<M>)` は同梱時には使わない。 この時点では PR 番号が未確定なため)。
 - PR 本文の `Closes` 行のリンク先も移動後の位置になる。 同梱ではこの PR 自身が issue.md を `closed/` 配下へ入れるので、 D.3 の「外部 → 移動対象」と同じ形で `closed/` が 1 段挟まる。 D.3 の grep は `docs/` しか見ないので、 PR 本文はここで書き分けるしかない。
-- PR マージで issue が closed のまま main に入る。 post-merge の別コミット/push は不要で、 CI 追加 run も出ない (別 docs PR だと ci が PR+マージで 2 run 走りコスト増)。
+- PR マージで issue が closed のまま main に入る。 post-merge の別コミット/push は不要で、 CI 追加 run も出ない (別 docs PR だと ci が PR+マージで 2 run 走りコスト増)。 これは PR を作る前に同梱した場合の話で、 既にある PR へ後から同梱する場合は push が必須チェックを再走させるぶん run が増える。
 - マージ後に Phase C が走っても、 対象が `closed/` 配下にあるため C.3 の既存分岐で「既に closed」→ no-op になり破綻しない。
 - 親 Issue の Phase E 伝播 close も、 親を閉じる PR に同梱するか、 直 push が許されない環境では別 PR で行う。
 
