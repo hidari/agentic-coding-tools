@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -253,11 +254,62 @@ class FormatVariants(unittest.TestCase):
         self.assertEqual(checker.scan_tasks(text), (True, 1, 0))
 
 
+_C3_VARS = ("has_task_section", "boxes", "unchecked")
+
+
+def _extract_c3_lines(path: Path) -> list[str]:
+    """SKILL.md の Phase C.3 コードフェンスから has_task_section/boxes/unchecked の
+    代入行を、そのままのテキストで取り出す。
+
+    行の中身 (grep -cE に渡す正規表現) を Python 側で再度パースして値だけを吸い出す
+    のではなく、行そのものを後段で実際に bash へ渡して実行させる
+    (_snippet_says_close)。他言語のデータをこちらの regex で text-parse せず、その
+    言語自身に解釈させる (testing-practices.md) ことで、bash のクォート規約をテスト側に
+    二重実装して drift させることを避ける。
+
+    フェンスは `has_task_section=` を含む最初の ```bash ブロックとして特定する
+    (SKILL.md 内でこの変数名が現れるのはここだけ)。3 本のどれか 1 本でも見つから
+    なければ黙って空へ倒さず例外を送出する。抽出 0 件を「一致した」とみなすと、
+    この pin 自身が「0 件の緑は健全ではなくそもそも見ていない」を体現してしまう。
+
+    コントローラの実測: 以前の実装は grep -cE のパターンをこのテストへ literal で
+    べた書きしており、SKILL.md の実物へ変異 (交替→文字クラス、[[:blank:]]→[ \\t])
+    を当てても pin は緑のまま素通りした。この関数と _snippet_says_close はその
+    修正として、SKILL.md を実際に読んで実行する形に置き換えたもの。
+    """
+    text = path.read_text(encoding="utf-8")
+    block = None
+    for m in re.finditer(r"```bash\n(.*?)\n```", text, re.DOTALL):
+        if "has_task_section=" in m.group(1):
+            block = m.group(1)
+            break
+    if block is None:
+        raise AssertionError(f"{path} に has_task_section= を含む ```bash フェンスが見つからない")
+    found: dict[str, str] = {}
+    for line in block.splitlines():
+        for name in _C3_VARS:
+            if line.startswith(f"{name}=$(grep"):
+                found[name] = line
+    missing = [name for name in _C3_VARS if name not in found]
+    if missing:
+        raise AssertionError(
+            f"{path} の C.3 フェンスに {', '.join(missing)}=... の行が見つからない"
+        )
+    return [found[name] for name in _C3_VARS]
+
+
 class ParityWithPhaseC3(unittest.TestCase):
     """C.3 のスニペットと新検査の判定が一致すること。
 
-    照合は literal ではなく挙動で行う。両者は同じ literal を共有したまま分岐構造で
-    判定が割れていた (箱 0 個の Issue を C.3 は close へ送り、新検査は免除する)。
+    照合は literal コピーではなく SKILL.md の実物を実行して行う。分岐
+    (has_task_section==0 / boxes==0 / unchecked>0 / unchecked==0) は SKILL.md では
+    散文の箇条書きであり、grep -cE の引数のような機械抽出できる形を持たないため、
+    ここでは判定ロジックとしてべた書きせざるを得ない。機械抽出できる 3 パターンは
+    _extract_c3_lines 経由で実行して pin する一方、分岐そのものの存在は
+    test_boxes_zero_branch_is_documented が literal の存在確認で別途 pin する
+    (存在確認すら無いと、分岐を丸ごと削除する変更は 3 パターンの抽出には影響しない
+    ため検出されずに緑のまま通ってしまう)。
+
     fixture にフェンスと HTML コメントを含めないのは、C.3 が grep なので追跡できず、
     そこだけは意図的に新検査が厳しいため。
 
@@ -276,8 +328,14 @@ class ParityWithPhaseC3(unittest.TestCase):
         ("## タスク\n\n- [x] 済み\n- [　] 未\n", False),  # 全角スペースの箱が残っている (R7)
     )
 
+    def setUp(self):
+        # 抽出は各テストの実行前に 1 回だけ行う。失敗時は例外がそのまま setUp を
+        # 落とし、このクラスの全テストが ERROR になる (「明示的に落とす」の実装)。
+        self.lines = _extract_c3_lines(SKILL_MD)
+
     def _snippet_says_close(self, text: str, *, lc_all: str | None = None) -> bool:
-        """SKILL.md の C.3 スニペットを逐語で再現する。
+        """SKILL.md から抽出した 3 行 (has_task_section/boxes/unchecked の代入) を
+        実際に bash へ渡して実行し、判定する。
 
         `grep` を PATH 解決に任せるのは C.3 自身がそうしているため。subprocess.run は
         シェル関数を継承しないので、この開発機でも実際には /usr/bin/grep を、CI の
@@ -291,17 +349,16 @@ class ParityWithPhaseC3(unittest.TestCase):
             env = dict(os.environ)
             if lc_all is not None:
                 env["LC_ALL"] = lc_all
+            env["ISSUE_PATH"] = str(path)
 
-            def count(pattern: str) -> int:
-                proc = subprocess.run(
-                    ["grep", "-cE", pattern, str(path)],
-                    capture_output=True, text=True, env=env,
-                )
-                return int(proc.stdout.strip() or 0)
-
-            has_task = count(r"^#{2,3} *タスク *$")
-            boxes = count(r"^[[:blank:]]*[-*+] \[( |　|x|X)\]")
-            unchecked = count(r"^[[:blank:]]*[-*+] \[( |　)\]")
+            script = "\n".join(self.lines) + (
+                '\nprintf "%s:%s:%s" "$has_task_section" "$boxes" "$unchecked"\n'
+            )
+            proc = subprocess.run(
+                ["bash", "-c", script], capture_output=True, text=True, env=env,
+            )
+            has_task_s, boxes_s, unchecked_s = proc.stdout.strip().split(":")
+            has_task, boxes, unchecked = int(has_task_s), int(boxes_s), int(unchecked_s)
             if not has_task or boxes == 0:
                 return False
             return unchecked == 0
@@ -317,15 +374,25 @@ class ParityWithPhaseC3(unittest.TestCase):
     def test_snippet_is_locale_independent(self):
         """R7 の回帰網。LC_ALL=C でも既定ロケールでも新検査と一致すること。
 
-        交替 `( |　|x|X)` を文字クラス `[ 　xX]` へ戻す変異を当てると、全角スペースの
-        箱が残るケースだけ C ロケールで判定がずれ (箱がバイト単位に分解され `unchecked`
-        が過小に出る)、ここが赤くなる。
+        SKILL.md の交替 `( |　|x|X)` が文字クラス `[ 　xX]` へ戻ると、全角スペースの
+        箱が残るケースだけ C ロケールで判定がずれ (箱がバイト単位に分解され
+        `unchecked` が過小に出る)、ここが赤くなる。
         """
         for text, expected in self.CASES:
             with self.subTest(text=text, lc_all="C"):
                 self.assertEqual(self._snippet_says_close(text, lc_all="C"), expected)
             with self.subTest(text=text, lc_all=None):
                 self.assertEqual(self._snippet_says_close(text, lc_all=None), expected)
+
+    def test_boxes_zero_branch_is_documented(self):
+        """`boxes == 0` の分岐が SKILL.md に書かれていることを literal で確認する。
+
+        分岐は散文の箇条書きなので _extract_c3_lines のような機械抽出ができない。
+        機械抽出できる 3 パターンは実行して pin する一方、分岐そのものは存在確認に
+        留める (このクラスの docstring を参照)。
+        """
+        text = SKILL_MD.read_text(encoding="utf-8")
+        self.assertIn("`boxes == 0`", text)
 
 
 class ExitCodes(unittest.TestCase):
@@ -395,6 +462,7 @@ class BorrowedNames(unittest.TestCase):
 
 PRE_COMMIT_CONFIG = ROOT / ".pre-commit-config.yaml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+SKILL_MD = ROOT / "plugins" / "dev-workflow" / "skills" / "in-repo-issue" / "SKILL.md"
 
 
 class Attachment(unittest.TestCase):
