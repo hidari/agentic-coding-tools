@@ -70,18 +70,25 @@ def notation():
     return module
 
 
-def scan_tasks(text: str) -> tuple[bool, int, int]:
-    """(タスク節の有無, 箱の総数, 未チェック数) を返す。
+def _strip_fences_and_comments(text: str) -> tuple[list[str], bool]:
+    """フェンスと HTML コメントの中身を除いた行のリストと、フェンスが閉じずに文書末尾へ
+    達したかを返す。
 
-    箱の数え方を節の内側に限らないのは C.3 に揃えるため。節の外へ囮を置くだけで
-    免除される形を作らない。
+    フェンスの開閉は単純トグルではなく借用元 issue-id.py の scan_text と同じ意味論を使う:
+    閉じ行は情報文字列を持たず (`marker.group(2).strip()` が空) かつ開始と同じ長さ以上の
+    バッククォートを持つときだけ閉じる (CommonMark)。単純トグルだと、4 連で開いて内側に
+    3 連の行がある文書で閉じ判定を誤り (3 連の行を「閉じた」と数えてしまう)、直後に続く
+    本物のタスク節がフェンス内へ吸い込まれて消える (実測)。
+
+    scan_tasks と has_unclosed_fence が同じ状態機械を共有するのは、二重に持つと片方だけ
+    直したときにフェンスの意味論がずれるため。コメント判定をフェンス判定より先に置く
+    順序は元の実装のまま変えていない (フェンス内の HTML コメント風の行も comment として
+    扱われる、という既存の挙動を維持する)。
     """
     fence = notation().FENCE_LINE
-    in_fence = False
+    fence_len = 0
     in_comment = False
-    has_heading = False
-    total = 0
-    unchecked = 0
+    kept: list[str] = []
     for line in text.splitlines():
         if in_comment:
             if "-->" in line:
@@ -90,11 +97,29 @@ def scan_tasks(text: str) -> tuple[bool, int, int]:
         if "<!--" in line and "-->" not in line:
             in_comment = True
             continue
-        if fence.match(line):
-            in_fence = not in_fence
+        marker = fence.match(line)
+        if fence_len:
+            if marker and not marker.group(2).strip() and len(marker.group(1)) >= fence_len:
+                fence_len = 0
             continue
-        if in_fence:
+        if marker:
+            fence_len = len(marker.group(1))
             continue
+        kept.append(line)
+    return kept, fence_len != 0
+
+
+def scan_tasks(text: str) -> tuple[bool, int, int]:
+    """(タスク節の有無, 箱の総数, 未チェック数) を返す。
+
+    箱の数え方を節の内側に限らないのは C.3 に揃えるため。節の外へ囮を置くだけで
+    免除される形を作らない。
+    """
+    lines, _ = _strip_fences_and_comments(text)
+    has_heading = False
+    total = 0
+    unchecked = 0
+    for line in lines:
         if TASK_HEADING.match(line):
             has_heading = True
             continue
@@ -104,6 +129,19 @@ def scan_tasks(text: str) -> tuple[bool, int, int]:
             if m.group(1) not in CHECKED:
                 unchecked += 1
     return has_heading, total, unchecked
+
+
+def has_unclosed_fence(text: str) -> bool:
+    """コードフェンスが閉じずに文書末尾へ達しているか。
+
+    閉じ忘れは以降の全行を無検査にする。ここでは検査対象を安全に走査できないという
+    シグナルとして使うだけで、違反 (rc 1) としては報告しない。閉じ忘れ自体は
+    issue-id.py --check が全追跡ファイルに対して既に検出・報告しており
+    (KIND_UNCLOSED_FENCE)、pre-commit / CI の両方に取り付け済みなので、ここで違反にすると
+    同じ規則の 2 つ目の canonical になる。呼び出し側は「走査できなかった」件数へ寄せること。
+    """
+    _, unclosed = _strip_fences_and_comments(text)
+    return unclosed
 
 
 def resolve_root(explicit: str | None) -> Path:
@@ -131,15 +169,27 @@ def issue_md_path(root: Path, rel_dir: str) -> Path | None:
     return None
 
 
-def collect(root: Path) -> tuple[list[str], int, int, int]:
-    """(違反, active 件数, closed 件数, issue.md が無いディレクトリ数) を返す。"""
+def collect(root: Path) -> tuple[list[str], list[str], int, int, int, int]:
+    """(違反, 走査できなかった注記, active 件数, closed 件数,
+    issue.md が無いディレクトリ数, 走査できなかった件数) を返す。
+
+    「走査できなかった」に寄せるのは 2 つ: issue.md が読めない (エンコーディング不正など)
+    と、コードフェンスが閉じておらず内容を安全に走査できない場合。どちらも違反 (rc 1) には
+    しない。読めないファイルを Python の既定 (UnicodeDecodeError で未捕捉のまま伝播) に
+    任せると rc が 1 になり、「読めない」が「違反」を名乗ってしまう。閉じ忘れフェンスは
+    issue-id.py --check が既に検出・報告しているので、ここで違反にすると同じ規則の
+    2 つ目の canonical になる (借用元 issue-id.py の _blob_text / run_check も同じ経路を
+    unreadable として数え、違反にはしない)。
+    どちらも沈黙させないのは、母集団が縮んだことを出力から見えるようにするため。
+    """
     n = notation()
     dirs = n.issue_dirs(root)
     if not dirs:
         raise CheckError("Issue ディレクトリが 1 件も無い。走査対象ゼロは合格ではない")
     violations: list[str] = []
-    active = closed = missing = 0
-    for rel_dir, name in dirs:
+    unscanned_notes: list[str] = []
+    active = closed = missing = unscanned = 0
+    for rel_dir, _ in dirs:
         is_closed = CLOSED_SEGMENT in Path(rel_dir).parts
         if is_closed:
             closed += 1
@@ -149,8 +199,20 @@ def collect(root: Path) -> tuple[list[str], int, int, int]:
         if path is None:
             missing += 1
             continue
-        text = path.read_text(encoding="utf-8")
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError) as e:
+            unscanned += 1
+            unscanned_notes.append(f"{rel_dir}: 読めないので走査できなかった ({e})")
+            continue
         if is_closed:
+            continue
+        if has_unclosed_fence(text):
+            unscanned += 1
+            unscanned_notes.append(
+                f"{rel_dir}: コードフェンスが閉じていないので走査できなかった "
+                "(閉じ忘れ自体は issue-id.py --check が別途報告する)"
+            )
             continue
         has_heading, total, unchecked = scan_tasks(text)
         if has_heading and total >= 1 and unchecked == 0:
@@ -158,7 +220,7 @@ def collect(root: Path) -> tuple[list[str], int, int, int]:
                 f"{rel_dir}: タスクが全て消化済みなのに active に居る "
                 f"(箱 {total} 個 / 未チェック 0)。クローズを同じ PR へ同梱する"
             )
-    return violations, active, closed, missing
+    return violations, unscanned_notes, active, closed, missing, unscanned
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -172,15 +234,20 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         root = resolve_root(args.root)
-        violations, active, closed, missing = collect(root)
+        violations, unscanned_notes, active, closed, missing, unscanned = collect(root)
     except CheckError as e:
         print(f"[x] {e}", file=sys.stderr)
         return 2
     for line in violations:
         print(f"  [x] {line}", file=sys.stderr)
+    # 走査できなかった注記は違反と別記号にする。同じ [x] で並べると rc に効かない件数まで
+    # 「違反」に見え、読み手が rc 0 の理由を誤解する
+    for line in unscanned_notes:
+        print(f"  [-] {line}", file=sys.stderr)
     print(
         f"検査した Issue: active {active} 個 / closed {closed} 個"
-        f" / issue.md が無い {missing} 個 / 違反 {len(violations)} 件"
+        f" / issue.md が無い {missing} 個 / 走査できなかった {unscanned} 個"
+        f" / 違反 {len(violations)} 件"
     )
     return 1 if violations else 0
 

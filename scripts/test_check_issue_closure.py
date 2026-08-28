@@ -63,6 +63,12 @@ class Fixture:
         path.mkdir(parents=True, exist_ok=True)
         (path / filename).write_text(text, encoding="utf-8")
 
+    def add_issue_encoded(self, rel: str, text: str, encoding: str, filename: str = "issue.md"):
+        """UTF-8 以外のエンコーディングで issue.md を書く。read_text の例外パスを検証する。"""
+        path = self.root / "docs" / "issues" / rel
+        path.mkdir(parents=True, exist_ok=True)
+        (path / filename).write_bytes(text.encode(encoding))
+
     def commit(self):
         self._git("add", "-A")
         self._git("commit", "-q", "-m", "probe")
@@ -95,7 +101,9 @@ class InvariantA(FixtureCase):
         rc, out, _ = self._run(lambda fx: fx.add_issue(
             "ISSUE-1_probe", issue_md("open", ["- [x] 済み", "- [ ] 未"])))
         self.assertEqual(rc, 0)
-        self.assertIn("1", out)  # 走査件数を出す
+        # "1" だけだと closed/missing/unscanned のどの桁にも化けて通ってしまう弱い
+        # assertion だったので、active の件数として出ていることまで確かめる
+        self.assertIn("active 1 個", out)
 
     def test_all_checked_active_issue_is_a_violation(self):
         rc, _, err = self._run(lambda fx: fx.add_issue(
@@ -107,6 +115,56 @@ class InvariantA(FixtureCase):
         rc, _, _ = self._run(lambda fx: fx.add_issue(
             "closed/ISSUE-1_probe", issue_md("closed", ["- [x] 済み"])))
         self.assertEqual(rc, 0)
+
+    def test_unclosed_fence_is_unscanned_not_a_violation(self):
+        """全箱チェック済みでも、フェンスが閉じていなければ走査できず違反にもならない。
+
+        閉じ忘れ自体は issue-id.py --check が別途検出するので、ここでは二重に違反として
+        報告せず「走査できなかった」件数へ寄せる (コントローラの裁定)。
+        """
+        text = (
+            "---\nstatus: open\n---\n\n# probe\n\n"
+            "```\n"
+            "## タスク\n\n- [x] 済み\n"
+        )
+        rc, out, err = self._run(lambda fx: fx.add_issue("ISSUE-1_probe", text))
+        self.assertEqual(rc, 0)
+        self.assertIn("走査できなかった 1 個", out)
+        self.assertIn("違反 0 件", out)
+        self.assertIn("ISSUE-1_probe", err)
+        # 走査できなかった注記は違反 ([x]) とは別記号で出す
+        self.assertIn("[-]", err)
+        self.assertNotIn("[x]", err)
+
+    def test_scan_tasks_respects_closing_fence_length(self):
+        """4 連バッククォートで開いたフェンスは、内側の 3 連の行では閉じない。
+
+        単純トグルだと 3 連の行を閉じと誤認し、直後の本物のタスク節がフェンス内へ
+        吸い込まれて消える (コントローラの実測)。CommonMark どおり、開始と同じ長さ以上の
+        情報文字列なしの行でなければ閉じないことを確かめる。
+        """
+        text = (
+            "````\n"
+            "```\n"
+            "````\n"
+            "\n"
+            "## タスク\n\n- [x] 済み\n"
+        )
+        self.assertEqual(checker.scan_tasks(text), (True, 1, 0))
+
+    def test_cp932_issue_is_unscanned_not_a_crash(self):
+        """UTF-8 で読めない issue.md は例外を伝播させず「走査できなかった」件数へ寄せる。
+
+        修正前は UnicodeDecodeError が未捕捉のまま抜け、Python 既定の rc 1 が
+        「違反あり」と誤認される形になっていた (コントローラの実測)。
+        """
+        text = issue_md("open", ["- [x] 済み"])
+        rc, out, err = self._run(
+            lambda fx: fx.add_issue_encoded("ISSUE-1_probe", text, "cp932"))
+        self.assertEqual(rc, 0)
+        self.assertIn("走査できなかった 1 個", out)
+        self.assertIn("違反 0 件", out)
+        self.assertNotIn("Traceback", err)
 
 
 if __name__ == "__main__":
