@@ -27,6 +27,9 @@ Phase 5 の中にある (= マージ後)。
 同梱節が置かれているのは in-repo-issue のライフサイクル節の Phase B と Phase C の間で、
 「PR を作ろうとしている人」が読みに行く位置ではない。
 
+gate の `## 関連` 節は sibling skill を 6 つ挙げるが、in-repo-issue はそこに入っていない。
+名指しは Phase 5 の 1 行だけで、その 1 行は「マージ後に呼べ」としか言っていない。
+
 ### 規約は守れる。既定の経路が導かないだけ
 
 同じリポジトリ・同じ規約のもとで結果が分かれている。
@@ -41,10 +44,16 @@ Phase 5 の中にある (= マージ後)。
 
 ### コスト
 
-CI の run を数えた。同梱しなかった側は `pull_request` と `push` が PR ごとに 1 本ずつ出るので、
-**run 4 本 (job 16 個)** かかった。同梱していれば run 2 本 (job 8 個) で済む。
+CI の run を数えた。`ci.yml` の job は 4 つで matrix も `if:` も無いため、run 1 本 = job 4 個で固定。
 
-このリポジトリの CLAUDE.md は CI コストの抑制を明記しており、実害がある。
+同梱しなかった側 (ISSUE-11) は `pull_request` と `push` が PR ごとに 1 本ずつ出て
+**run 4 本 (job 16 個)** かかった。
+
+同梱側の下限は run 2 本 (job 8 個) だが、これは下限であって実測ではない。実際に同梱した
+PR #30 は run 3 本使っている (PR ブランチへ追加 push したため `pull_request` が 2 回走った)。
+したがって現実的な節約幅は **4 本 → 2〜3 本**で、半減とは限らない。
+
+このリポジトリの CLAUDE.md は CI コストの抑制を明記しており、幅はあっても実害はある。
 
 ### 副作用: squash subject の規約が衝突する
 
@@ -64,8 +73,22 @@ squash subject の規約が要求する `(PR #<マージされる PR 自身>)` �
 1 は gate が in-repo-issue の規約を写すことになるので、二重管理を避けるなら
 「in-repo-issue の同梱節を読んで判定する」というポインタに留める必要がある。
 
-判定に要る事実 (main が保護されているか) は機械で取れる。ただし `~/.claude/CLAUDE.md` が
-記録しているとおり、classic API の 404 だけでは判定できず repository ruleset も見る必要がある。
+判定に要る事実 (main が保護されているか) は機械で取れる。ただし classic API の 404 だけでは
+判定できず repository ruleset も見る必要がある。このリポジトリで実測した。
+
+| 入口 | 結果 |
+| --- | --- |
+| `branches/main/protection` | rc 1 / `Branch not protected` (404) |
+| `rulesets` | rc 0 / `protect-main` が active |
+
+active な ruleset の rule は `deletion` / `non_fast_forward` / `pull_request` /
+`required_status_checks` の 4 つ。つまり classic API だけを見る判定は、**PR が必須の
+リポジトリを「保護なし」と読む**。
+
+判定式は「branch を target とする active な ruleset が `pull_request` rule を持つか」で足りる。
+
+なお測り方にも罠がある。`gh api ... | head -3` の形は終端が `head` なので `gh` の非 0 が
+消える (最初にこの形で測って rc 0 を得た)。パイプに繋がず終了コードを直接見ること。
 
 ## タスク
 
