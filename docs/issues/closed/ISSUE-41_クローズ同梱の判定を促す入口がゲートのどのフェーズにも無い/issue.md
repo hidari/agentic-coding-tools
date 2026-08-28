@@ -1,5 +1,5 @@
 ---
-status: open
+status: closed
 ---
 
 # fix: クローズ同梱の判定を促す入口がゲートのどのフェーズにも無い
@@ -79,26 +79,37 @@ squash subject の規約が要求する `(PR #<マージされる PR 自身>)` �
 | 入口 | 結果 |
 | --- | --- |
 | `branches/main/protection` | rc 1 / `Branch not protected` (404) |
-| `rulesets` | rc 0 / `protect-main` が active |
+| `rulesets` (list) | rc 0 / `protect-main` が active |
+| `rules/branches/main` | rc 0 / `deletion` `non_fast_forward` `pull_request` `required_status_checks` |
 
-active な ruleset の rule は `deletion` / `non_fast_forward` / `pull_request` /
+その branch に効いている rule は `deletion` / `non_fast_forward` / `pull_request` /
 `required_status_checks` の 4 つ。つまり classic API だけを見る判定は、**PR が必須の
 リポジトリを「保護なし」と読む**。
 
-判定式は「branch を target とする active な ruleset が `pull_request` rule を持つか」で足りる。
+起票時はここに「判定式は『branch を target とする active な ruleset が `pull_request` rule を
+持つか』で足りる」と書いた。**訂正 (2026-08-29、実装中に判明)**: この式に対応するコマンドは
+動かない。`rulesets` の list endpoint が返すオブジェクトは `rules` キーを持たず、実測したキーは
+`_links` / `created_at` / `enforcement` / `id` / `name` / `node_id` / `source` / `source_type` /
+`target` / `updated_at` の 10 個だけだった。rule を返すのは detail endpoint (`rulesets/{id}`) と、
+branch に実効する rule を直接返す `rules/branches/{branch}` の 2 つで、上の表の 4 rule は後者から
+得たもの (表の `rulesets` (list) の行は起票時の観測のまま残し、`rules/branches/main` の行を
+実装中に足した)。判定式は「その branch に効いている rule に `pull_request` が含まれるか」へ
+差し替えた。endpoint 自身が branch で絞り込むので `target` / `enforcement` の絞り込みは
+呼び出し側に要らない。差し替え後の手順の canonical は `dev-workflow:in-repo-issue` の
+「クローズ経路: feature PR 同梱を優先」節。
 
 なお測り方にも罠がある。`gh api ... | head -3` の形は終端が `head` なので `gh` の非 0 が
 消える (最初にこの形で測って rc 0 を得た)。パイプに繋がず終了コードを直接見ること。
 
 ## タスク
 
-- [ ] 同梱の要否を判定する入口を、`gh pr create` より前に置く。置き場は gate 側か
+- [x] 同梱の要否を判定する入口を、`gh pr create` より前に置く。置き場は gate 側か
       in-repo-issue 側かを決める
-- [ ] 判定を散文の指示ではなく実行できる形にする (保護の有無を `gh api` で確かめる手順)。
+- [x] 判定を散文の指示ではなく実行できる形にする (保護の有無を `gh api` で確かめる手順)。
       classic API の 404 だけで「保護なし」と結論しないこと
-- [ ] 同梱しなかったときに squash subject が 2 つの PR 番号を持つ件を、規約として
+- [x] 同梱しなかったときに squash subject が 2 つの PR 番号を持つ件を、規約として
       許容するのか避けるのかを決める
-- [ ] 変異注入で確認する: 判定の入口を外すと、既定の経路が同梱に触れずに通過できることを
+- [x] 変異注入で確認する: 判定の入口を外すと、既定の経路が同梱に触れずに通過できることを
       再現できる形にする
 
 ## 関連
