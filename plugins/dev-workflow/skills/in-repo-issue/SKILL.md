@@ -182,13 +182,17 @@ ruleset は branch protection とは別系統の仕組みで、 classic API に�
 
 ```bash
 gh api "repos/<owner>/<repo>/branches/main/protection" >/dev/null 2>&1; echo "classic rc=$?"
-gh api "repos/<owner>/<repo>/rulesets" --jq '.[] | select(.target=="branch" and .enforcement=="active") | .rules[].type'
+gh api "repos/<owner>/<repo>/rules/branches/<branch>" --jq '.[].type'
 ```
 
-判定式は「branch を target とする active な ruleset が `pull_request` rule を持つか」。 出力に
-`pull_request` が現れれば PR が必須ということなので、 この節の同梱経路を選ぶ。 **終了コードを
-見るときはパイプへ繋がないこと。** `| head` のように別コマンドで終端すると `$?` はその終端
-コマンドの rc になり、 `gh` 自身の失敗が消える。
+`rulesets` list endpoint (`/rulesets`) はオブジェクトの一覧を返すだけで `rules` キーを
+持たない。 これを持つのは detail endpoint (`/rulesets/{id}`) と、 branch に実効する rule を
+直接返す `/rules/branches/{branch}` だけなので、 後者を使う。 判定式は「その branch に効いて
+いる rule に `pull_request` が含まれるか」。 endpoint 自身が対象 branch へ絞り込むので、
+`target` / `enforcement` の絞り込みは呼び出し側に要らない。 出力に `pull_request` が現れれば
+PR が必須ということなので、 この節の同梱経路を選ぶ。 **終了コードを見るときはパイプへ繋がない
+こと。** `| head` のように別コマンドで終端すると `$?` はその終端コマンドの rc になり、 `gh`
+自身の失敗が消える。
 
 Phase C/D は既定で post-merge に main へ直接 commit して close する。 だが **main への直 push を禁じるプロジェクト** (default branch への push を PR で迂回する方針、 CI-on-PR や auto-mode classifier のガードがある環境) では、 この直 push が方針に反する。
 
