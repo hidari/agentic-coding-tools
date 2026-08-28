@@ -176,12 +176,37 @@ A.5 分割 (親 → 子 Issue):「Plan が複数必要」「PR が PR-A, PR-B �
 
 ### クローズ経路: feature PR 同梱を優先 (main 直 push を避ける)
 
+**保護されているかは classic branch protection API の 404 だけで判定しないこと。** repository
+ruleset は branch protection とは別系統の仕組みで、 classic API には出ない。 両方を見て初めて
+判定できる:
+
+```bash
+BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')
+[ -n "$BRANCH" ] || { echo "default branch が取れない。ここで止まる"; exit 1; }
+gh api "repos/{owner}/{repo}/branches/$BRANCH/protection" >/dev/null 2>&1; echo "classic rc=$?"
+gh api "repos/{owner}/{repo}/rules/branches/$BRANCH" --jq '.[].type'
+```
+
+`rulesets` list endpoint (`/rulesets`) はオブジェクトの一覧を返すだけで `rules` キーを
+持たない。 これを持つのは detail endpoint (`/rulesets/{id}`) と、 branch に実効する rule を
+直接返す `/rules/branches/{branch}` だけなので、 後者を使う。 判定式は「その branch に効いて
+いる rule に `pull_request` が含まれるか」。 endpoint 自身が対象 branch へ絞り込むので、
+`target` / `enforcement` の絞り込みは呼び出し側に要らない。 出力に `pull_request` が現れれば
+PR が必須ということなので、 この節の同梱経路を選ぶ。
+
+**branch 名を literal で書かないこと。** 保護の対象は default branch で、 その名前は プロジェクトごとに違う (このリポジトリの ruleset も `~DEFAULT_BRANCH` を条件にしており branch 名を持たない)。 `{owner}` / `{repo}` は `gh` が現在のリポジトリから解決するので、 手で置換する箇所がどこにも残らない形にできる。
+
+**空の出力を「保護なし」と読まないこと。** この endpoint は branch 名が空でも実在しなくても rc 0 と空を返す (実測)。 つまり branch 名を間違えると判定は静かに否定側へ倒れる。 空を根拠に する前に、 `$BRANCH` に値が入っていることと、 その branch が実在することを確かめる。
+
+**終了コードを見るときはパイプへ繋がないこと。** `| head` のように別コマンドで終端すると `$?` はその終端コマンドの rc になり、 `gh` 自身の失敗が消える。
+
 Phase C/D は既定で post-merge に main へ直接 commit して close する。 だが **main への直 push を禁じるプロジェクト** (default branch への push を PR で迂回する方針、 CI-on-PR や auto-mode classifier のガードがある環境) では、 この直 push が方針に反する。
 
 その場合は feature PR にクローズを同梱する:
 
-- feature ブランチ内で Phase D.1〜D.3 と同じ操作 (issue.md を `status: closed` 化 + `git mv` で `closed/` へ移動 + 相対リンクの補正) をコミットに含める。
-- PR マージで issue が closed のまま main に入る。 post-merge の別コミット/push は不要で、 CI 追加 run も出ない (別 docs PR だと ci が PR+マージで 2 run 走りコスト増)。
+- feature ブランチ内で Phase D.1〜D.4 と同じ操作 (issue.md を `status: closed` 化 + `git mv` で `closed/` へ移動 + 相対リンクの補正 + 新パスの明示 stage) をコミットに含める (理由は D.4 参照)。 コミット文言は feature PR 自身のコミットメッセージに委ねる (D 形式の `(PR #<M>)` は同梱時には使わない。 この時点では PR 番号が未確定なため)。
+- PR 本文の `Closes` 行のリンク先も移動後の位置になる。 同梱ではこの PR 自身が issue.md を `closed/` 配下へ入れるので、 D.3 の「外部 → 移動対象」と同じ形で `closed/` が 1 段挟まる。 D.3 の grep は `docs/` しか見ないので、 PR 本文はここで書き分けるしかない。
+- PR マージで issue が closed のまま main に入る。 post-merge の別コミット/push は不要で、 CI 追加 run も出ない (別 docs PR だと ci が PR+マージで 2 run 走りコスト増)。 これは PR を作る前に同梱した場合の話で、 既にある PR へ後から同梱する場合は push が必須チェックを再走させるぶん run が増える。
 - マージ後に Phase C が走っても、 対象が `closed/` 配下にあるため C.3 の既存分岐で「既に closed」→ no-op になり破綻しない。
 - 親 Issue の Phase E 伝播 close も、 親を閉じる PR に同梱するか、 直 push が許されない環境では別 PR で行う。
 
@@ -220,15 +245,21 @@ C.3 該当 Issue の `## タスク` チェックリスト判定 (`${ID}` は C.1
 ISSUE_PATH=$(find docs/issues -mindepth 2 -maxdepth 3 -path "*/${ID}_*/issue.md" | head -1)
 [ -z "$ISSUE_PATH" ] && { echo "${ID} が見つからない"; exit 0; }
 case "$ISSUE_PATH" in docs/issues/closed/*) echo "既に closed"; exit 0 ;; esac
-has_task_section=$(grep -c '^## タスク' "$ISSUE_PATH")
-unchecked=$(grep -c '^- \[ \]' "$ISSUE_PATH")
+has_task_section=$(grep -cE '^#{2,3} *タスク *$' "$ISSUE_PATH")
+boxes=$(grep -cE '^[[:blank:]]*[-*+] \[( |　|x|X)\]' "$ISSUE_PATH")
+unchecked=$(grep -cE '^[[:blank:]]*[-*+] \[( |　)\]' "$ISSUE_PATH")
 ```
 
 `ls docs/issues/${ID}_*/issue.md docs/issues/closed/${ID}_*/issue.md` のようにグロブを並べる形は使わないこと。 マッチしないグロブがあったときの挙動がシェルの状態に依存する。 zsh の既定 (`nomatch`) では**片方がマッチしないだけでコマンド全体が中止され、 マッチした側の出力も出ない**ため、 実在する Issue が「見つからない」に化けて Phase C が黙って no-op になる。 `nonomatch` を設定したシェルと bash では出る (3 者を実測して確認)。 `find` は設定に依存せず、 0 件なら空を返す。
 
+字下げの判定に `[ \t]` ではなく `[[:blank:]]` を使うこと。 POSIX の bracket expression の中では `\` が特別扱いを失うため、 `[ \t]` は「タブ」ではなく {空白, `\`, `t`} を意味してしまう。 実測 (`/usr/bin/grep`): タブ字下げの `- [x]` を `[ \t]` 版は取りこぼす (0 件) のに対し `[[:blank:]]` 版は拾う (1 件)。 逆に `tt- [x]` のような `t` から始まる行を `[ \t]` 版は誤ヒットさせる (1 件) が `[[:blank:]]` 版はしない (0 件)。 この開発機のシェルの `grep` は Claude Code が挟む ugrep のシェル関数で `\t` をタブとして解釈するため、 手で叩くと差が見えない。 `subprocess.run(["grep", ...])` はシェル関数を継承しないので、 確認するときは `/usr/bin/grep` を明示すること。
+
+箱の中身を文字クラス `[ 　xX]` ではなく交替 `( |　|x|X)` で書くこと。 bracket expression の中に全角スペース (U+3000) を置くと、 非 UTF-8 ロケールではバイト単位に分解され一致しなくなる。 C.3 は apm で配布され任意の環境のエージェントが実行するので、 ロケールを前提にできない。 実測 (`/usr/bin/grep`、 全角スペース箱 1 + `[x]` 1 + 半角スペース箱 1 + タブ字下げ `[X]` 1 の fixture、 期待は boxes=4 / unchecked=2): 文字クラス版は `ja_JP.UTF-8` では 4/2 だが `C` では 3/1 に化ける。 交替版はどちらでも 4/2 のまま変わらない。 `- [x] 済` と `- [　] 未` を持つ Issue は、 文字クラス版だと `C` ロケールで `unchecked=0` になり close 対象と誤判定される。
+
 分岐:
 
 - `has_task_section == 0`: 自動 close 対象外。 「`<ID>` にチェックリスト未定義、 手動 close 推奨」とログ出力のみ
+- `boxes == 0`: チェックリストが空なので自動 close 対象外
 - `unchecked > 0`: status を `in_progress` に更新するだけ、 close しない。 「`<ID>` にまだ未完タスクがある」とログ
 - `unchecked == 0`: Phase D を実行
 
@@ -304,6 +335,12 @@ E.4 承認 → 親に対して Phase D を実行 → 親に祖父母がいれば
 
 クローズ後の再オープン。 `closed → in_progress` への巻き戻しはこの経路でのみ許可される。
 
+F.0 reopen の理由を `## タスク` へ未チェック項目として追記する。 既存の `[x]` は変えない。
+closed の Issue は定義上すべての箱が `[x]` なので、 追記せずに戻すと「タスクは全消化なのに
+active」という状態になり、 C.3 は次に回ったときその Issue を「完了」と判定する。 reopen とは
+まだ終わっていない作業があるという判断なので、 その作業が未チェック項目として書かれるのが
+本来の形にあたる。 箱を `[x]` から戻す形は採らない (reopen 前の作業記録を壊す)。
+
 F.1 frontmatter `status: closed → in_progress`。
 
 F.2 `git mv` で `closed/` から戻す:
@@ -347,6 +384,8 @@ PR 本文に Issue 本体への相対リンクと `Closes <ID>` を必ず書く 
 Closes [<ID>](../../docs/issues/<ID>_<title>/issue.md)
 ```
 
+同梱経路では `Closes` 行のリンク先が変わる。 書式はこの節が canonical のままだが、 対象の issue.md はその PR 自身が移動させているので、 位置は「クローズ経路: feature PR 同梱を優先」節の該当項目に従う。
+
 この規約どおりに書かれている限り、 リンクの有無も、 書いたのが body か title かも C.1 の抽出に影響しない (リンク有り / リンク無し / title のみ / キーワード無しの 4 通りを実測)。 ただしキーワードがあることは抽出の必要条件であって十分条件ではない。 規約を外れると、 キーワードを含んでいても 0 件になる書き方と、 逆に識別子でない塊を拾う書き方の両方が出る (前者の実測: 旧記法の `Closes [Issue #8](...)` / コロン付きの `Closes:` / 小文字の `closes` / 数字を含まない `Closes the gap`。 後者は C.1 の `Fixes 2 つある` の例)。 抽出されるかどうかを決める規則は C.1 の「パターンは識別子の形そのものを持たない」項目が持つので、 空振りや誤抽出を追うときはそちらを読むこと。 抽出できた識別子が実際に close まで進むかは C.3 の判定による。 それでもリンクを規約で必須にするのは、 PR から Issue 本体へ辿る導線がここにしか無いため。
 
 識別子が数字記法でないため、 GitHub Issues を併用するプロジェクトでもこの `Closes` 行が GitHub の自動クローズ構文として解釈されることはない (GitHub のクローズキーワードは `#<数字>` / URL / `<owner>/<repo>#<数字>` のいずれかを要求する)。 番号空間の衝突は「プロジェクトごとに規約を書いて避ける」ものではなく、 記法が交わらないことで構造的に起きない。 手書きで数字記法が混入した場合の検出は `issue-id.py` の検査入口が担う (プロジェクトへ配る手順は「初期化」節。 hook / CI への取り付けはプロジェクト側の判断なので、 配っただけでは検出は走らない)。
@@ -385,6 +424,11 @@ GitHub は既定で subject の末尾へ括弧付きの数字記法を付ける�
 `--title` と同じ制約)。 マージコミットに本文を付けるなら同コマンドの `--body-file` を使う。
 
 既存の履歴に残る違反は直せない。 過去分は履歴として受容し、 以後のマージから適用する。
+
+クローズを実装 PR へ同梱せず別 PR に分けたときは、 subject に PR 番号が 2 つ並ぶ。 D 形式が
+要求する「どの PR がこの Issue を閉じたか」(`(PR #<M>)`) と、 この節の squash 規約が要求する
+「どの PR がこのコミットを作ったか」が別の番号になるため。 同梱が既定になった以上、 分割は
+例外として扱う: 実装 PR の番号とマージされる PR の番号の両方を書く。 同梱すれば 1 つで足りる。
 
 ## Red flags
 

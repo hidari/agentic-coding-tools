@@ -29,9 +29,8 @@ ISSUE-8 で `scripts/run-python-tests.py` に取り付け検査を入れた。`.
 > `.github/workflows/ci.yml` の非コメント行に現れること
 
 canonical はファイルシステムの glob そのものなので、スクリプト名の literal はどこにも
-増えない。現状の 4 本 (`check-leak-guard-rules.py` / `check-package-shape.py` /
-`gen-readme.py` / `run-python-tests.py`) はいずれも両経路に取り付いており、免除リストは
-空のまま成立する (レビュー時の実測)。
+増えない。現状の対象は 1 本残らず両経路に取り付いており、免除リストは空のまま成立する
+(実測)。対象集合は上の規則が持つので、名前も本数もここへ写さない。
 
 `run-python-tests.py` 側の `Attachment` テストも同じ glob 導出へ一般化すれば相互監視になり、
 盲点は「2 つの機構の 4 箇所の取り付けを 1 つの diff で同時に消す」まで縮む。

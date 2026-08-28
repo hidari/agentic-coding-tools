@@ -66,6 +66,11 @@ jobs:
       - name: 関連節の Issue 参照を検査する
         run: python3 scripts/check-related-refs.py
 
+      # 同じ理由でこの job へ相乗りさせている。この検査も index と作業ツリーだけを
+      # 見るので checkout の既定 (fetch-depth 1) で足りる。
+      - name: 閉じ忘れと配置と status の整合を検査する
+        run: python3 scripts/check-issue-closure.py
+
   readme-drift:
     name: README の drift
     runs-on: ubuntu-latest

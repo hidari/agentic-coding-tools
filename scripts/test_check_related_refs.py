@@ -42,8 +42,19 @@ HASH = "#"
 # この検査に固有の事情がもう 1 つあり、global の core.excludesfile が `*.md` を ignore して
 # いると `git ls-files` の走査集合だけが縮む。実在判定はファイルシステムを見るので縮まず、
 # 「違反 0 件」を主張するテストが小さくなった標本で通る (実測)
+# os.environ をそのまま流さず GIT_* を落としてから足し直す。fixture は tempdir で
+# `git add` を走らせるが、GIT_INDEX_FILE を継承すると書き込み先がその指し先になり、
+# 呼び出し元のリポジトリの index を fixture の内容で上書きする (実測: 実際にこの
+# リポジトリの index が 23159 byte / 123 件から 4837 byte / 1 件へ壊れた。壊れた
+# index が持っていた唯一のエントリは本ファイルの fixture のパスだった)。
+#
+# テストの終了コードでは検出できない。上書きしたまま緑を返す (実測: 同条件で
+# scripts/test_check_issue_closure.py は 34 件 OK のまま指し先を 267 byte にする)。
+# 判定にはテストの rc ではなく指し先ファイルのハッシュを使うこと。
+#
+# 個別の変数名を並べないのは、git が変数を増やしたとき列挙だけが古びるため。
 GIT_ENV = {
-    **os.environ,
+    **{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
     "GIT_CONFIG_GLOBAL": os.devnull,
     "GIT_CONFIG_SYSTEM": os.devnull,
     "GIT_AUTHOR_NAME": "probe",
@@ -131,6 +142,11 @@ class Fixture:
         subprocess.run(["git", "-C", str(self.dir), "add", "-A"], check=True, env=GIT_ENV)
 
     def check(self, baseline: dict[str, int] | None = None):
+        # crr.check() はプロセス内で走るので、その中の git 呼び出しは GIT_ENV ではなく
+        # os.environ を読む。呼び出し元が GIT_INDEX_FILE を立てていると (git はパス指定や
+        # -a のコミットで hook へ渡す) 読み取り先が呼び出し元の index になり、ここが赤くなる。
+        # プロダクトが壊れたのではなく環境の継承なので、テスト側を直しに行かないこと。
+        # 手当ての判断は ISSUE-44 が持つ
         self.stage()
         return crr.check(self.dir, baseline or {})
 

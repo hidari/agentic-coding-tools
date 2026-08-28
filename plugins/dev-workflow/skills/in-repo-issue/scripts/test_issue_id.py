@@ -54,8 +54,19 @@ def fence(n: int = 3) -> str:
 
 # 実行環境の global / system 設定を読ませない。hooksPath や commit.gpgsign が入っていると
 # fixture の commit が環境依存で落ちる
+# os.environ をそのまま流さず GIT_* を落としてから足し直す。fixture は tempdir で
+# `git add` を走らせるが、GIT_INDEX_FILE を継承すると書き込み先がその指し先になり、
+# 呼び出し元のリポジトリの index を fixture の内容で上書きする (実測: 実際にこの
+# リポジトリの index が 23159 byte / 123 件から 4837 byte / 1 件へ壊れた。壊れた
+# index が持っていた唯一のエントリは本ファイルの fixture のパスだった)。
+#
+# テストの終了コードでは検出できない。上書きしたまま緑を返す (実測: 同条件で
+# scripts/test_check_issue_closure.py は 34 件 OK のまま指し先を 267 byte にする)。
+# 判定にはテストの rc ではなく指し先ファイルのハッシュを使うこと。
+#
+# 個別の変数名を並べないのは、git が変数を増やしたとき列挙だけが古びるため。
 GIT_ENV = {
-    **os.environ,
+    **{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
     "GIT_CONFIG_GLOBAL": os.devnull,
     "GIT_CONFIG_SYSTEM": os.devnull,
     "GIT_AUTHOR_NAME": "probe",
