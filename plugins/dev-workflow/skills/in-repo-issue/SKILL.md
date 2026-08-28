@@ -182,7 +182,7 @@ ruleset は branch protection とは別系統の仕組みで、 classic API に�
 
 ```bash
 gh api "repos/<owner>/<repo>/branches/main/protection" >/dev/null 2>&1; echo "classic rc=$?"
-gh api "repos/<owner>/<repo>/rules/branches/<branch>" --jq '.[].type'
+gh api "repos/<owner>/<repo>/rules/branches/main" --jq '.[].type'
 ```
 
 `rulesets` list endpoint (`/rulesets`) はオブジェクトの一覧を返すだけで `rules` キーを
@@ -199,6 +199,7 @@ Phase C/D は既定で post-merge に main へ直接 commit して close する�
 その場合は feature PR にクローズを同梱する:
 
 - feature ブランチ内で Phase D.1〜D.4 と同じ操作 (issue.md を `status: closed` 化 + `git mv` で `closed/` へ移動 + 相対リンクの補正 + 新パスの明示 stage) をコミットに含める (理由は D.4 参照)。 コミット文言は feature PR 自身のコミットメッセージに委ねる (D 形式の `(PR #<M>)` は同梱時には使わない。 この時点では PR 番号が未確定なため)。
+- PR 本文の `Closes` 行のリンク先も移動後の位置になる。 同梱ではこの PR 自身が issue.md を `closed/` 配下へ入れるので、 D.3 の「外部 → 移動対象」と同じ形で `closed/` が 1 段挟まる。 D.3 の grep は `docs/` しか見ないので、 PR 本文はここで書き分けるしかない。
 - PR マージで issue が closed のまま main に入る。 post-merge の別コミット/push は不要で、 CI 追加 run も出ない (別 docs PR だと ci が PR+マージで 2 run 走りコスト増)。
 - マージ後に Phase C が走っても、 対象が `closed/` 配下にあるため C.3 の既存分岐で「既に closed」→ no-op になり破綻しない。
 - 親 Issue の Phase E 伝播 close も、 親を閉じる PR に同梱するか、 直 push が許されない環境では別 PR で行う。
