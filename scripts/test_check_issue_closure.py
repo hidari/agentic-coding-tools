@@ -7,9 +7,9 @@ GIT_CONFIG_GLOBAL / GIT_CONFIG_SYSTEM を潰すのは、global の core.excludes
 scripts/test_check_related_refs.py が持つ)。
 
 検査スクリプト本体の仕様に加えて、周りが動いたときに黙って効かなくなる継ぎ目もここへ集める。
-pre-commit と ci.yml への取り付け (Attachment)、in-repo-issue C.3 との判定一致
-(ParityWithPhaseC3)、gate の散文が名指しする節の実在 (SectionReferences) がそれで、
-どれも機構そのものは無傷のまま失効する形を捕まえる。
+取り付け先の設定ファイル、借用先の記法、SKILL.md が持つ判定や規約との一致がそれで、どれも
+機構そのものは無傷のまま失効する形を捕まえる。継ぎ目を見るクラスを名前で列挙しないのは、
+増やすたびに列挙が実態より狭くなるため。各クラスの docstring が何を見ているかを名乗る。
 """
 from __future__ import annotations
 
@@ -86,9 +86,20 @@ def load():
 checker = load()
 
 
-def issue_md(status: str, tasks: list[str], heading: str = "## タスク") -> str:
+def issue_md(
+    status: str,
+    tasks: list[str],
+    heading: str = "## タスク",
+    frontmatter: tuple[str, ...] = (),
+) -> str:
+    """fixture 用の issue.md を組む。frontmatter は status の後ろへ足す行。
+
+    親子リンク用に別のビルダを立てず既存のここへ引数を足すのは、fixture の派生方法が
+    増えるとテストごとに違う形の issue.md が生まれるため (ISSUE-42 が扱っている問題)。
+    """
+    head = "\n".join(["---", f"status: {status}", *frontmatter, "---"])
     body = "\n".join(tasks)
-    return f"---\nstatus: {status}\n---\n\n# probe\n\n{heading}\n\n{body}\n"
+    return f"{head}\n\n# probe\n\n{heading}\n\n{body}\n"
 
 
 def git_vars(env) -> dict[str, str]:
@@ -119,6 +130,15 @@ class Fixture:
         (path / filename).write_bytes(text.encode(encoding))
 
     def commit(self):
+        """fixture をコミットする。
+
+        検査対象は git を読まない (借用する issue_dirs はファイルシステムを歩き、
+        `--root` を渡すので resolve_root も git を呼ばない)。つまりコミットを外しても
+        テストは緑のまま通る (実測: 全件緑、実行時間は 18% 短縮)。それでも積むのは、
+        追跡下のリポジトリが production の見る構造上の形そのものだから。借用先が
+        `git ls-files` を見る形へ変わったとき、未コミットの fixture は production の
+        欠陥ではない理由で赤くなる。速いからという理由で外さないこと。
+        """
         self._git("add", "-A")
         self._git("commit", "-q", "-m", "probe")
 
@@ -234,6 +254,410 @@ class InvariantB(FixtureCase):
         self.assertEqual(rc, 0, err)
         self.assertIn("status が読めない 1 個", out)
         self.assertIn("[-] docs/issues/ISSUE-1_probe", err)
+
+
+class InvariantC(FixtureCase):
+    """親子リンクの整合と、子が全て closed なのに親が active に残る形。
+
+    assert を rc だけにしない。この検査は reader (frontmatter の値を読む regex) が
+    盲目化しても赤いままになりうる。`children` の値書式を読めなくすると、辺は親側から
+    立たなくなるが子側の `parent` からは立つので、違反は「片側にしか無い」へすり替わって
+    rc 1 のまま残り、母集団行だけが 0 組へ落ちる。rc を見るだけの pin はこの変異で
+    緑のまま通る (dead pin)。違反メッセージ本文と母集団行の両方まで見ること。
+
+    判定に配置 (closed/ 配下か) だけを使うのは Phase E に揃えるため。配置と frontmatter の
+    status の不整合は不変条件 B の担当で、ここでは二重に見ない。
+    """
+
+    def test_parent_with_all_children_closed_is_a_violation(self):
+        def build(fx):
+            fx.add_issue("ISSUE-1_親", issue_md(
+                "open", ["- [ ] 未"], frontmatter=("children: [ISSUE-2]",)))
+            fx.add_issue("closed/ISSUE-2_子", issue_md(
+                "closed", ["- [x] 済み"], frontmatter=("parent: ISSUE-1",)))
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 1)
+        self.assertIn("子 Issue が全て closed なのに active に居る (子 1 件)", err)
+        self.assertIn("親子リンク: 1 組 / 親 1 個", out)
+        self.assertIn("違反 1 件", out)
+
+    def test_one_active_child_keeps_the_parent_green(self):
+        """対照。子が 1 件でも active なら親は違反にならない。
+
+        この対照が無いと、親を無条件に違反にする実装が上のテストだけで緑になる。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_親", issue_md(
+                "open", ["- [ ] 未"], frontmatter=("children: [ISSUE-2, ISSUE-3]",)))
+            fx.add_issue("closed/ISSUE-2_子", issue_md(
+                "closed", ["- [x] 済み"], frontmatter=("parent: ISSUE-1",)))
+            fx.add_issue("ISSUE-3_子", issue_md(
+                "open", ["- [ ] 未"], frontmatter=("parent: ISSUE-1",)))
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("親子リンク: 2 組 / 親 1 個", out)
+        self.assertNotIn("何も見ていない", out)
+
+    def test_a_closed_parent_is_not_reported(self):
+        """親も closed なら提案先が無い。
+
+        Phase E が `PARENT_PATH` を `-maxdepth 2` で引いて closed の親を解決しないのと
+        同じ向き。深さで表現されている判断をここでは配置の判定として持つ。
+        """
+        def build(fx):
+            fx.add_issue("closed/ISSUE-1_親", issue_md(
+                "closed", ["- [x] 済み"], frontmatter=("children: [ISSUE-2]",)))
+            fx.add_issue("closed/ISSUE-2_子", issue_md(
+                "closed", ["- [x] 済み"], frontmatter=("parent: ISSUE-1",)))
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 0, err)
+        # 辺は 1 組あるが判定した親は 0 個。母集団と判定を同じ数で名乗ると、
+        # 「見たが違反が無かった」と「そもそも見ていない」が区別できなくなる
+        self.assertIn("親子リンク: 1 組 / 親 1 個 / 判定した親 0 個", out)
+        self.assertIn("不変条件 C の親判定はこの実行で何も見ていない", out)
+
+    def test_no_link_at_all_is_named_as_an_empty_population(self):
+        """辺が 0 組のとき「何も見ていない」と名乗ること。
+
+        このリポジトリの実ツリーには親子 Issue が 1 件も無いので、不変条件 C は空虚に
+        緑を返す。名乗りが無いと、その緑を「守られていた証拠」として引用できてしまう。
+        件数は不変条件と同じ 1 パスから出すので、印字された 0 と検査された 0 は
+        食い違えない。
+        """
+        rc, out, err = self._run(lambda fx: fx.add_issue(
+            "ISSUE-1_probe", issue_md("open", ["- [ ] 未"])))
+        self.assertEqual(rc, 0, err)
+        self.assertIn("親子リンク: 0 組 / 親 0 個 / 判定した親 0 個"
+                      " (不変条件 C の親判定はこの実行で何も見ていない)", out)
+
+    def test_a_link_declared_only_by_the_parent_is_a_violation(self):
+        """親だけが `children` を書き、子が `parent` を書いていない形。
+
+        両面から集めた辺の union を母集団にする。intersection にすると片側欠けの辺が
+        母集団から静かに落ち、「1 組」が「0 組」になる。母集団行まで見るのはそのため。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_親", issue_md(
+                "open", ["- [ ] 未"], frontmatter=("children: [ISSUE-2]",)))
+            fx.add_issue("ISSUE-2_子", issue_md("open", ["- [ ] 未"]))
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 1)
+        self.assertIn("親子リンクが片側にしか無い (子側の parent が欠けている)", err)
+        self.assertIn("親子リンク: 1 組 / 親 1 個", out)
+        self.assertIn("違反 1 件", out)
+
+    def test_a_link_declared_only_by_the_child_is_a_violation(self):
+        """逆向き。子だけが `parent` を書き、親が `children` を書いていない形。
+
+        片方向だけを検査すると、もう片方の欠けが素通りする。両向きを別のテストで持つ。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_親", issue_md("open", ["- [ ] 未"]))
+            fx.add_issue("ISSUE-2_子", issue_md(
+                "open", ["- [ ] 未"], frontmatter=("parent: ISSUE-1",)))
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 1)
+        self.assertIn("親子リンクが片側にしか無い (親側の children が欠けている)", err)
+        self.assertIn("親子リンク: 1 組 / 親 1 個", out)
+        self.assertIn("違反 1 件", out)
+
+    def test_a_reference_to_a_missing_issue_is_a_violation(self):
+        """指し先が実在しない参照。
+
+        frontmatter の参照実在を見る canonical は現在どこにも無いので、ここが 1 つ目に
+        なる (`## 関連` 節を見る scripts/check-related-refs.py の射程はその節に限る)。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_親", issue_md(
+                "open", ["- [ ] 未"], frontmatter=("children: [ISSUE-9]",)))
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 1)
+        self.assertIn("children が指す ISSUE-9 が実在しない", err)
+        self.assertIn("違反 1 件", out)
+
+    def test_a_value_that_is_not_an_identifier_is_a_violation(self):
+        """識別子の形でない値。
+
+        裸の数字を識別子として受けないのは、frontmatter の値には `_<title>` のような
+        後続が無く、受けると `parent: 2026` のような散文がそのまま番号へ解決するため。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_子", issue_md(
+                "open", ["- [ ] 未"], frontmatter=("parent: 7",)))
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 1)
+        self.assertIn("parent の値 7 が識別子の形でない", err)
+        self.assertIn("違反 1 件", out)
+
+    def test_an_unreadable_child_does_not_fake_a_one_sided_link(self):
+        """読めなかった Issue が絡む辺を片側欠けとして報告しないこと。
+
+        子の issue.md が読めなければ `parent` も読めない。それを違反にすると、
+        「読めなかった」が「規約違反」を名乗る。母集団には親側の宣言から入れたまま、
+        対称性の検査だけを飛ばす。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_親", issue_md(
+                "open", ["- [ ] 未"], frontmatter=("children: [ISSUE-2]",)))
+            fx.add_issue_encoded("ISSUE-2_子", issue_md(
+                "open", ["- [ ] 未 日本語"], frontmatter=("parent: ISSUE-1",)), "cp932")
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("親子リンク: 1 組 / 親 1 個", out)
+        self.assertIn("違反 0 件", out)
+        self.assertIn("[-] docs/issues/ISSUE-2_子", err)
+
+    def test_zero_padded_identifiers_resolve_to_the_same_issue(self):
+        """`ISSUE-07` と `ISSUE-7` が同じ Issue を指すこと。
+
+        番号を文字列のまま鍵にすると一致せず、違反が「子が全て closed」から
+        「実在しない」へすり替わる。メッセージまで見ることでそこを分ける。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_親", issue_md(
+                "open", ["- [ ] 未"], frontmatter=("children: [ISSUE-07]",)))
+            fx.add_issue("closed/ISSUE-7_子", issue_md(
+                "closed", ["- [x] 済み"], frontmatter=("parent: ISSUE-1",)))
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 1)
+        self.assertIn("子 Issue が全て closed なのに active に居る (子 1 件)", err)
+        self.assertNotIn("実在しない", err)
+        self.assertIn("親子リンク: 1 組 / 親 1 個", out)
+        self.assertIn("違反 1 件", out)
+
+    def test_a_self_referencing_link_is_a_violation(self):
+        """自分自身を親 / 子として宣言した形を辺にしないこと。
+
+        辺にすると親が自分自身の子になる。親は active なので「子が全て closed」が必ず偽に
+        なり、同じ親が持つ本物の子が全て closed でも不変条件 C が沈黙する。しかも自己参照を
+        両側へ書くと対称性の検査も通るので、rc 0 で注記も出ない完全な無音になる。
+
+        片側だけ自己参照を書いた状態は「片側にしか無い」で赤くなるので、その指摘どおりに
+        もう片側を足すと無音へ遷移する。検査自身の修正指示が検査を殺す形になっていた。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_親", issue_md(
+                "open", ["- [ ] 未"],
+                frontmatter=("parent: ISSUE-1", "children: [ISSUE-1, ISSUE-2]")))
+            fx.add_issue("closed/ISSUE-2_子", issue_md(
+                "closed", ["- [x] 済み"], frontmatter=("parent: ISSUE-1",)))
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 1)
+        self.assertIn("parent が自分自身を指している", err)
+        self.assertIn("children が自分自身を指している", err)
+        # 自己参照を落とした結果、本物の辺だけが残って不変条件 C が本来の判定に戻る
+        self.assertIn("子 Issue が全て closed なのに active に居る (子 1 件)", err)
+        self.assertIn("親子リンク: 1 組 / 親 1 個", out)
+
+    def test_an_unparsable_frontmatter_does_not_fake_a_one_sided_link(self):
+        """frontmatter を切り出せない Issue が絡む辺を片側欠けとして報告しないこと。
+
+        閉じ `---` が無い issue.md からは parent も children も読めない。読めないことを
+        「規約違反」として報告すると、読めなさの扱いが経路で非対称になる (同じ読めなさでも
+        ファイルが開けない側は注記で済む)。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_親", issue_md(
+                "open", ["- [ ] 未"], frontmatter=("children: [ISSUE-2]",)))
+            fx.add_issue("ISSUE-2_子",
+                         "---\n\n# probe\n\nstatus: open\n\n## タスク\n\n- [ ] 未\n")
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn("片側にしか無い", err)
+        self.assertIn("親子リンク: 1 組 / 親 1 個", out)
+        self.assertIn("status が読めない 1 個", out)
+
+    def test_an_unreadable_parent_is_not_judged(self):
+        """親の issue.md が読めないときは不変条件 C の判定へ進まないこと。
+
+        読めない親の `children` は読めていないので、子側から立った辺だけが残る。その部分
+        集合で「子は全て closed」と断定すると、読めなかった宣言に居る active な子を見落とす。
+        母集団からは外さず、判定だけを止める。
+        """
+        def build(fx):
+            fx.add_issue_encoded("ISSUE-1_親", issue_md(
+                "open", ["- [ ] 未 日本語"], frontmatter=("children: [ISSUE-2]",)), "cp932")
+            fx.add_issue("closed/ISSUE-2_子", issue_md(
+                "closed", ["- [x] 済み"], frontmatter=("parent: ISSUE-1",)))
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn("子 Issue が全て closed", err)
+        self.assertIn("親子リンク: 1 組 / 親 1 個 / 判定した親 0 個", out)
+        self.assertIn("走査できなかった 1 個", out)
+
+    def test_the_empty_population_notice_names_only_the_parent_judgement(self):
+        """辺が 0 組でも不変条件 C が違反を出す実行があること、その名乗りが過大でないこと。
+
+        参照が実在しないと辺は立たないが、その報告自体は不変条件 C が出している。ここで
+        「不変条件 C はこの実行で何も見ていない」と名乗ると、出力の中に反例が並んだまま
+        宣言が実態より広くなる。名乗るのは親判定だけに限る。
+        """
+        rc, out, err = self._run(lambda fx: fx.add_issue(
+            "ISSUE-1_親", issue_md("open", ["- [ ] 未"],
+                                  frontmatter=("children: [ISSUE-9]",))))
+        self.assertEqual(rc, 1)
+        self.assertIn("children が指す ISSUE-9 が実在しない", err)
+        self.assertIn("親子リンク: 0 組 / 親 0 個 / 判定した親 0 個"
+                      " (不変条件 C の親判定はこの実行で何も見ていない)", out)
+
+    def test_an_unresolvable_child_reference_stops_the_parent_judgement(self):
+        """`children` に解決できない要素があるとき、親の判定へ進まないこと。
+
+        読めた分だけで「子は全て closed」と断定すると、解決できなかった参照が active な子の
+        打ち間違いだったときに誤った指示を出す。しかも参照の違反と親の違反が同じ出力に並ぶ
+        ので、上から直す人ほど踏む。読めなかった親を判定しないのと同じ理屈で、宣言を完全に
+        は把握できていない親は判定しない。
+        """
+        for label, value in (("実在しない", "ISSUE-2, ISSUE-9"), ("識別子でない", "ISSUE-2, 9")):
+            with self.subTest(label=label):
+                def build(fx):
+                    fx.add_issue("ISSUE-1_親", issue_md(
+                        "open", ["- [ ] 未"], frontmatter=(f"children: [{value}]",)))
+                    fx.add_issue("closed/ISSUE-2_子", issue_md(
+                        "closed", ["- [x] 済み"], frontmatter=("parent: ISSUE-1",)))
+                rc, out, err = self._run(build)
+                self.assertEqual(rc, 1)
+                self.assertNotIn("子 Issue が全て closed", err)
+                self.assertIn("判定した親 0 個", out)
+                self.assertIn("違反 1 件", out)
+
+    def test_an_empty_element_in_children_is_not_a_child(self):
+        """区切りだけが残った要素を子として数えないこと。
+
+        `children: []` はここへ到達しない。`_read_key` が空文字を返し、read_links が
+        その前で「子は 0 件」へ倒すため。フィルタに実際に届くのは末尾カンマのように
+        要素が空になる形で、フィルタを外すとその空文字が「識別子の形でない」違反になる。
+
+        最初に書いた `children: []` の fixture は変異注入で SURVIVED した (実測)。
+        docstring が説明している挙動を、テストが別経路で満たしていた形だった。
+        """
+        for label, value in (("空リスト", "[]"), ("末尾カンマ", "[ISSUE-2, ]")):
+            with self.subTest(label=label):
+                def build(fx):
+                    fx.add_issue("ISSUE-1_親", issue_md(
+                        "open", ["- [ ] 未"], frontmatter=(f"children: {value}",)))
+                    fx.add_issue("ISSUE-2_子", issue_md(
+                        "open", ["- [ ] 未"], frontmatter=("parent: ISSUE-1",)))
+                rc, out, err = self._run(build)
+                self.assertNotIn("識別子の形でない", err)
+                self.assertIn("値を読めない 0 個", out)
+
+    def test_a_link_key_that_cannot_be_read_is_not_a_missing_declaration(self):
+        """キー行はあるのに値を読めない形を「宣言が無い」と同じに扱わないこと。
+
+        標準的な YAML のブロックリスト形 (`children:` の下に `- ISSUE-2` を並べる) は
+        `children: [...]` の reader に一致しない。区別しないと、子が `parent` を書いて
+        いなければ静かな緑になり、書いていれば規約どおり書いてある親が「children が
+        欠けている」と違反を名乗らされる (どちらも実測)。
+        """
+        block = ("children:", "  - ISSUE-2")
+
+        def without_parent(fx):
+            fx.add_issue("ISSUE-1_親", issue_md("open", ["- [ ] 未"], frontmatter=block))
+            fx.add_issue("closed/ISSUE-2_子", issue_md("closed", ["- [x] 済み"]))
+
+        def with_parent(fx):
+            fx.add_issue("ISSUE-1_親", issue_md("open", ["- [ ] 未"], frontmatter=block))
+            fx.add_issue("closed/ISSUE-2_子", issue_md(
+                "closed", ["- [x] 済み"], frontmatter=("parent: ISSUE-1",)))
+
+        rc, out, err = self._run(without_parent)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("children の値を読めなかった", err)
+        self.assertIn("値を読めない 1 個", out)
+
+        rc, out, err = self._run(with_parent)
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn("片側にしか無い", err)
+        self.assertNotIn("子 Issue が全て closed", err)
+        self.assertIn("children の値を読めなかった", err)
+
+    def test_a_directory_without_a_number_is_counted_separately(self):
+        """番号が採れないディレクトリを「走査できなかった」に混ぜないこと。
+
+        その Issue は不変条件 A と B の走査を通っている。解決できないのは親子リンクだけ
+        なので、走査できなかった件数へ混ぜると要約行の宣言が実態より広くなる。ディレクトリ
+        名の形式そのものは issue-id.py --check が違反として報告するので、ここでは母集団が
+        縮んだことを見えるようにするだけ。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_親", issue_md("open", ["- [ ] 未"]))
+            fx.add_issue("番号なし", issue_md("closed", ["- [x] 済み"]))
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 1, err)
+        # 不変条件 B は走っている (closed でないのに status: closed) ことが、走査を通った証拠
+        self.assertIn("status が closed なのに active に居る", err)
+        self.assertIn("走査できなかった 0 個", out)
+        self.assertIn("番号が採れない 1 個", out)
+
+    def test_a_child_without_an_issue_md_is_placed_but_not_judged(self):
+        """issue.md が無いディレクトリを索引へ載せ、辺の対称性からは外すこと。
+
+        載せないと、実在する Issue への参照が「実在しない」と誤報される。外さないと、
+        読めていないだけの `parent` が「欠けている」と誤報される。索引への登録が
+        issue.md を読む前に行われていることを、この 2 つの誤報の不在が見ている。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_親", issue_md(
+                "open", ["- [ ] 未"], frontmatter=("children: [ISSUE-2]",)))
+            (fx.root / "docs" / "issues" / "ISSUE-2_子").mkdir(parents=True)
+            (fx.root / "docs" / "issues" / "ISSUE-2_子" / "README.md").write_text(
+                "probe\n", encoding="utf-8")
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn("実在しない", err)
+        self.assertNotIn("片側にしか無い", err)
+        self.assertIn("親子リンク: 1 組 / 親 1 個", out)
+        self.assertIn("issue.md が無い 1 個", out)
+
+    def test_a_legacy_directory_without_the_prefix_still_resolves(self):
+        """接頭辞を持たない旧形式のディレクトリも索引へ載ること。
+
+        借用先の ANY_ISSUE_DIR が接頭辞を任意にしているのは移行中のリポジトリのため。
+        こちらだけ厳格にすると、旧形式のディレクトリが親子リンクの母集団から静かに落ちる。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_親", issue_md(
+                "open", ["- [ ] 未"], frontmatter=("children: [ISSUE-2]",)))
+            fx.add_issue("closed/2_子", issue_md(
+                "closed", ["- [x] 済み"], frontmatter=("parent: ISSUE-1",)))
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 1)
+        self.assertNotIn("実在しない", err)
+        self.assertIn("子 Issue が全て closed なのに active に居る (子 1 件)", err)
+        self.assertIn("親子リンク: 1 組 / 親 1 個", out)
+
+    def test_prefer_active_does_not_depend_on_the_order_of_appearance(self):
+        """倒し方の判定を両順序で直に叩く。
+
+        collect() 経由では逆順を作れない。借用先の issue_dirs が active を先に返すので、
+        「先に見たものを残す」だけの実装でも fixture は緑になる。つまり fixture 経由の
+        pin では倒し方の条件を消しても赤くならない (到達不能分岐の dead pin)。走査順に
+        依存しない形であることは、この関数を直に叩くここだけが見ている。
+        """
+        active = ("docs/issues/ISSUE-2_子", False)
+        closed = ("docs/issues/closed/ISSUE-2_子", True)
+        self.assertEqual(checker.prefer_active(None, closed), closed)
+        self.assertEqual(checker.prefer_active(closed, active), active)
+        self.assertEqual(checker.prefer_active(active, closed), active)
+
+    def test_the_same_number_on_both_sides_falls_to_active(self):
+        """同じ番号が active と closed の両方に居る形が、実際の走査でも緑になること。
+
+        倒し方そのものの pin は上のテストが持つ。ここは collect() がその判定を通っている
+        ことと、重複を検査不能 (rc 2) や違反へ倒していないことを見る。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_親", issue_md(
+                "open", ["- [ ] 未"], frontmatter=("children: [ISSUE-2]",)))
+            fx.add_issue("closed/ISSUE-2_子", issue_md(
+                "closed", ["- [x] 済み"], frontmatter=("parent: ISSUE-1",)))
+            fx.add_issue("ISSUE-2_子", issue_md(
+                "open", ["- [ ] 未"], frontmatter=("parent: ISSUE-1",)))
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("親子リンク: 1 組 / 親 1 個", out)
+        self.assertIn("違反 0 件", out)
 
 
 class Population(FixtureCase):
@@ -391,6 +815,17 @@ class FormatVariants(unittest.TestCase):
         self.assertEqual(checker.scan_tasks(text), (True, 1, 0))
 
 
+# 検査対象のファイルと、Markdown の見出しの形。_extract_c3_lines 以降の複数の層が使う
+# ので、最初の利用者より前へ置く
+PRE_COMMIT_CONFIG = ROOT / ".pre-commit-config.yaml"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+SKILL_MD = ROOT / "plugins" / "dev-workflow" / "skills" / "in-repo-issue" / "SKILL.md"
+GATE_SKILL_MD = (
+    ROOT / "plugins" / "dev-workflow" / "skills" / "pre-merge-quality-gate" / "SKILL.md"
+)
+HEADING = re.compile(r"^#{1,6} +(\S.*)$")
+
+
 _C3_VARS = ("has_task_section", "boxes", "unchecked")
 
 
@@ -543,6 +978,216 @@ class ParityWithPhaseC3(unittest.TestCase):
         self.assertIn("`boxes == 0`", text)
 
 
+def _section(path: Path, prefix: str) -> list[tuple[str, str]]:
+    """ファイルから節を切り出す。中身は _section_from_text が持つ。"""
+    return _section_from_text(path.read_text(encoding="utf-8"), prefix, label=str(path))
+
+
+def _section_from_text(text: str, prefix: str, label: str = "入力") -> list[tuple[str, str]]:
+    """見出しが prefix で始まる節を、行と種別の組で返す。
+
+    プロダクトコードの classify_lines をそのまま使う。散文だけを返す
+    _strip_fences_and_comments では足りないのは、スキーマ節の pin が読みたいのがまさに
+    yaml フェンスの中身だから。種別を持つ分類器を通せば、フェンスの中身を残したまま
+    見出しの判定を散文の行だけに限れる。
+
+    状態機械をこちらへ書き直さないのは、写しがずれるため。実際、以前ここへ置いていた
+    2 つ目の状態機械は HTML コメントを見ておらず、コメントの中にフェンスの開き行がある
+    文書で本番と割れていた (節の終端になる見出しをフェンス内と誤判定し、節が次の見出しまで
+    伸びた。実測)。
+
+    見出しの判定を散文の行に限るガードは、現在の SKILL.md では発火しない (実測: 外しても
+    全テストが緑のまま)。該当する形のコメント行は「検索手順」節に 4 本あるが、切り出して
+    いる 3 節はどれもそれより手前で次の見出しに当たって終端するため、スキャンがそこへ
+    届かない。つまり今は防御で、壊れている実例に対する手当てではない。それでも持つのは、
+    節が増えたときに静かに切り詰められる形だから。到達しない分岐を pin だけで守ると dead
+    になるので、ヘルパ自身の入力域 (任意の Markdown) を直に渡すテストで押さえる。
+
+    見つからないときは黙って空へ倒さず落とす。抽出 0 件を「一致した」とみなすと、
+    節名を変えるだけで pin が空虚な緑になる。
+    """
+    classified, _ = checker.classify_lines(text)
+    start: int | None = None
+    level = 0
+    for i, (line, kind) in enumerate(classified):
+        if kind != checker.LINE_PROSE:
+            continue
+        m = HEADING.match(line)
+        if not m:
+            continue
+        depth = len(line) - len(line.lstrip("#"))
+        if start is None:
+            if m.group(1).strip().startswith(prefix):
+                start, level = i + 1, depth
+            continue
+        if depth <= level:
+            return classified[start:i]
+    if start is None:
+        raise AssertionError(f"{label} に「{prefix}」で始まる見出しが無い")
+    return classified[start:]
+
+
+def _section_text(path: Path, prefix: str) -> str:
+    """節の本文をそのままのテキストで返す。"""
+    return "\n".join(line for line, _ in _section(path, prefix))
+
+
+SCHEMA_SECTION = "frontmatter スキーマ"
+BUNDLED_SECTION = "クローズ経路: feature PR 同梱を優先"
+PHASE_D_SECTION = "Phase D:"
+
+
+class SectionExtraction(unittest.TestCase):
+    """節の切り出し自身の pin。
+
+    切り出しが壊れると ParityWithTheSchema も BundledCloseNamesThePropagationStep も
+    「節が空」ではなく「別の範囲を見た」結果で判定するので、赤くならずに誤った緑を返す
+    余地がある。ここだけが切り出しの意味論を見ている。
+    """
+
+    def _body(self, text: str) -> list[str]:
+        return [line for line, _ in _section_from_text(text, "対象")]
+
+    def test_a_fenced_comment_is_not_treated_as_a_heading(self):
+        """フェンスの中の `#` 行で節が終端しないこと。
+
+        現在の SKILL.md はこの形を持たない (_section_from_text の docstring 参照) ので、
+        ヘルパの入力域へ直に渡して押さえる。
+        """
+        body = self._body(
+            "## 対象\n"
+            "本文 1\n"
+            "```bash\n"
+            "# これはコメントであって見出しではない\n"
+            "grep -c x file\n"
+            "```\n"
+            "本文 2\n"
+            "## 次の節\n"
+            "ここは入らない\n"
+        )
+        self.assertIn("本文 2", body)
+        self.assertNotIn("ここは入らない", body)
+
+    def test_a_longer_fence_is_not_closed_by_a_shorter_one(self):
+        """4 連で開いたフェンスが内側の 3 連で閉じないこと。
+
+        単純トグルにすると 3 連の行で閉じたと誤判定し、そこから後ろがフェンス外に見える。
+        """
+        body = self._body(
+            "## 対象\n"
+            "````markdown\n"
+            "```\n"
+            "# 内側のコメント\n"
+            "```\n"
+            "````\n"
+            "本文\n"
+            "## 次の節\n"
+            "ここは入らない\n"
+        )
+        self.assertIn("本文", body)
+        self.assertNotIn("ここは入らない", body)
+
+    def test_a_fence_opened_inside_an_html_comment_does_not_swallow_the_next_heading(self):
+        """HTML コメントの中にフェンスの開き行があっても節が伸びないこと。
+
+        テスト側に 2 つ目の状態機械を書いていたとき、この形で本番と割れていた (実測:
+        コメント内の ``` をフェンスの開始と読み、節の終端になる見出しをフェンス内と
+        誤判定して次の見出しまで伸びた)。プロダクトの分類器を通す形にして揃えたので、
+        写しが戻ったらここが赤くなる。
+        """
+        body = self._body(
+            "## 対象\n"
+            "<!-- 説明\n"
+            "```\n"
+            "-->\n"
+            "本文\n"
+            "## 次の節\n"
+            "ここは入らない\n"
+        )
+        self.assertIn("本文", body)
+        self.assertNotIn("ここは入らない", body)
+
+    def test_a_missing_section_is_an_error_not_an_empty_body(self):
+        with self.assertRaises(AssertionError):
+            _section_from_text("## 別の節\n本文\n", "存在しない節")
+
+
+class ParityWithTheSchema(unittest.TestCase):
+    """frontmatter スキーマ節と checker の reader が、キーでも値でも一致すること。
+
+    キー集合の一致だけでは足りない。`children` の値書式 (角括弧) を読めなくする変異は
+    キー集合を変えないので、キーだけを見る parity は緑のまま通る。そのとき違反は消えず
+    「片側にしか無い」へすり替わって rc 1 のまま残るので、fixture の rc も変わらない
+    (InvariantC の docstring が持つ機序)。だから節の実際の行を reader へ流して、
+    値まで読めることを見る。
+    """
+
+    def _schema_lines(self) -> list[str]:
+        lines = [line for line, kind in _section(SKILL_MD, SCHEMA_SECTION)
+                 if kind == checker.LINE_FENCE]
+        if not lines:
+            raise AssertionError(f"「{SCHEMA_SECTION}」節の yaml フェンスが空")
+        return lines
+
+    def test_the_schema_keys_are_exactly_the_reader_keys(self):
+        """スキーマが持つキーと reader が持つキーが過不足なく一致すること。
+
+        キーの切り出しだけはテスト側で行う (stdlib に YAML パーサが無い)。値の書式は
+        テスト側で一切パースせず reader へ流すので、書式の規約が二重にならない。
+        """
+        keys = {line.split(":", 1)[0] for line in self._schema_lines() if ":" in line}
+        self.assertTrue(keys, f"「{SCHEMA_SECTION}」節からキーが 1 つも読めない")
+        self.assertEqual(keys, set(checker.FRONTMATTER_READERS))
+
+    def test_the_schema_lines_flow_through_the_readers(self):
+        """節の行をそのまま reader へ流し、値まで取り出せること。
+
+        placeholder の literal をこちらへ書かない。`children` の値が `parent` の値と
+        同じ placeholder 2 つへ割れることを見る形にすると、値書式の変異 (角括弧を
+        読めなくする / 区切りを `,` 以外にする) の両方がここで落ちる。
+        """
+        read: dict[str, str] = {}
+        for line in self._schema_lines():
+            for key, pattern in checker.FRONTMATTER_READERS.items():
+                m = pattern.match(line)
+                if m:
+                    read[key] = m.group(1)
+        self.assertEqual(set(read), set(checker.FRONTMATTER_READERS),
+                         f"reader が読めなかったキーがある: {read}")
+        self.assertEqual(checker.split_children(read["children"]),
+                         [read["parent"], read["parent"]])
+
+
+class BundledCloseNamesThePropagationStep(unittest.TestCase):
+    """同梱節が Phase E を起動する手順を名指ししていること。
+
+    同梱経路では post-merge の Phase C が「既に closed」で no-op になるため Phase D へ
+    進まず、D.5 (親伝播の起動) がどの経路からも通らなくなる。射程の canonical は同梱節
+    1 箇所なので、そこが名指しを失うと辺が消える。
+
+    見るのは「D.5 という文字列が在る」ことではなく、実行を指示する一文が在ること。前者では
+    足りないことを変異注入で実測した。同梱節は「マージ後には D.5 も通らない」という理由の
+    側でも D.5 を名指しするので、実行を指示する箇条書きを丸ごと消しても文字列は残り、
+    「在るか」だけを見る pin は緑のまま通る。
+
+    射程の限界: 逆に、一文を残したまま「ただし実行しなくてよい」と続ける骨抜きは緑で通る。
+    test_boxes_zero_branch_is_documented と同じ強度で、機械抽出できない散文に対してはここが
+    上限になる。文を書き換えるとこの pin は赤くなるので、書き換える側は意味が保たれたかを
+    その場で判断することになる。
+    """
+
+    def test_the_bundled_section_tells_you_to_run_the_step(self):
+        self.assertIn("D.5 は同梱の側で実行する", _section_text(SKILL_MD, BUNDLED_SECTION))
+
+    def test_the_step_it_names_exists_in_phase_d(self):
+        """名指しした先が実在すること。
+
+        参照だけを pin すると、Phase D 側から D.5 が消えても同梱節の文字列が残る限り
+        緑になる。宙に浮いた名指しは「読めば辿れる」を満たさない。
+        """
+        self.assertIn("D.5", _section_text(SKILL_MD, PHASE_D_SECTION))
+
+
 class ExitCodes(unittest.TestCase):
     """subprocess 経由で起動した main() の終了コード (0/2) と、argparse エラーによる rc 2
     を pin する。
@@ -608,12 +1253,6 @@ class BorrowedNames(unittest.TestCase):
             checker._notation = None
 
 
-PRE_COMMIT_CONFIG = ROOT / ".pre-commit-config.yaml"
-CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
-SKILL_MD = ROOT / "plugins" / "dev-workflow" / "skills" / "in-repo-issue" / "SKILL.md"
-GATE_SKILL_MD = (
-    ROOT / "plugins" / "dev-workflow" / "skills" / "pre-merge-quality-gate" / "SKILL.md"
-)
 
 
 class Attachment(unittest.TestCase):
@@ -666,7 +1305,6 @@ class Attachment(unittest.TestCase):
         self.assertTrue(lines[lines.index(run) - 1].startswith("- name:"))
 
 
-HEADING = re.compile(r"^#{1,6} +(\S.*)$")
 # 参照先の skill を名指ししている形だけを見る。`「X」節` 単体は同じ文書内の節を指す用法が
 # 既に 8 箇所あり (in-repo-issue に 5 / retrospective-codify に 2 / commit-and-pr-message
 # に 1)、区別せずに拾うと参照先が別文書だと誤診して赤くなる

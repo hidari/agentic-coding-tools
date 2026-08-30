@@ -68,7 +68,7 @@ jobs:
 
       # 同じ理由でこの job へ相乗りさせている。この検査も index と作業ツリーだけを
       # 見るので checkout の既定 (fetch-depth 1) で足りる。
-      - name: 閉じ忘れと配置と status の整合を検査する
+      - name: in-repo Issue の不変条件を検査する
         run: python3 scripts/check-issue-closure.py
 
   readme-drift:
