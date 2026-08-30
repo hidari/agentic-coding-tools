@@ -411,6 +411,24 @@ class InvariantC(FixtureCase):
         self.assertNotIn("実在しない", err)
         self.assertIn("親子リンク: 1 組 / 親 1 個", out)
 
+    def test_a_directory_without_a_number_is_counted_separately(self):
+        """番号が採れないディレクトリを「走査できなかった」に混ぜないこと。
+
+        その Issue は不変条件 A と B の走査を通っている。解決できないのは親子リンクだけ
+        なので、走査できなかった件数へ混ぜると要約行の宣言が実態より広くなる。ディレクトリ
+        名の形式そのものは issue-id.py --check が違反として報告するので、ここでは母集団が
+        縮んだことを見えるようにするだけ。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_親", issue_md("open", ["- [ ] 未"]))
+            fx.add_issue("番号なし", issue_md("closed", ["- [x] 済み"]))
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 1, err)
+        # 不変条件 B は走っている (closed でないのに status: closed) ことが、走査を通った証拠
+        self.assertIn("status が closed なのに active に居る", err)
+        self.assertIn("走査できなかった 0 個", out)
+        self.assertIn("番号が採れない 1 個", out)
+
     def test_prefer_active_does_not_depend_on_the_order_of_appearance(self):
         """倒し方の判定を両順序で直に叩く。
 

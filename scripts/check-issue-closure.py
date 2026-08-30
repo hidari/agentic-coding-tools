@@ -300,10 +300,15 @@ class CollectResult(NamedTuple):
     ならず件数が静かに入れ替わる。フィールド名を必須にする NamedTuple へ寄せることで
     取り違えを起こしにくくする。借用元 issue-id.py の Violation(NamedTuple) と同じ形。
 
-    検査できなかった 3 種 (issue.md が無い / status が読めない / 安全に走査できない) を
-    件数ではなく注記のリストで持つのは、件数を別に持つと注記と常に同値な冗長な状態になり、
-    片方だけ更新する変更が入る余地ができるため。呼び出し側は len() を使う。注記が rel_dir を
-    持つのは、件数だけではどの Issue が壊れているのか出力から特定できないため。
+    完全には検査できなかった 4 種 (issue.md が無い / status が読めない / 安全に走査できない /
+    ディレクトリ名から番号が採れない) を件数ではなく注記のリストで持つのは、件数を別に持つと
+    注記と常に同値な冗長な状態になり、片方だけ更新する変更が入る余地ができるため。呼び出し側は
+    len() を使う。注記が rel_dir を持つのは、件数だけではどの Issue が壊れているのか出力から
+    特定できないため。
+
+    4 種のうち unnumbered_notes だけは「不変条件 A と B は走ったが親子リンクは解決できない」
+    という部分的な欠けで、他の 3 種とは意味が違う。同じリストへ混ぜると、要約行のどの件数も
+    実態より広い宣言になる。
 
     links も同じ理由で件数ではなく辺そのもので持つ。親の数は辺から導けるので別に持たない。
     不変条件 C が見た母集団を検査と同じ 1 パスから出すためのフィールドで、別の grep で
@@ -314,6 +319,7 @@ class CollectResult(NamedTuple):
     unscanned_notes: list[str]
     missing_notes: list[str]
     unreadable_notes: list[str]
+    unnumbered_notes: list[str]
     links: list[tuple[int, int]]
     active: int
     closed: int
@@ -435,6 +441,10 @@ def collect(root: Path) -> CollectResult:
     issue.md を読む前に行うのは、issue.md が無いディレクトリを「実在しない」と誤報しない
     ため。配置はファイルが読めなくてもパスから分かるので、読めなさは辺の対称性の検査だけを
     止めて C の判定は止めない。
+
+    ディレクトリ名から番号が採れない場合は unnumbered_notes へ寄せ、走査できなかった件数へは
+    混ぜない。その Issue は不変条件 A と B の走査を通っており、解決できないのは親子リンクだけ
+    なので、混ぜると要約行の宣言が実態より広くなる。
     """
     n = notation()
     dirs = n.issue_dirs(root)
@@ -444,6 +454,7 @@ def collect(root: Path) -> CollectResult:
     unscanned_notes: list[str] = []
     missing_notes: list[str] = []
     unreadable_notes: list[str] = []
+    unnumbered_notes: list[str] = []
     placed: dict[int, tuple[str, bool]] = {}
     declared: list[_Declared] = []
     unread: set[int] = set()
@@ -459,7 +470,7 @@ def collect(root: Path) -> CollectResult:
             # 番号が採れないと辺を張れない。ディレクトリ名の形式そのものは
             # issue-id.py --check が違反として報告するので、ここでは重ねて違反にせず
             # 母集団が縮んだことだけを注記で見えるようにする
-            unscanned_notes.append(
+            unnumbered_notes.append(
                 f"{rel_dir}: ディレクトリ名から番号が採れないので親子リンクを解決できなかった "
                 "(名前の形式自体は issue-id.py --check が別途報告する)"
             )
@@ -527,6 +538,7 @@ def collect(root: Path) -> CollectResult:
         unscanned_notes=unscanned_notes,
         missing_notes=missing_notes,
         unreadable_notes=unreadable_notes,
+        unnumbered_notes=unnumbered_notes,
         links=links,
         active=active,
         closed=closed,
@@ -551,19 +563,23 @@ def main(argv: list[str] | None = None) -> int:
     for line in result.violations:
         print(f"  [x] {line}", file=sys.stderr)
     # 検査できなかった注記は違反と別記号にする。同じ [x] で並べると rc に効かない件数まで
-    # 「違反」に見え、読み手が rc 0 の理由を誤解する。3 種を同じ [-] で並べるのは、どれも
-    # 「この Issue は検査できていない」という同じ意味を持つため
-    for line in (*result.missing_notes, *result.unreadable_notes, *result.unscanned_notes):
+    # 「違反」に見え、読み手が rc 0 の理由を誤解する。4 種を同じ [-] で並べるのは、どれも
+    # 「この Issue はどこかを検査できていない」という同じ意味を持つため。何が検査できて
+    # いないかは注記の本文が名乗る
+    for line in (*result.missing_notes, *result.unreadable_notes, *result.unscanned_notes,
+                 *result.unnumbered_notes):
         print(f"  [-] {line}", file=sys.stderr)
     # active / closed が母集団で、括弧の中はその部分集合。「うち」で括るのは、並べて書くと
-    # 互いに排他な状態が 5 つあるように読めるため。括弧の中も後ろ 2 つは同居しうる
-    # (閉じ忘れフェンスを持つ issue.md は status も読めないことがある)。issue.md が無い
-    # 側だけは continue でそこから先へ進まないので、他の 2 つとは排他になる
+    # 互いに排他な状態が 6 つあるように読めるため。括弧の中の項目どうしも排他ではない
+    # (閉じ忘れフェンスを持つ issue.md は status も読めないことがあり、番号が採れないことは
+    # 内容の読めなさと独立に起きる)。issue.md が無い側だけは continue でそこから先へ進まない
+    # ので、内容に由来する 2 つとは排他になる
     print(
         f"検査した Issue: active {result.active} 個 / closed {result.closed} 個"
         f" (うち issue.md が無い {len(result.missing_notes)} 個"
         f" / status が読めない {len(result.unreadable_notes)} 個"
-        f" / 走査できなかった {len(result.unscanned_notes)} 個)"
+        f" / 走査できなかった {len(result.unscanned_notes)} 個"
+        f" / 番号が採れない {len(result.unnumbered_notes)} 個)"
         f"。違反 {len(result.violations)} 件"
     )
     # 不変条件 C が見た母集団を別行で名乗る。0 組のときだけ「何も見ていない」と言うのは、
