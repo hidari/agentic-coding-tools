@@ -521,19 +521,26 @@ class InvariantC(FixtureCase):
                 self.assertIn("判定した親 0 個", out)
                 self.assertIn("違反 1 件", out)
 
-    def test_an_empty_children_list_is_zero_children_not_one_empty_child(self):
-        """`children: []` を「空文字の子が 1 件」にしないこと。
+    def test_an_empty_element_in_children_is_not_a_child(self):
+        """区切りだけが残った要素を子として数えないこと。
 
-        split_children の空要素フィルタを外すと、その空文字が「識別子の形でない」違反に
-        なる。フィルタは docstring で理由を書いてあったが、この形を通す fixture が無く
-        変異注入で SURVIVED した (実測)。書いた理由と、それが効いていることは別に要る。
+        `children: []` はここへ到達しない。`_read_key` が空文字を返し、read_links が
+        その前で「子は 0 件」へ倒すため。フィルタに実際に届くのは末尾カンマのように
+        要素が空になる形で、フィルタを外すとその空文字が「識別子の形でない」違反になる。
+
+        最初に書いた `children: []` の fixture は変異注入で SURVIVED した (実測)。
+        docstring が説明している挙動を、テストが別経路で満たしていた形だった。
         """
-        rc, out, err = self._run(lambda fx: fx.add_issue(
-            "ISSUE-1_親", issue_md("open", ["- [ ] 未"], frontmatter=("children: []",))))
-        self.assertEqual(rc, 0, err)
-        self.assertNotIn("識別子の形でない", err)
-        self.assertIn("親子リンク: 0 組", out)
-        self.assertIn("値を読めない 0 個", out)
+        for label, value in (("空リスト", "[]"), ("末尾カンマ", "[ISSUE-2, ]")):
+            with self.subTest(label=label):
+                def build(fx):
+                    fx.add_issue("ISSUE-1_親", issue_md(
+                        "open", ["- [ ] 未"], frontmatter=(f"children: {value}",)))
+                    fx.add_issue("ISSUE-2_子", issue_md(
+                        "open", ["- [ ] 未"], frontmatter=("parent: ISSUE-1",)))
+                rc, out, err = self._run(build)
+                self.assertNotIn("識別子の形でない", err)
+                self.assertIn("値を読めない 0 個", out)
 
     def test_a_link_key_that_cannot_be_read_is_not_a_missing_declaration(self):
         """キー行はあるのに値を読めない形を「宣言が無い」と同じに扱わないこと。
