@@ -110,6 +110,26 @@ def discover(root: Path) -> list[Path]:
     return [p for p in found if not SKIP_DIRS & set(p.relative_to(root).parts)]
 
 
+def child_env(pycache: Path) -> dict[str, str]:
+    """テストの子プロセスへ渡す環境。
+
+    `GIT_*` を落とすのは、git が `commit -a` と `commit -- <paths>` のとき hook へ
+    `GIT_INDEX_FILE` を絶対パスで渡すため。継承したままだと、使い捨てリポジトリを
+    作って git を呼ぶテストの読み書き先が呼び出し元の index へ向く (実測: この形で
+    2 ファイルが落ち、コミットが成立しなくなった)。
+
+    各テストファイルも自前で同じ消毒を持つ。配布される skill のテストは runner の
+    無い環境へ配られるので、こちらだけでは配布物を守れない。逆にこの層だけが、
+    まだ書かれていないテストファイルを取り付け無しで覆う。射程が違うので両方置く。
+
+    個別の変数名を並べないのは、git が変数を増やしたとき列挙だけが古びるため。
+    """
+    return {
+        **{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+        "PYTHONPYCACHEPREFIX": str(pycache),
+    }
+
+
 def run_one(path: Path) -> tuple[bool, list[str], str]:
     """(緑か, 列挙されたテスト ID, 要約) を返す。"""
     with tempfile.TemporaryDirectory() as tmp:
@@ -124,7 +144,7 @@ def run_one(path: Path) -> tuple[bool, list[str], str]:
             cwd=path.parent,
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONPYCACHEPREFIX": str(Path(tmp) / "pycache")},
+            env=child_env(Path(tmp) / "pycache"),
         )
         if not out_path.exists():
             # BOOTSTRAP が結果を書く前に死んだ (構文エラー等)。列挙が取れないので
