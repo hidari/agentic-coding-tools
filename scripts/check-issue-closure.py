@@ -35,7 +35,9 @@ C が潰す運用は E.4 の拒否だけではない。同じ取引で次の 2 �
 - 親子の辺は frontmatter のキー名が規約どおりであることに依存する。片側だけが乖離した形は
   「親子リンクが片側にしか無い」で赤くなるが、両側が同時に乖離すると辺が 1 本も立たず、
   0 組で静かに緑になる。ここは残余で ISSUE-38 の射程。スキーマ外のキーを報告する規則を
-  ここへ足すと ISSUE-38 の canonical が 2 つになるので、この検査は持たない
+  ここへ足すと ISSUE-38 の canonical が 2 つになるので、この検査は持たない。
+  キー名が規約どおりで値の書式だけが違う形は別で、こちらは注記で名乗って判定を止める
+  (unreadable_link_keys)
 - 結果の状態しか見ない。D.5 (Phase E を起動する手順) を実行し忘れたこと自体は検出せず、
   親子 Issue が実在して子が全て closed になって初めて赤くなる
 - 逆向きの不整合 (親が closed なのに子が active) は見ない。見るようにすると不変条件 A と
@@ -62,9 +64,8 @@ ROOT = Path(__file__).resolve().parent.parent
 NOTATION_SOURCE = "plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py"
 
 # 借りる名前。rename が静かな素通りにならないよう実在を検査する
-BORROWED = ("ANY_ISSUE_DIR", "FENCE_LINE", "GitError", "PREFIX", "issue_dirs", "resolve_root")
-
-CLOSED_SEGMENT = "closed"
+BORROWED = ("ANY_ISSUE_DIR", "CLOSED", "FENCE_LINE", "GitError", "PREFIX",
+            "issue_dirs", "resolve_root")
 
 # 見出しのレベルと空白の揺れを吸収する。厳密に `## タスク` だけを見ると、`### タスク` で
 # 書かれた完了済み Issue が「タスク節なし」として素通りする (fixture で実測)
@@ -83,7 +84,7 @@ def _key_line(key: str, value: str) -> re.Pattern[str]:
     issue.md の status を読めないと、その Issue が不変条件 B の検査から静かに外れる。
     `#` をスペースに続くときだけコメントとして扱うのは YAML の規則に揃えるため。
     """
-    return re.compile(r"^" + key + r": *" + value + r"(?: +#.*)? *$")
+    return re.compile(r"^" + re.escape(key) + r": *" + value + r"(?: +#.*)? *$")
 
 
 # frontmatter で読むキーと値の書式。canonical は in-repo-issue SKILL.md の
@@ -126,9 +127,16 @@ def notation():
     return module
 
 
-def _strip_fences_and_comments(text: str) -> tuple[list[str], bool]:
-    """フェンスと HTML コメントの中身を除いた行のリストと、フェンスが閉じずに文書末尾へ
-    達したかを返す。
+# 行の種別。散文だけを採る呼び出し (_strip_fences_and_comments) と、フェンスの中身が要る
+# 呼び出し (テストがスキーマ節の yaml を読む経路) が同じ 1 本の状態機械を通れるようにする
+LINE_PROSE = "prose"
+LINE_FENCE_MARKER = "fence-marker"
+LINE_FENCE = "fence"
+LINE_COMMENT = "comment"
+
+
+def classify_lines(text: str) -> tuple[list[tuple[str, str]], bool]:
+    """各行を (行, 種別) へ分類し、フェンスが閉じずに文書末尾へ達したかを返す。
 
     フェンスの開閉は単純トグルではなく借用元 issue-id.py の scan_text と同じ意味論を使う:
     閉じ行は情報文字列を持たず (`marker.group(2).strip()` が空) かつ開始と同じ長さ以上の
@@ -136,34 +144,56 @@ def _strip_fences_and_comments(text: str) -> tuple[list[str], bool]:
     3 連の行がある文書で閉じ判定を誤り (3 連の行を「閉じた」と数えてしまう)、直後に続く
     本物のタスク節がフェンス内へ吸い込まれて消える (実測)。
 
-    scan_tasks と collect() が同じ状態機械を共有するのは、二重に持つと片方だけ直したときに
-    フェンスの意味論がずれるため。collect() は同じ issue.md に対しこの関数を 1 回だけ呼び、
-    返ってきた lines と unclosed の両方を使い回す。
+    種別を捨てずに返すのは、状態機械の写しを増やさないため。散文だけが要る呼び出しは
+    _strip_fences_and_comments を通し、フェンスの中身が要る呼び出しは種別で選ぶ。写しを
+    持つと片方だけ直したときにずれる。実際、テスト側に置いた 2 つ目の状態機械は HTML
+    コメントを見ておらず、コメントの中にフェンスの開き行がある文書で本番と割れていた
+    (節の終端になる見出しをフェンス内と誤判定し、節が次の見出しまで伸びた。実測)。
+
     コメント判定をフェンス判定より先に置くのは、フェンス内の HTML コメント風の行も
-    コメントとして扱うため。
+    コメントとして扱うため。開きと閉じが同じ行にある `<!-- x -->` はコメント扱いしない
+    (その行で閉じているので、以降の行を巻き込まない)。
     """
     fence = notation().FENCE_LINE
     fence_len = 0
     in_comment = False
-    kept: list[str] = []
+    classified: list[tuple[str, str]] = []
     for line in text.splitlines():
         if in_comment:
             if "-->" in line:
                 in_comment = False
+            classified.append((line, LINE_COMMENT))
             continue
         if "<!--" in line and "-->" not in line:
             in_comment = True
+            classified.append((line, LINE_COMMENT))
             continue
         marker = fence.match(line)
         if fence_len:
             if marker and not marker.group(2).strip() and len(marker.group(1)) >= fence_len:
                 fence_len = 0
+                classified.append((line, LINE_FENCE_MARKER))
+            else:
+                classified.append((line, LINE_FENCE))
             continue
         if marker:
             fence_len = len(marker.group(1))
+            classified.append((line, LINE_FENCE_MARKER))
             continue
-        kept.append(line)
-    return kept, fence_len != 0
+        classified.append((line, LINE_PROSE))
+    return classified, fence_len != 0
+
+
+def _strip_fences_and_comments(text: str) -> tuple[list[str], bool]:
+    """フェンスと HTML コメントの中身を除いた行のリストと、フェンスが閉じずに文書末尾へ
+    達したかを返す。
+
+    scan_tasks と collect() が同じ状態機械を共有するのは、二重に持つと片方だけ直したときに
+    フェンスの意味論がずれるため。collect() は同じ issue.md に対しこの関数を 1 回だけ呼び、
+    返ってきた lines と unclosed の両方を使い回す。
+    """
+    classified, unclosed = classify_lines(text)
+    return [line for line, kind in classified if kind == LINE_PROSE], unclosed
 
 
 def _scan_lines_for_tasks(lines: list[str]) -> tuple[bool, int, int]:
@@ -210,12 +240,20 @@ def is_completed(has_heading: bool, total: int, unchecked: int) -> bool:
     return has_heading and total >= 1 and unchecked == 0
 
 
-def _frontmatter(text: str) -> list[str] | None:
+def frontmatter(text: str) -> list[str] | None:
     """frontmatter の行を返す。開いていない / 閉じていないなら None。
 
     frontmatter は先頭の `---` で開いて次の `---` で閉じる。閉じる前だけを見るのと、
-    閉じ `---` が最後まで現れない文書を諦めるのは同じ目的で、どちらも本文中に status: と
+    閉じ `---` が最後まで現れない文書を諦めるのは同じ目的で、どちらも本文中に同じキーが
     書かれた行を frontmatter の値として拾わないため。
+
+    None は「切り出せなかった」を意味する。その issue.md からは status も parent も
+    children も読めないので、呼び出し側は「キーが無い」と区別すること。前者は宣言が丸ごと
+    読めていないので辺の対称性を判定できないが、後者は判定できる。
+
+    切り出しは呼び出し側が 1 回だけ行い、返った行を read_status と read_links で使い回す。
+    キーごとに切り出し直すと、frontmatter の境界規則を触ったときに「どの読み取りがどの
+    規則で読んだか」を追う先が増える (同じ規律を _strip_fences_and_comments が持つ)。
     """
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
@@ -227,32 +265,19 @@ def _frontmatter(text: str) -> list[str] | None:
     return None
 
 
-def _read_key(text: str, key: str) -> str | None:
-    """frontmatter から 1 キーの値を返す。読めなければ None。"""
-    frontmatter = _frontmatter(text)
-    if frontmatter is None:
-        return None
+def _read_key(lines: list[str], key: str) -> str | None:
+    """切り出し済みの frontmatter から 1 キーの値を返す。無ければ None。"""
     pattern = FRONTMATTER_READERS[key]
-    for line in frontmatter:
+    for line in lines:
         m = pattern.match(line)
         if m:
             return m.group(1)
     return None
 
 
-def read_status(text: str) -> str | None:
-    """frontmatter の status を返す。読めなければ None。"""
-    return _read_key(text, "status")
-
-
-def frontmatter_is_readable(text: str) -> bool:
-    """frontmatter を切り出せたかを返す。
-
-    切り出せない issue.md からは parent も children も読めない。「status が無い」とは
-    別に見る必要がある。前者はその Issue の宣言が丸ごと読めていないので辺の対称性を
-    判定できないが、後者は frontmatter 自体は読めているので判定できる。
-    """
-    return _frontmatter(text) is not None
+def read_status(lines: list[str] | None) -> str | None:
+    """frontmatter の status を返す。切り出せていないか status が無ければ None。"""
+    return None if lines is None else _read_key(lines, "status")
 
 
 def split_children(value: str) -> list[str]:
@@ -264,10 +289,37 @@ def split_children(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def read_links(text: str) -> tuple[str | None, list[str]]:
-    """frontmatter の parent と children を返す。どちらも無ければ (None, [])。"""
-    children = _read_key(text, "children")
-    return _read_key(text, "parent"), split_children(children) if children else []
+# 親子関係を張るキー。status は不変条件 B が使うだけで辺には関わらないので分けてある
+LINK_KEYS = ("parent", "children")
+
+
+def read_links(lines: list[str] | None) -> tuple[str | None, list[str]]:
+    """frontmatter の parent と children を返す。切り出せていなければ (None, [])。"""
+    if lines is None:
+        return None, []
+    children = _read_key(lines, "children")
+    return _read_key(lines, "parent"), split_children(children) if children else []
+
+
+def unreadable_link_keys(lines: list[str] | None) -> list[str]:
+    """キー行はあるのに値を読めなかった親子キーを返す。
+
+    「キーが無い」と「キーはあるが値の書式が違う」を区別するために要る。区別しないと、
+    標準的な YAML のブロックリスト形 (`children:` の下に `- ISSUE-2` を並べる形) が
+    「子が 0 件」と同じ観測値になる。子が `parent` を書いていなければ違反 0 件の静かな緑に、
+    書いていれば規約どおりのキー名で書いてある親が「children が欠けている」と違反を
+    名乗らされる (どちらも実測)。
+
+    見るのはキー行の有無だけで、値の書式は FRONTMATTER_READERS が canonical のまま。
+    接頭辞をキー名から導くのは、ここが 2 つ目の書式仕様へ育たないようにするため。
+    """
+    if lines is None:
+        return []
+    return [
+        key for key in LINK_KEYS
+        if _read_key(lines, key) is None
+        and any(line.startswith(key + ":") for line in lines)
+    ]
 
 
 def issue_number(value: str) -> int | None:
@@ -328,19 +380,21 @@ class CollectResult(NamedTuple):
     ならず件数が静かに入れ替わる。フィールド名を必須にする NamedTuple へ寄せることで
     取り違えを起こしにくくする。借用元 issue-id.py の Violation(NamedTuple) と同じ形。
 
-    完全には検査できなかった 4 種 (issue.md が無い / status が読めない / 安全に走査できない /
-    ディレクトリ名から番号が採れない) を件数ではなく注記のリストで持つのは、件数を別に持つと
-    注記と常に同値な冗長な状態になり、片方だけ更新する変更が入る余地ができるため。呼び出し側は
-    len() を使う。注記が rel_dir を持つのは、件数だけではどの Issue が壊れているのか出力から
-    特定できないため。
+    完全には検査できなかった 5 種 (issue.md が無い / status が読めない / 安全に走査できない /
+    ディレクトリ名から番号が採れない / 親子キーの値を読めない) を件数ではなく注記のリストで
+    持つのは、件数を別に持つと注記と常に同値な冗長な状態になり、片方だけ更新する変更が入る
+    余地ができるため。呼び出し側は len() を使う。注記が rel_dir を持つのは、件数だけでは
+    どの Issue が壊れているのか出力から特定できないため。
 
-    4 種のうち unnumbered_notes だけは「不変条件 A と B は走ったが親子リンクは解決できない」
-    という部分的な欠けで、他の 3 種とは意味が違う。同じリストへ混ぜると、要約行のどの件数も
-    実態より広い宣言になる。
+    5 種を分けるのは、止まる検査の範囲がそれぞれ違うため。全部止まるのは issue.md が無い
+    場合と読めない場合だけで、残りは部分的に止まる (フェンス閉じ忘れは不変条件 A だけを
+    止め、B と C は走る。番号が採れない場合は C だけを止める。親子キーの値を読めない場合は
+    C の辺の解決だけを止める)。同じリストへ混ぜると、要約行の件数が実態より広い宣言になる。
 
-    links も同じ理由で件数ではなく辺そのもので持つ。親の数は辺から導けるので別に持たない。
-    不変条件 C が見た母集団を検査と同じ 1 パスから出すためのフィールドで、別の grep で
-    数え直すと印字された数と検査された数が食い違いうる。
+    links と judged も同じ理由で件数ではなくデータで持つ。judged を links と別に持つのは、
+    辺があっても判定しない親がいるため (親が closed / 宣言を完全には把握できていない)。
+    どちらも不変条件 C が見た母集団と判定を検査と同じ 1 パスから出すためのフィールドで、
+    別の grep で数え直すと印字された数と検査された数が食い違いうる。
     """
 
     violations: list[str]
@@ -348,7 +402,9 @@ class CollectResult(NamedTuple):
     missing_notes: list[str]
     unreadable_notes: list[str]
     unnumbered_notes: list[str]
+    unreadable_links_notes: list[str]
     links: list[tuple[int, int]]
+    judged: list[int]
     active: int
     closed: int
 
@@ -391,8 +447,12 @@ def _resolve_links(
     declared: list[_Declared],
     placed: dict[int, tuple[str, bool]],
     unread: set[int],
-) -> tuple[list[str], list[tuple[int, int]]]:
-    """宣言された片側の辺から、違反と辺の母集団を返す。
+) -> tuple[list[str], list[tuple[int, int]], list[int]]:
+    """宣言された片側の辺から、違反と辺の母集団と、実際に判定した親を返す。
+
+    判定した親を別に返すのは、母集団と判定が同じ数だとは限らないため。親が closed だった
+    り、宣言を完全には把握できていなかったりすると、辺はあるのに判定しない。同じ数で
+    名乗ると「見たが違反が無かった」と「そもそも見ていない」が区別できなくなる。
 
     両面 (`parent` と `children`) から集めた辺の union を母集団にする。intersection に
     すると片側が欠けた辺が母集団から静かに落ち、「見落としが 1 本ある」が「そもそも辺が
@@ -411,15 +471,26 @@ def _resolve_links(
     violations: list[str] = []
     from_child: set[tuple[int, int]] = set()
     from_parent: set[tuple[int, int]] = set()
+    # `children` の要素を 1 つでも解決できなかった親。読めなかった親と同じ理由で判定へ
+    # 進まない。読めた分だけで「子は全て closed」と断定すると、解決できなかった参照が
+    # active な子の打ち間違いだったときに誤った指示を出す。しかも参照の違反と親の違反が
+    # 同じ出力に並ぶので、上から直す人ほど踏む
+    partial: set[int] = set()
     for rel_dir, key, value, number in declared:
         target = issue_number(value)
-        if target is None:
-            violations.append(f"{rel_dir}: {key} の値 {value} が識別子の形でない")
-            continue
-        if target not in placed:
-            violations.append(f"{rel_dir}: {key} が指す {value} が実在しない")
+        if target is None or target not in placed:
+            # 何を指すつもりだったのか分からない。active な子の打ち間違いでありうるので、
+            # この親の children はもう完全には把握できていない
+            reason = (f"{key} の値 {value} が識別子の形でない" if target is None
+                      else f"{key} が指す {value} が実在しない")
+            violations.append(f"{rel_dir}: {reason}")
+            if key == "children":
+                partial.add(number)
             continue
         if target == number:
+            # 自己参照は指す先が確定しているので、落としても children の把握は欠けない。
+            # partial へ入れず判定は続ける (入れると、この 1 行のせいで本物の子が全て
+            # closed でも不変条件 C が沈黙する)
             violations.append(f"{rel_dir}: {key} が自分自身を指している")
             continue
         if key == "parent":
@@ -427,7 +498,7 @@ def _resolve_links(
         else:
             from_parent.add((number, target))
     for parent, child in sorted(from_child ^ from_parent):
-        if unread & {parent, child}:
+        if parent in unread or child in unread:
             continue
         missing = "親側の children" if (parent, child) in from_child else "子側の parent"
         violations.append(
@@ -438,22 +509,24 @@ def _resolve_links(
     children_of: dict[int, list[int]] = {}
     for parent, child in links:
         children_of.setdefault(parent, []).append(child)
+    judged: list[int] = []
     for parent, children in sorted(children_of.items()):
         # 親が既に closed なら提案先が無い。Phase E が PARENT_PATH を -maxdepth 2 で引いて
         # closed の親を解決しないのと同じ向きで、既に closed の親へ close 提案を出さない
         if placed[parent][1]:
             continue
-        # 親の issue.md を読めていないと children の全体が分からない。子側から立った辺だけ
-        # の部分集合で「子は全て closed」と断定すると、読めなかった宣言に居る active な子を
-        # 見落とす。母集団からは外さず判定だけを止める (読めなさは注記が名乗る)
-        if parent in unread:
+        # 宣言を完全には把握できていない親は判定しない。子側から立った辺だけの部分集合で
+        # 「子は全て closed」と断定すると、把握できていない宣言に居る active な子を
+        # 見落とす。母集団からは外さず判定だけを止める (把握できなさは注記が名乗る)
+        if parent in unread or parent in partial:
             continue
+        judged.append(parent)
         if all(placed[child][1] for child in children):
             violations.append(
                 f"{placed[parent][0]}: 子 Issue が全て closed なのに active に居る "
                 f"(子 {len(children)} 件)。親伝播のクローズを同じ PR へ同梱する"
             )
-    return violations, links
+    return violations, links, judged
 
 
 def collect(root: Path) -> CollectResult:
@@ -481,8 +554,9 @@ def collect(root: Path) -> CollectResult:
 
     不変条件 C は辺の解決を _resolve_links へ分けてある。ディレクトリの登録 (placed) を
     issue.md を読む前に行うのは、issue.md が無いディレクトリを「実在しない」と誤報しない
-    ため。配置はファイルが読めなくてもパスから分かるので、読めなさは辺の対称性の検査だけを
-    止めて C の判定は止めない。
+    ため。配置はファイルが読めなくてもパスから分かるので、読めなかった Issue も母集団には
+    残す。止めるのは判定の側で、その Issue が絡む辺の対称性と、その Issue が親であるときの
+    C の判定の 2 つ (子であるときは配置だけで判定できるので止めない)。
 
     ディレクトリ名から番号が採れない場合は unnumbered_notes へ寄せ、走査できなかった件数へは
     混ぜない。その Issue は不変条件 A と B の走査を通っており、解決できないのは親子リンクだけ
@@ -497,12 +571,17 @@ def collect(root: Path) -> CollectResult:
     missing_notes: list[str] = []
     unreadable_notes: list[str] = []
     unnumbered_notes: list[str] = []
+    unreadable_links_notes: list[str] = []
     placed: dict[int, tuple[str, bool]] = {}
     declared: list[_Declared] = []
     unread: set[int] = set()
     active = closed = 0
     for rel_dir, name in dirs:
-        is_closed = CLOSED_SEGMENT in Path(rel_dir).parts
+        # closed/ の名前も借用先から採る。写しを持つと、借用先が rename したときに
+        # issue_dirs が返すディレクトリと探す名前がずれ、全 Issue が active 扱いになる。
+        # 不変条件 B は全 closed Issue に対して赤く鳴るので気づけるが、不変条件 C の親判定
+        # だけは「子が全て closed」が成立しなくなって静かに消える
+        is_closed = n.CLOSED in Path(rel_dir).parts
         if is_closed:
             closed += 1
         else:
@@ -531,8 +610,23 @@ def collect(root: Path) -> CollectResult:
             if number is not None:
                 unread.add(number)
             continue
+        # frontmatter の切り出しは 1 回だけ行い、status と親子リンクの両方で使い回す
+        front = frontmatter(text)
         if number is not None:
-            parent_value, children_values = read_links(text)
+            # 宣言を完全には把握できていない Issue は辺の対称性の検査から外す。欠けている
+            # のか読めていないだけなのかを区別できないので、外さないと「読めなかった」が
+            # 「規約違反」を名乗る。frontmatter ごと切り出せない形と、キー行はあるのに値を
+            # 読めない形の両方が同じ扱いになる
+            unreadable = unreadable_link_keys(front)
+            if front is None:
+                unread.add(number)
+            elif unreadable:
+                unread.add(number)
+                unreadable_links_notes.append(
+                    f"{rel_dir}: {' と '.join(unreadable)} の値を読めなかったので"
+                    "親子リンクを解決できなかった"
+                )
+            parent_value, children_values = read_links(front)
             if parent_value is not None:
                 declared.append(_Declared(rel_dir, "parent", parent_value, number))
             for value in children_values:
@@ -541,12 +635,7 @@ def collect(root: Path) -> CollectResult:
         # フェンスの状態に関わらず frontmatter は先頭にあるので、フェンス走査より前に
         # status を見る。closed 側もここで検査するので、後続の "is_closed: continue" より
         # 前に置く
-        if number is not None and not frontmatter_is_readable(text):
-            # frontmatter を切り出せない issue.md からは parent も children も読めない。
-            # 宣言が欠けているのか読めていないだけなのかを区別できないので、辺の対称性の
-            # 検査からは外す。外さないと「読めなかった」が「規約違反」を名乗る
-            unread.add(number)
-        status = read_status(text)
+        status = read_status(front)
         if status is None:
             unreadable_notes.append(f"{rel_dir}: frontmatter の status が読めなかった")
         elif is_closed and status != "closed":
@@ -579,14 +668,16 @@ def collect(root: Path) -> CollectResult:
                 f"{rel_dir}: タスクが全て消化済みなのに active に居る "
                 f"(箱 {total} 個 / 未チェック 0)。クローズを同じ PR へ同梱する"
             )
-    link_violations, links = _resolve_links(declared, placed, unread)
+    link_violations, links, judged = _resolve_links(declared, placed, unread)
     return CollectResult(
         violations=violations + link_violations,
         unscanned_notes=unscanned_notes,
         missing_notes=missing_notes,
         unreadable_notes=unreadable_notes,
         unnumbered_notes=unnumbered_notes,
+        unreadable_links_notes=unreadable_links_notes,
         links=links,
+        judged=judged,
         active=active,
         closed=closed,
     )
@@ -594,7 +685,12 @@ def collect(root: Path) -> CollectResult:
 
 def build_parser() -> argparse.ArgumentParser:
     # 短縮形が別モードへ静かに落ちるのを防ぐ (既存 3 本と同じ理由)
-    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    # docstring 全文ではなく 1 行目だけを渡す。全文は設計判断と限界の記録で 40 行を超え、
+    # argparse の既定フォーマッタが箇条書きを 1 段落へ潰して `**` を生のまま吐く (実測:
+    # --help が 32 行)。隣接 3 本はいずれも 1 行を渡している。literal を書かず 1 行目を
+    # 採るのは、書くと docstring の 1 行目と二重管理になるため
+    parser = argparse.ArgumentParser(
+        description=__doc__.splitlines()[0], allow_abbrev=False)
     parser.add_argument("--root", default=None, help="リポジトリのルート (既定: git が返す)")
     return parser
 
@@ -610,14 +706,14 @@ def main(argv: list[str] | None = None) -> int:
     for line in result.violations:
         print(f"  [x] {line}", file=sys.stderr)
     # 検査できなかった注記は違反と別記号にする。同じ [x] で並べると rc に効かない件数まで
-    # 「違反」に見え、読み手が rc 0 の理由を誤解する。4 種を同じ [-] で並べるのは、どれも
+    # 「違反」に見え、読み手が rc 0 の理由を誤解する。5 種を同じ [-] で並べるのは、どれも
     # 「この Issue はどこかを検査できていない」という同じ意味を持つため。何が検査できて
     # いないかは注記の本文が名乗る
     for line in (*result.missing_notes, *result.unreadable_notes, *result.unscanned_notes,
-                 *result.unnumbered_notes):
+                 *result.unnumbered_notes, *result.unreadable_links_notes):
         print(f"  [-] {line}", file=sys.stderr)
     # active / closed が母集団で、括弧の中はその部分集合。「うち」で括るのは、並べて書くと
-    # 互いに排他な状態が 6 つあるように読めるため。括弧の中の項目どうしも排他ではない
+    # 互いに排他な状態が 7 つあるように読めるため。括弧の中の項目どうしも排他ではない
     # (閉じ忘れフェンスを持つ issue.md は status も読めないことがあり、番号が採れないことは
     # 内容の読めなさと独立に起きる)。issue.md が無い側だけは continue でそこから先へ進まない
     # ので、内容に由来する 2 つとは排他になる
@@ -626,7 +722,8 @@ def main(argv: list[str] | None = None) -> int:
         f" (うち issue.md が無い {len(result.missing_notes)} 個"
         f" / status が読めない {len(result.unreadable_notes)} 個"
         f" / 走査できなかった {len(result.unscanned_notes)} 個"
-        f" / 番号が採れない {len(result.unnumbered_notes)} 個)"
+        f" / 番号が採れない {len(result.unnumbered_notes)} 個"
+        f" / 値を読めない {len(result.unreadable_links_notes)} 個)"
         f"。違反 {len(result.violations)} 件"
     )
     # 不変条件 C が見た母集団を別行で名乗る。0 組のときだけ「何も見ていない」と言うのは、
@@ -638,8 +735,9 @@ def main(argv: list[str] | None = None) -> int:
     # 出しうるため (参照が実在しない / 識別子の形でない / 自分自身を指す)。C 全体が何も
     # 見ていないと名乗ると、その違反が同じ出力に並んだまま宣言が実態より広くなる
     parents = len({parent for parent, _ in result.links})
-    vacuous = "" if result.links else " (不変条件 C の親判定はこの実行で何も見ていない)"
-    print(f"親子リンク: {len(result.links)} 組 / 親 {parents} 個{vacuous}")
+    vacuous = "" if result.judged else " (不変条件 C の親判定はこの実行で何も見ていない)"
+    print(f"親子リンク: {len(result.links)} 組 / 親 {parents} 個"
+          f" / 判定した親 {len(result.judged)} 個{vacuous}")
     return 1 if result.violations else 0
 
 

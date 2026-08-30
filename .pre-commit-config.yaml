@@ -124,9 +124,9 @@ repos:
         pass_filenames: false
         always_run: true
 
-      # 上の 2 本が 1 ファイル内の記法と参照を見るのに対し、これは Issue の状態と
-      # Issue どうしの関係を見る。何をどこまで見るかの canonical はスクリプトの docstring で、
-      # ここでは列挙しない (不変条件が増えるたびに drift するため)。
+      # 上の 2 本が本文の記法と参照の実在を見るのに対し、これは Issue の状態と、
+      # frontmatter が張る親子関係の整合を見る。何をどこまで見るかの canonical は
+      # スクリプトの docstring で、ここでは列挙しない (不変条件が増えるたびに drift する)。
       # 母集団は issue-id.py の issue_dirs を借りるので pass_filenames は取らない。
       - id: issue-closure
         name: in-repo Issue の不変条件を検査する
