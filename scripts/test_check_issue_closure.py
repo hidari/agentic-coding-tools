@@ -315,7 +315,7 @@ class InvariantC(FixtureCase):
         rc, out, err = self._run(lambda fx: fx.add_issue(
             "ISSUE-1_probe", issue_md("open", ["- [ ] 未"])))
         self.assertEqual(rc, 0, err)
-        self.assertIn("親子リンク: 0 組 / 親 0 個 (不変条件 C はこの実行で何も見ていない)", out)
+        self.assertIn("親子リンク: 0 組 / 親 0 個 (不変条件 C の親判定はこの実行で何も見ていない)", out)
 
     def test_a_link_declared_only_by_the_parent_is_a_violation(self):
         """親だけが `children` を書き、子が `parent` を書いていない形。
@@ -410,6 +410,81 @@ class InvariantC(FixtureCase):
         self.assertIn("子 Issue が全て closed なのに active に居る (子 1 件)", err)
         self.assertNotIn("実在しない", err)
         self.assertIn("親子リンク: 1 組 / 親 1 個", out)
+        self.assertIn("違反 1 件", out)
+
+    def test_a_self_referencing_link_is_a_violation(self):
+        """自分自身を親 / 子として宣言した形を辺にしないこと。
+
+        辺にすると親が自分自身の子になる。親は active なので「子が全て closed」が必ず偽に
+        なり、同じ親が持つ本物の子が全て closed でも不変条件 C が沈黙する。しかも自己参照を
+        両側へ書くと対称性の検査も通るので、rc 0 で注記も出ない完全な無音になる。
+
+        片側だけ自己参照を書いた状態は「片側にしか無い」で赤くなるので、その指摘どおりに
+        もう片側を足すと無音へ遷移する。検査自身の修正指示が検査を殺す形になっていた。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_親", issue_md(
+                "open", ["- [ ] 未"],
+                frontmatter=("parent: ISSUE-1", "children: [ISSUE-1, ISSUE-2]")))
+            fx.add_issue("closed/ISSUE-2_子", issue_md(
+                "closed", ["- [x] 済み"], frontmatter=("parent: ISSUE-1",)))
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 1)
+        self.assertIn("parent が自分自身を指している", err)
+        self.assertIn("children が自分自身を指している", err)
+        # 自己参照を落とした結果、本物の辺だけが残って不変条件 C が本来の判定に戻る
+        self.assertIn("子 Issue が全て closed なのに active に居る (子 1 件)", err)
+        self.assertIn("親子リンク: 1 組 / 親 1 個", out)
+
+    def test_an_unparsable_frontmatter_does_not_fake_a_one_sided_link(self):
+        """frontmatter を切り出せない Issue が絡む辺を片側欠けとして報告しないこと。
+
+        閉じ `---` が無い issue.md からは parent も children も読めない。読めないことを
+        「規約違反」として報告すると、読めなさの扱いが経路で非対称になる (同じ読めなさでも
+        ファイルが開けない側は注記で済む)。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_親", issue_md(
+                "open", ["- [ ] 未"], frontmatter=("children: [ISSUE-2]",)))
+            fx.add_issue("ISSUE-2_子",
+                         "---\n\n# probe\n\nstatus: open\n\n## タスク\n\n- [ ] 未\n")
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn("片側にしか無い", err)
+        self.assertIn("親子リンク: 1 組 / 親 1 個", out)
+        self.assertIn("status が読めない 1 個", out)
+
+    def test_an_unreadable_parent_is_not_judged(self):
+        """親の issue.md が読めないときは不変条件 C の判定へ進まないこと。
+
+        読めない親の `children` は読めていないので、子側から立った辺だけが残る。その部分
+        集合で「子は全て closed」と断定すると、読めなかった宣言に居る active な子を見落とす。
+        母集団からは外さず、判定だけを止める。
+        """
+        def build(fx):
+            fx.add_issue_encoded("ISSUE-1_親", issue_md(
+                "open", ["- [ ] 未 日本語"], frontmatter=("children: [ISSUE-2]",)), "cp932")
+            fx.add_issue("closed/ISSUE-2_子", issue_md(
+                "closed", ["- [x] 済み"], frontmatter=("parent: ISSUE-1",)))
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn("子 Issue が全て closed", err)
+        self.assertIn("親子リンク: 1 組 / 親 1 個", out)
+        self.assertIn("走査できなかった 1 個", out)
+
+    def test_the_empty_population_notice_names_only_the_parent_judgement(self):
+        """辺が 0 組でも不変条件 C が違反を出す実行があること、その名乗りが過大でないこと。
+
+        参照が実在しないと辺は立たないが、その報告自体は不変条件 C が出している。ここで
+        「不変条件 C はこの実行で何も見ていない」と名乗ると、出力の中に反例が並んだまま
+        宣言が実態より広くなる。名乗るのは親判定だけに限る。
+        """
+        rc, out, err = self._run(lambda fx: fx.add_issue(
+            "ISSUE-1_親", issue_md("open", ["- [ ] 未"],
+                                  frontmatter=("children: [ISSUE-9]",))))
+        self.assertEqual(rc, 1)
+        self.assertIn("children が指す ISSUE-9 が実在しない", err)
+        self.assertIn("親子リンク: 0 組 / 親 0 個 (不変条件 C の親判定はこの実行で何も見ていない)", out)
 
     def test_a_directory_without_a_number_is_counted_separately(self):
         """番号が採れないディレクトリを「走査できなかった」に混ぜないこと。
@@ -428,6 +503,43 @@ class InvariantC(FixtureCase):
         self.assertIn("status が closed なのに active に居る", err)
         self.assertIn("走査できなかった 0 個", out)
         self.assertIn("番号が採れない 1 個", out)
+
+    def test_a_child_without_an_issue_md_is_placed_but_not_judged(self):
+        """issue.md が無いディレクトリを索引へ載せ、辺の対称性からは外すこと。
+
+        載せないと、実在する Issue への参照が「実在しない」と誤報される。外さないと、
+        読めていないだけの `parent` が「欠けている」と誤報される。索引への登録が
+        issue.md を読む前に行われていることを、この 2 つの誤報の不在が見ている。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_親", issue_md(
+                "open", ["- [ ] 未"], frontmatter=("children: [ISSUE-2]",)))
+            (fx.root / "docs" / "issues" / "ISSUE-2_子").mkdir(parents=True)
+            (fx.root / "docs" / "issues" / "ISSUE-2_子" / "README.md").write_text(
+                "probe\n", encoding="utf-8")
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn("実在しない", err)
+        self.assertNotIn("片側にしか無い", err)
+        self.assertIn("親子リンク: 1 組 / 親 1 個", out)
+        self.assertIn("issue.md が無い 1 個", out)
+
+    def test_a_legacy_directory_without_the_prefix_still_resolves(self):
+        """接頭辞を持たない旧形式のディレクトリも索引へ載ること。
+
+        借用先の ANY_ISSUE_DIR が接頭辞を任意にしているのは移行中のリポジトリのため。
+        こちらだけ厳格にすると、旧形式のディレクトリが親子リンクの母集団から静かに落ちる。
+        """
+        def build(fx):
+            fx.add_issue("ISSUE-1_親", issue_md(
+                "open", ["- [ ] 未"], frontmatter=("children: [ISSUE-2]",)))
+            fx.add_issue("closed/2_子", issue_md(
+                "closed", ["- [x] 済み"], frontmatter=("parent: ISSUE-1",)))
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 1)
+        self.assertNotIn("実在しない", err)
+        self.assertIn("子 Issue が全て closed なのに active に居る (子 1 件)", err)
+        self.assertIn("親子リンク: 1 組 / 親 1 個", out)
 
     def test_prefer_active_does_not_depend_on_the_order_of_appearance(self):
         """倒し方の判定を両順序で直に叩く。
@@ -797,18 +909,29 @@ def _fence_content(lines: list[str]) -> list[bool]:
 
 
 def _section_body(path: Path, prefix: str) -> list[str]:
+    """ファイルから節の本文行を切り出す。中身は _section_body_from_lines が持つ。"""
+    return _section_body_from_lines(path.read_text(encoding="utf-8").splitlines(), prefix,
+                                    label=str(path))
+
+
+def _section_body_from_lines(lines: list[str], prefix: str, label: str = "入力") -> list[str]:
     """見出しが prefix で始まる節の本文行を、フェンスの中身も落とさずそのまま返す。
 
     _prose_lines と違ってフェンスの中身を残すのは、スキーマ節の pin が読みたいのが
     まさに yaml フェンスの中身だから。ただし見出しの判定にはフェンス状態を使う。
-    使わないと SKILL.md の「検索手順」節にある bash スニペットの `# 全 open Issue ...`
-    のようなコメント行を見出しとして数え、節の終端がそこへ前倒しになる (実測: この
-    SKILL.md には該当する行が 4 本ある)。
+    使わないと bash スニペットの `# 全 open Issue ...` のようなコメント行を見出しとして
+    数え、節の終端がそこへ前倒しになる。
+
+    このガードは現在の SKILL.md では発火しない (実測: 外しても全テストが緑のまま)。
+    該当する形のコメント行は「検索手順」節に 4 本あるが、切り出している 3 節はどれも
+    それより手前で次の見出しに当たって終端するため、スキャンがそこへ届かない。つまり
+    今は防御であって、壊れている実例に対する手当てではない。それでも持つのは、節が
+    増えたときに静かに切り詰められる形だから。到達しない分岐を pin だけで守ると dead に
+    なるので、ヘルパ自身の入力域 (任意の Markdown) を直に渡すテストで押さえる。
 
     見つからないときは黙って空へ倒さず落とす。抽出 0 件を「一致した」とみなすと、
     節名を変えるだけで pin が空虚な緑になる。
     """
-    lines = path.read_text(encoding="utf-8").splitlines()
     inside = _fence_content(lines)
     start: int | None = None
     level = 0
@@ -826,13 +949,87 @@ def _section_body(path: Path, prefix: str) -> list[str]:
         if depth <= level:
             return lines[start:i]
     if start is None:
-        raise AssertionError(f"{path} に「{prefix}」で始まる見出しが無い")
+        raise AssertionError(f"{label} に「{prefix}」で始まる見出しが無い")
     return lines[start:]
 
 
 SCHEMA_SECTION = "frontmatter スキーマ"
 BUNDLED_SECTION = "クローズ経路: feature PR 同梱を優先"
 PHASE_D_SECTION = "Phase D:"
+
+
+class SectionExtraction(unittest.TestCase):
+    """節の切り出し自身の pin。
+
+    切り出しが壊れると ParityWithTheSchema も BundledCloseNamesThePropagationStep も
+    「節が空」ではなく「別の範囲を見た」結果で判定するので、赤くならずに誤った緑を返す
+    余地がある。ここだけが切り出しの意味論を見ている。
+    """
+
+    def test_a_fenced_comment_is_not_treated_as_a_heading(self):
+        """フェンスの中の `#` 行で節が終端しないこと。
+
+        現在の SKILL.md はこの形を持たない (_section_body_from_lines の docstring 参照)
+        ので、ヘルパの入力域へ直に渡して押さえる。
+        """
+        lines = [
+            "## 対象",
+            "本文 1",
+            "```bash",
+            "# これはコメントであって見出しではない",
+            "grep -c x file",
+            "```",
+            "本文 2",
+            "## 次の節",
+            "ここは入らない",
+        ]
+        body = _section_body_from_lines(lines, "対象")
+        self.assertIn("本文 2", body)
+        self.assertNotIn("ここは入らない", body)
+
+    def test_a_longer_fence_is_not_closed_by_a_shorter_one(self):
+        """4 連で開いたフェンスが内側の 3 連で閉じないこと。
+
+        単純トグルにすると 3 連の行で閉じたと誤判定し、そこから後ろがフェンス外に見える。
+        プロダクトコードの状態機械が持つのと同じ意味論をここでも持たせている。
+        """
+        lines = [
+            "## 対象",
+            "````markdown",
+            "```",
+            "# 内側のコメント",
+            "```",
+            "````",
+            "本文",
+            "## 次の節",
+            "ここは入らない",
+        ]
+        body = _section_body_from_lines(lines, "対象")
+        self.assertIn("本文", body)
+        self.assertNotIn("ここは入らない", body)
+
+    def test_a_missing_section_is_an_error_not_an_empty_body(self):
+        with self.assertRaises(AssertionError):
+            _section_body_from_lines(["## 別の節", "本文"], "存在しない節")
+
+    def test_the_fence_state_machine_agrees_with_the_production_one(self):
+        """_fence_content とプロダクトコードの状態機械が実データで一致すること。
+
+        _fence_content は借用先の FENCE_LINE を使うが開閉の判定は書き直しなので、
+        _strip_fences_and_comments と合わせて 2 つ目の写しになる。片方だけ直したときに
+        ずれることを、実際の SKILL.md で突き合わせて見る。
+
+        プロダクト側は HTML コメントも落とすので、突き合わせるのは「フェンスの中身と
+        判定した行がプロダクト側に残っていないこと」に限る。両辺の非空虚性を先に見るのは、
+        どちらかが空になると比較が無条件に通るため。
+        """
+        text = SKILL_MD.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        inside = {line.strip() for line, f in zip(lines, _fence_content(lines)) if f and line.strip()}
+        kept = {line.strip() for line in checker._strip_fences_and_comments(text)[0] if line.strip()}
+        self.assertTrue(inside, "フェンスの中身が 1 行も無い")
+        self.assertTrue(kept, "プロダクト側が 1 行も残していない")
+        self.assertEqual(inside & kept, set())
 
 
 class ParityWithTheSchema(unittest.TestCase):

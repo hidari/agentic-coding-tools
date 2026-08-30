@@ -16,6 +16,16 @@ post-merge クローズを既定とするリポジトリとは両立しない。
 恒久的な赤になる)。忘れたら赤くなることを取り、拒否の自由を手放す判断で、不変条件 A が
 既にしている取引と同型。配布できない理由は A だけでなく C も持つ。
 
+C が潰す運用は E.4 の拒否だけではない。同じ取引で次の 2 つも潰れる。
+
+- 同梱節が示す「親の close を別 PR で行う」経路。子を閉じた PR がその時点で赤くなるので、
+  このリポジトリでは分けられない。skill 側の記述は配布先の一般則として正しく、C を持つ
+  このリポジトリだけが選べない。祖先チェーンがあると同じ強制が世代を遡って効くので、
+  1 コミットで全世代を閉じることになる (E.3 の「世代ごとに提案して聞く」は残らない)
+- A.5 の分割を複数コミットへ割る形。子を起票して `parent:` を書き、親の `children:` を
+  まだ書いていない状態は「親子リンクが片側にしか無い」で赤くなる。A.5 は分割を 1 コミット
+  にする形を既に規定しているので通常は当たらない
+
 記法と母集団の canonical は借用先が持つ。ここでは写さない。
 
 不変条件 C の限界:
@@ -28,6 +38,14 @@ post-merge クローズを既定とするリポジトリとは両立しない。
   ここへ足すと ISSUE-38 の canonical が 2 つになるので、この検査は持たない
 - 結果の状態しか見ない。D.5 (Phase E を起動する手順) を実行し忘れたこと自体は検出せず、
   親子 Issue が実在して子が全て closed になって初めて赤くなる
+- 逆向きの不整合 (親が closed なのに子が active) は見ない。見るようにすると不変条件 A と
+  正面衝突する。A は親の箱が全て `[x]` になった時点で「子が active でも親を閉じろ」と要求
+  するので、閉じた結果を C が違反にすると、どちらの状態も取れないコミット不能になる。
+  この衝突の調停は ISSUE-45 の射程で、そこが決まるまでこの向きは持たない
+- 参照先のディレクトリ名が識別子の形でないと、その Issue は索引に載らないので参照は
+  「実在しない」と報告される。実在はするので文言は正確ではないが、ディレクトリ名の形式は
+  issue-id.py --check が違反として報告し、番号を採れなかったことはこの検査も注記で名乗る
+  ので、出力からは追える
 """
 from __future__ import annotations
 
@@ -227,6 +245,16 @@ def read_status(text: str) -> str | None:
     return _read_key(text, "status")
 
 
+def frontmatter_is_readable(text: str) -> bool:
+    """frontmatter を切り出せたかを返す。
+
+    切り出せない issue.md からは parent も children も読めない。「status が無い」とは
+    別に見る必要がある。前者はその Issue の宣言が丸ごと読めていないので辺の対称性を
+    判定できないが、後者は frontmatter 自体は読めているので判定できる。
+    """
+    return _frontmatter(text) is not None
+
+
 def split_children(value: str) -> list[str]:
     """`children:` の値 (角括弧の中身) を識別子のリストへ割る。
 
@@ -373,6 +401,12 @@ def _resolve_links(
     読めなかった Issue が絡む辺を対称性の検査から外すのは、その Issue の `parent` を
     読めていないだけで欠けているとは限らないため。報告すると「読めなかった」が
     「規約違反」を名乗る。母集団からは外さない (親側の宣言は実在するので数える)。
+
+    自己参照は辺にせず違反として報告する。辺にすると親が自分自身の子になり、親は active
+    なので「子が全て closed」が必ず偽になって、同じ親が持つ本物の子が全て closed でも
+    不変条件 C が沈黙する。しかも両側へ書くと対称性の検査も通るので rc 0 で注記も出ない
+    (実測)。片側だけ書いた状態は「片側にしか無い」で赤くなるため、その指摘どおりに
+    もう片側を足すと無音へ遷移する。検査自身の修正指示が検査を殺す形になっていた。
     """
     violations: list[str] = []
     from_child: set[tuple[int, int]] = set()
@@ -384,6 +418,9 @@ def _resolve_links(
             continue
         if target not in placed:
             violations.append(f"{rel_dir}: {key} が指す {value} が実在しない")
+            continue
+        if target == number:
+            violations.append(f"{rel_dir}: {key} が自分自身を指している")
             continue
         if key == "parent":
             from_child.add((target, number))
@@ -405,6 +442,11 @@ def _resolve_links(
         # 親が既に closed なら提案先が無い。Phase E が PARENT_PATH を -maxdepth 2 で引いて
         # closed の親を解決しないのと同じ向きで、既に closed の親へ close 提案を出さない
         if placed[parent][1]:
+            continue
+        # 親の issue.md を読めていないと children の全体が分からない。子側から立った辺だけ
+        # の部分集合で「子は全て closed」と断定すると、読めなかった宣言に居る active な子を
+        # 見落とす。母集団からは外さず判定だけを止める (読めなさは注記が名乗る)
+        if parent in unread:
             continue
         if all(placed[child][1] for child in children):
             violations.append(
@@ -499,6 +541,11 @@ def collect(root: Path) -> CollectResult:
         # フェンスの状態に関わらず frontmatter は先頭にあるので、フェンス走査より前に
         # status を見る。closed 側もここで検査するので、後続の "is_closed: continue" より
         # 前に置く
+        if number is not None and not frontmatter_is_readable(text):
+            # frontmatter を切り出せない issue.md からは parent も children も読めない。
+            # 宣言が欠けているのか読めていないだけなのかを区別できないので、辺の対称性の
+            # 検査からは外す。外さないと「読めなかった」が「規約違反」を名乗る
+            unread.add(number)
         status = read_status(text)
         if status is None:
             unreadable_notes.append(f"{rel_dir}: frontmatter の status が読めなかった")
@@ -585,9 +632,13 @@ def main(argv: list[str] | None = None) -> int:
     # 不変条件 C が見た母集団を別行で名乗る。0 組のときだけ「何も見ていない」と言うのは、
     # このリポジトリには親子 Issue が 1 件も無く C が空虚に緑を返すため。名乗りが無いと
     # その緑を「規約が守られていた証拠」として引用できてしまう。件数は検査と同じ 1 パス
-    # から出しているので、印字された 0 と検査された 0 は食い違えない
+    # から出しているので、印字された 0 と検査された 0 は食い違えない。
+    #
+    # 「C 全体」ではなく「C の親判定」と名乗るのは、辺が 1 本も立たない実行でも C は違反を
+    # 出しうるため (参照が実在しない / 識別子の形でない / 自分自身を指す)。C 全体が何も
+    # 見ていないと名乗ると、その違反が同じ出力に並んだまま宣言が実態より広くなる
     parents = len({parent for parent, _ in result.links})
-    vacuous = "" if result.links else " (不変条件 C はこの実行で何も見ていない)"
+    vacuous = "" if result.links else " (不変条件 C の親判定はこの実行で何も見ていない)"
     print(f"親子リンク: {len(result.links)} 組 / 親 {parents} 個{vacuous}")
     return 1 if result.violations else 0
 
