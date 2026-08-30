@@ -207,8 +207,8 @@ Phase C/D は既定で post-merge に main へ直接 commit して close する�
 - feature ブランチ内で Phase D.1〜D.4 と同じ操作 (issue.md を `status: closed` 化 + `git mv` で `closed/` へ移動 + 相対リンクの補正 + 新パスの明示 stage) をコミットに含める (理由は D.4 参照)。 コミット文言は feature PR 自身のコミットメッセージに委ねる (D 形式の `(PR #<M>)` は同梱時には使わない。 この時点では PR 番号が未確定なため)。
 - PR 本文の `Closes` 行のリンク先も移動後の位置になる。 同梱ではこの PR 自身が issue.md を `closed/` 配下へ入れるので、 D.3 の「外部 → 移動対象」と同じ形で `closed/` が 1 段挟まる。 D.3 の grep は `docs/` しか見ないので、 PR 本文はここで書き分けるしかない。
 - PR マージで issue が closed のまま main に入る。 post-merge の別コミット/push は不要で、 CI 追加 run も出ない (別 docs PR だと ci が PR+マージで 2 run 走りコスト増)。 これは PR を作る前に同梱した場合の話で、 既にある PR へ後から同梱する場合は push が必須チェックを再走させるぶん run が増える。
-- マージ後に Phase C が走っても、 対象が `closed/` 配下にあるため C.3 の既存分岐で「既に closed」→ no-op になり破綻しない。
-- 親 Issue の Phase E 伝播 close も、 親を閉じる PR に同梱するか、 直 push が許されない環境では別 PR で行う。
+- マージ後に Phase C が走っても、 対象が `closed/` 配下にあるため C.3 の既存分岐で「既に closed」→ no-op になり破綻しない。 その代わり Phase D へ進まないので、 D.5 もマージ後には通らない。
+- **D.5 は同梱の側で実行する。** コミットへ含めるのは上の D.1〜D.4 の操作だけだが、 D.5 はコミットへ入る変更ではなく次の Phase を起動する辺で、 上の理由でどの経路からも通らなくなる。 同梱でクローズした Issue ごとに D.5 を実行し、 Phase E が親の close を提案したときは、 その close も親を閉じる PR に同梱するか、 直 push が許されない環境では別 PR で行う。
 
 プロジェクトが main 直 push を許すなら従来どおり post-merge 直 push (Phase C→D) でよい。
 

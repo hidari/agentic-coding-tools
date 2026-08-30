@@ -127,7 +127,7 @@ repos:
       # 上の 2 本が記法と参照を見るのに対し、これはライフサイクルの状態を見る。
       # 母集団は issue-id.py の issue_dirs を借りるので pass_filenames は取らない。
       - id: issue-closure
-        name: 閉じ忘れと配置と status の整合を検査する
+        name: in-repo Issue の不変条件を検査する
         language: system
         entry: scripts/check-issue-closure.py
         pass_filenames: false
