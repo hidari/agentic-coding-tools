@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import os
 import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
@@ -58,6 +60,18 @@ class Probe(unittest.TestCase):
 
     def test_b(self):
         self._mark()
+'''
+
+
+# 子プロセスが GIT_* を継承していないことを、子の側から観測する fixture
+GIT_ENV_TESTS = '''\
+import os
+import unittest
+
+
+class Probe(unittest.TestCase):
+    def test_no_git_variables_are_inherited(self):
+        self.assertEqual([], [k for k in os.environ if k.startswith("GIT_")])
 '''
 
 
@@ -317,6 +331,32 @@ class Attachment(unittest.TestCase):
 
     def test_ci_invokes_the_runner(self):
         self.assert_invoked(ROOT / ".github" / "workflows" / "ci.yml")
+
+
+class ChildEnvironment(unittest.TestCase):
+    """テストの子プロセスが呼び出し元の git 環境を継承しないことを固定する。
+
+    なぜ 2 層あるかは `run-python-tests.py` の `child_env` の docstring が持つ。
+    """
+
+    def test_git_variables_do_not_reach_the_child(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            test_file = write_fixture_tree(root, GIT_ENV_TESTS)
+            # 2 種類以上を注入する。1 種類だと、フィルタを接頭辞から特定の変数名へ
+            # 狭める変異を区別できない。子の側は接頭辞で広く見ているが、検出力は
+            # 注入側の狭さに引きずられる
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "GIT_INDEX_FILE": str(root / "decoy-index"),
+                    "GIT_DIR": str(root / "decoy-git-dir"),
+                },
+            ):
+                ok, ids, summary = runner.run_one(test_file)
+        # 実行 ID まで見る。子が起動に失敗しても「違反なし」の形で緑に見える
+        self.assertTrue(ok, summary)
+        self.assertEqual(["test_probe.Probe.test_no_git_variables_are_inherited"], ids)
 
 
 if __name__ == "__main__":

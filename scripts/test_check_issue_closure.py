@@ -21,6 +21,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 CHECKER = "scripts/check-issue-closure.py"
@@ -48,6 +49,31 @@ GIT_ENV = {
 }
 
 
+# `GIT_ENV` は `env=` を渡した subprocess にしか届かない。production をプロセス内で呼ぶ
+# 経路では、その先の git が `os.environ` を読む。hook の環境には `GIT_INDEX_FILE` を
+# 含む複数の `GIT_*` が入り、形も絶対と相対が混ざる (実測: 素の `commit` は相対、
+# `commit -a` と `commit -- <paths>` は絶対)。相対形が今無害なのは production の git
+# 呼び出しが `git -C <root>` だからで、構造に依存した無害さでしかない。
+#
+# このファイルには読み取り側の経路が今無い (借用する `issue_dirs` はファイルシステムを
+# 走査する)。免疫は構造から来ているだけなので、借用先が index を読む形へ変わったときに
+# 素通りしないよう予防で置く。どちらの側にどの対照を置けるかは `EnvironmentIsolation` が持つ。
+#
+# module scope に置くのは、呼び出しごとの `with` が「書いた場所」しか覆わないため。
+# プロセス内呼び出しは将来も増えるが、増やした人が隔離を書き忘れても症状は汚染下でしか
+# 出ないので、書き忘れに気づく経路が無い。`setUpModule` は unittest がこのモジュールの
+# テストを 1 件でも走らせる前に必ず呼ぶので、クラス構成にも呼び方にも依存しない。
+_GIT_ENV_PATCH = mock.patch.dict(os.environ, GIT_ENV, clear=True)
+
+
+def setUpModule() -> None:
+    _GIT_ENV_PATCH.start()
+
+
+def tearDownModule() -> None:
+    _GIT_ENV_PATCH.stop()
+
+
 def load():
     """ハイフン名のスクリプトは import 文では読めないため importlib で読む。"""
     path = ROOT / CHECKER
@@ -63,6 +89,11 @@ checker = load()
 def issue_md(status: str, tasks: list[str], heading: str = "## タスク") -> str:
     body = "\n".join(tasks)
     return f"---\nstatus: {status}\n---\n\n# probe\n\n{heading}\n\n{body}\n"
+
+
+def git_vars(env) -> dict[str, str]:
+    """環境の GIT_* だけを取り出す。プロセスの環境と GIT_ENV を同じ規約で比べるため。"""
+    return {k: v for k, v in env.items() if k.startswith("GIT_")}
 
 
 class Fixture:
@@ -733,6 +764,53 @@ class SectionReferences(unittest.TestCase):
                     any(heading.startswith(section) for heading in headings),
                     f"{source} が名指しする「{section}」で始まる見出しが {target} に無い",
                 )
+
+
+class EnvironmentIsolation(unittest.TestCase):
+    """プロセスの git 環境が隔離されていることを固定する。
+
+    読み取り側は対照を置けない。このファイルの検査対象は今のところ index を読まない
+    (借用している `issue_dirs` はファイルシステムを走査する) ので、隔離が外れても挙動に
+    出ない。免疫は構造から来ているだけで、借用先が `git ls-files` へ変わると静かに
+    脆弱になる。そのぶんを状態の pin が予防で受けている。
+
+    書き込み側は対照を置ける。fixture 自身が `git add -A` を走らせるので、指し先へ
+    書かないことを直接見られる。
+    """
+
+    def test_the_process_environment_carries_the_isolated_git_vars(self):
+        # 状態の pin。取り付けの撤去は汚染の無い環境では挙動に出ないので、ここで見る。
+        # 非空虚性を先に見るのは、GIT_ENV から GIT_* の追加が落ちると両辺が空になり
+        # 比較が無条件に通るため。合格を意味する観測値と、機構が働かなかったときの
+        # 観測値が同じになる形を、この 1 行が分けている
+        self.assertTrue(git_vars(GIT_ENV), "GIT_ENV が GIT_* を持たず pin が空虚")
+        self.assertEqual(git_vars(GIT_ENV), git_vars(os.environ))
+
+    def test_staging_does_not_write_to_an_inherited_index(self):
+        # 書き込み側 (subprocess へ `env=GIT_ENV` を渡す層) が生きていることを固定する。
+        # プロセスの環境を消毒すると子プロセスは `env=` 無しでも清浄な環境を継承するので、
+        # この pin が無いと層を外しても症状が出ない (実測: `env=GIT_ENV` を 4 箇所すべて
+        # 外しても 36 件 OK)。防御が構造的に 1 層へ潰れる
+        sentinel = self.seeded_index()
+        before = sentinel.read_bytes()
+        with tempfile.TemporaryDirectory() as tmp:
+            fx = Fixture(tmp)
+            fx.add_issue("ISSUE-2_probe", issue_md("open", ["- [ ] 未"]))
+            with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": str(sentinel)}):
+                fx.commit()
+        self.assertEqual(before, sentinel.read_bytes(), "子プロセスが継承した index へ書いた")
+
+    def seeded_index(self) -> Path:
+        """中身のある index を作って返す。空ファイルを指すと git が壊れた index として
+        エラーで倒れ、書き込みの有無ではなく別経路で判定が成立する。"""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        seed = Fixture(tmp.name)
+        seed.add_issue("ISSUE-1_probe", issue_md("open", ["- [ ] 未"]))
+        seed.commit()
+        index = seed.root / "sentinel-index"
+        index.write_bytes((seed.root / ".git" / "index").read_bytes())
+        return index
 
 
 if __name__ == "__main__":

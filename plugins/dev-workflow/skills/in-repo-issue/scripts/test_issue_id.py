@@ -24,6 +24,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 
@@ -76,6 +77,28 @@ GIT_ENV = {
 }
 
 
+# `GIT_ENV` は `env=` を渡した subprocess にしか届かない。production をプロセス内で呼ぶ
+# 経路 (このファイルの `run()` など) では、その先の git が `os.environ` を読む。
+# hook の環境には `GIT_INDEX_FILE` を含む複数の `GIT_*` が入り、形も絶対と相対が混ざる
+# (実測: 素の `commit` は相対、`commit -a` と `commit -- <paths>` は絶対)。相対形が今
+# 無害なのは production の git 呼び出しが `git -C <root>` だからで、構造に依存した
+# 無害さでしかない。消毒しないと絶対形の指し先が読まれる。
+#
+# module scope に置くのは、呼び出しごとの `with` が「書いた場所」しか覆わないため。
+# プロセス内呼び出しは将来も増えるが、増やした人が隔離を書き忘れても症状は汚染下でしか
+# 出ないので、書き忘れに気づく経路が無い。`setUpModule` は unittest がこのモジュールの
+# テストを 1 件でも走らせる前に必ず呼ぶので、クラス構成にも呼び方にも依存しない。
+_GIT_ENV_PATCH = mock.patch.dict(os.environ, GIT_ENV, clear=True)
+
+
+def setUpModule() -> None:
+    _GIT_ENV_PATCH.start()
+
+
+def tearDownModule() -> None:
+    _GIT_ENV_PATCH.stop()
+
+
 def git(root: Path, *args: str) -> None:
     subprocess.run(
         ["git", "-C", str(root), *args], check=True, capture_output=True, env=GIT_ENV
@@ -91,6 +114,11 @@ def git_out(root: Path, *args: str) -> str:
         env=GIT_ENV,
     )
     return proc.stdout.strip()
+
+
+def git_vars(env) -> dict[str, str]:
+    """環境の GIT_* だけを取り出す。プロセスの環境と GIT_ENV を同じ規約で比べるため。"""
+    return {k: v for k, v in env.items() if k.startswith("GIT_")}
 
 
 def write(root: Path, rel: str, text: str = "本文\n") -> None:
@@ -1159,6 +1187,85 @@ class ArgumentSurface(unittest.TestCase):
             with redirect_stderr(err), self.assertRaises(SystemExit) as ctx:
                 issue_id.main(["--check", "--check-diff", "--root", tmp])
         self.assertEqual(ctx.exception.code, 2)
+
+
+class EnvironmentIsolation(unittest.TestCase):
+    """プロセス内呼び出しが呼び出し元の git 環境を継承しないことを固定する。
+
+    `GIT_ENV` が守るのは `env=` を渡した subprocess だけで、`run()` は `issue_id.main()`
+    をプロセス内で呼ぶのでその先の git は `os.environ` を読む。git は `commit -a` と
+    `commit -- <paths>` のとき hook へ `GIT_INDEX_FILE` を絶対パスで渡すため、隔離が
+    無いと `--check-diff` の `git diff --cached` が呼び出し元の index を読む
+    (実測: この形で 49 件が失敗し、コミットが成立しなくなる)。
+
+    `--next` は `for-each-ref` と `ls-tree` で採番するので index を読まない。pin を
+    そちらへ置くと、隔離を外しても緑のまま通る (実測)。
+    """
+
+    def test_the_process_environment_carries_the_isolated_git_vars(self):
+        # 状態の pin。取り付けの撤去は汚染の無い環境では挙動に出ないので、ここで見る。
+        # 非空虚性を先に見るのは、GIT_ENV から GIT_* の追加が落ちると両辺が空になり
+        # 比較が無条件に通るため。合格を意味する観測値と、機構が働かなかったときの
+        # 観測値が同じになる形を、この 1 行が分けている
+        self.assertTrue(git_vars(GIT_ENV), "GIT_ENV が GIT_* を持たず pin が空虚")
+        self.assertEqual(git_vars(GIT_ENV), git_vars(os.environ))
+
+    # 汚染された親環境から起動したときに緑であることを見る 1 件。テストの中で
+    # `GIT_INDEX_FILE` を立て直しても `setUpModule` より後になるので、実際の形
+    # (hook から継承した状態で始まる) を作れない。子プロセスで測るのはそのため
+    INHERITED = f"{Path(__file__).stem}.CheckDiff.test_new_issue_directory_with_legacy_name_is_flagged"
+
+    def test_a_polluted_parent_environment_does_not_reach_the_in_process_call(self):
+        # 行動の pin。状態だけを見ると「環境は消毒されているが production が別経路で
+        # 汚染を拾う」形を見ない
+        sentinel = self.seeded_index()
+        before = sentinel.read_bytes()
+        proc = subprocess.run(
+            [sys.executable, "-m", "unittest", "-v", self.INHERITED],
+            cwd=str(HERE),
+            capture_output=True,
+            text=True,
+            check=False,
+            # 走らせる側の環境そのものが汚染の再現。`PYTHONDONTWRITEBYTECODE` は
+            # 同サイズ・同秒の書き換えが stale な pyc を素通りさせるのを避けるため
+            env={
+                **GIT_ENV,
+                "GIT_INDEX_FILE": str(sentinel),
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
+        )
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+        # 実行件数を見る。選んだテストが消えたり改名されたりすると 0 件の緑になり、
+        # 何も走っていないことが「隔離できている」に見える
+        self.assertIn("Ran 1 test", proc.stderr, proc.stdout + proc.stderr)
+        self.assertEqual(before, sentinel.read_bytes(), "子プロセスが継承した index へ書いた")
+
+    def test_staging_does_not_write_to_an_inherited_index(self):
+        # 書き込み側 (subprocess へ `env=GIT_ENV` を渡す層) が生きていることを固定する。
+        # プロセスの環境を消毒すると子プロセスは `env=` 無しでも清浄な環境を継承するので、
+        # この pin が無いと層を外しても症状が出ない。防御が構造的に 1 層へ潰れる
+        sentinel = self.seeded_index()
+        before = sentinel.read_bytes()
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            write(root, "notes.md")
+            with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": str(sentinel)}):
+                git(root, "add", "-A")
+        self.assertEqual(before, sentinel.read_bytes(), "子プロセスが継承した index へ書いた")
+
+    def seeded_index(self) -> Path:
+        """中身のある index を作って返す。空ファイルを指すと git が壊れた index として
+        エラーで倒れ、書き込みの有無ではなく別経路で判定が成立する。"""
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        seed = Path(tmp.name)
+        git(seed, "init", "-q")
+        write(seed, "a.txt", "a\n")
+        git(seed, "add", "-A")
+        index = seed / "sentinel-index"
+        index.write_bytes((seed / ".git" / "index").read_bytes())
+        return index
 
 
 if __name__ == "__main__":
