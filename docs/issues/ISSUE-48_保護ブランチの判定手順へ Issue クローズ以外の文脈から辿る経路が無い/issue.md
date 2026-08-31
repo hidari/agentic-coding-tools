@@ -69,11 +69,36 @@ classic branch protection API と repository ruleset の両方を見ること、
 `/rules/branches/<default-branch>` を使うこと、判定式が `pull_request` の有無であること、罠 3 つ
 (空出力・branch 名の literal・パイプで消える rc) の 6 点すべてが一致し、現時点で drift は無い。
 写しであることと、その重複が意図的である理由 (トリガが交わらない) も向こうの本文に明記されている。
+向こうはこの修正自体を Issue に紐づけず `dotfiles の PR #190` で済ませている。参照の相手は
+主題の近い open Issue 2 本にした (`## 関連` 参照)。参照は今のところ片方向で、向こう側から
+本 Issue への参照はまだ無い。
 
 drift は「これから起きうる」ものであって、現に起きている状態ではない。案 1 の代償はその見込みで
 評価する。ただしこのリポジトリ内には既に古びた写しが 1 つある。ISSUE-41 の plan が持つコマンド片は
 list endpoint から `rules` を取る形で、SKILL.md が「動かない」と書いている当のものにあたる
 (同 Issue の本文が訂正と canonical を記録しているので、歴史的成果物として残す判断)。
+
+### 追加の実測 (2026-09-01): 消費側の機械層は逆向きに効く
+
+dotfiles の `config-guard` が持つ `instruction_refs` を読んだ。抽出の母集団は `SOURCE_GLOBS` の
+3 本で、抽出関数は 2 つとも `~/.claude/` 接頭辞に錨を打っている (`extract_home_refs` は
+`startswith(HOME_PREFIX)` で絞り、`_HEADING_REF` は同じ接頭辞を先頭に固定した regex)。
+`<plugin>:<skill>` はどちらの母集団にも入らない。
+
+射程はこの 1 モジュール。`config-guard` が登録する検査を全部当たったわけではないので、
+「向こうに skill 名参照を見る層が 1 つも無い」とまでは言わない。言えるのは、パス参照と見出し
+参照の実在を見ているこのモジュールが skill 名を見ていないことである。
+
+つまり案 2 で切り出して「この規範は `<plugin>:<skill>` へ委譲する」と消費側に書かせても、
+少なくともこのモジュールは委譲先の実在を見ない。こちら側は節見出しの実在まで検査するので、
+同じ「委譲を書く」行為に対する検証力が repo をまたぐと落ちる。
+
+影響を受けるのは案 2 が挙げる 2 つの利得のうち「消費側も skill 名で参照できるようになる」側
+だけで、「3 つめのトリガから発火できる」側は skill を登録した時点で成立するので下がらない。
+
+あわせて、`scripts/check-issue-closure.py` の docstring が乗る前提 (main が保護されている) も
+確かめた。classic は rc 1 (404) を返す一方、`rules/branches/main` は `pull_request` を含む
+4 rule を返す。前提は現時点で成立している。
 
 ## 検討の起点
 
@@ -83,7 +108,8 @@ list endpoint から `rules` を取る形で、SKILL.md が「動かない」と
    代償は写しが 2 リポジトリに分かれて drift しうること
 2. 判定手順を `plugins/dev-workflow/` 配下の独立した skill へ切り出し、in-repo-issue と gate が
    参照する。3 つめのトリガから発火でき、消費側も skill 名で参照できるようになる。代償は配布表面が
-   1 つ増え、消費側の pin 更新がもう一度要ること。`SectionReferences` は緑のまま
+   1 つ増え、消費側の pin 更新がもう一度要ること。`SectionReferences` は緑のままだが、消費側の
+   `instruction_refs` は skill 名参照を母集団に持たないので、向こうの参照が壊れても赤くならない
 3. in-repo-issue 同梱の reference ファイルへ移し、SKILL.md は参照だけ持つ。トリガは増えないので
    到達不能は解決しないが、将来 2 へ移すときの受け皿になる。節見出しを残さないと
    `SectionReferences` が赤くなる
@@ -108,6 +134,10 @@ list endpoint から `rules` を取る形で、SKILL.md が「動かない」と
       整合させる。配布可否の宣言がその帰結を根拠にしている
 - [ ] 消費側が持つ写しをどう扱うかを決める。切り出さないなら写しは意図的な重複のまま残るので、
       その判断を上流側にも記録する
+- [ ] 案 2 を採る場合、消費側に skill 名参照の実在を見る層を足すか、足さないことを引き受けるかを
+      決める。足すならその canonical を上流と消費側のどちらへ置くかも併せて決める
+- [ ] dotfiles 側 (ISSUE-50 / ISSUE-53) へ本 Issue への参照を入れて双方向にする。片方向のままだと
+      向こうだけを読んだ人にこちらの決定が届かない
 
 ## 関連
 
@@ -121,3 +151,9 @@ list endpoint から `rules` を取る形で、SKILL.md が「動かない」と
 - ISSUE-41: クローズ同梱の判定を促す入口がゲートのどのフェーズにも無い。本 Issue はその委譲先そのものの
   置き場所を扱う
 - ISSUE-36: skill と plugin が消費側へ要求する取り付けを棚卸しする。案 2 を採ると配布表面が 1 つ増える
+- dotfiles の ISSUE-50: GitHub Repository Rulesets を導入する。判定手順そのものの主題を持つ側で、
+  タスクに本リポジトリへの展開を含む。なお同 Issue が記録する「agentic-coding-tools は ruleset が
+  空で classic も 404」は起票時点の観測で、現在は `pull_request` を含む 4 rule が効いている
+- dotfiles の ISSUE-53: 配布先の加入状況と写しの drift を見る層が無い。写しの側の主題を持つ。
+  本 Issue が実測した「6 点一致・drift 無し」は、あちらが「どこにも無い」と言っている検査を
+  手で 1 回やった形にあたる
