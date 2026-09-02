@@ -1,0 +1,25 @@
+# ~/.ssh/config — macOS VM 接続テンプレート (Parallels Desktop)
+#
+# <alias> : 任意の SSH ホスト名エイリアス (例: relay-macvm)
+# <vm>    : Parallels の VM 名または UUID (prlctl list -a で確認)
+# <user>  : VM 側のログインユーザー名 (ホストと同じである必要はない)
+# <key>   : VM へのログイン用秘密鍵のパス
+
+Host <alias>
+    User <user>
+    IdentityFile <key>
+    IdentitiesOnly yes
+    # IP は macvm resolve-ip (prlctl 由来) で毎回解決する。
+    # Parallels は /etc/hosts に <vm名>.shared も書くが、そちらは Parallels が
+    # ホストの /etc/hosts を維持していることに依存する。prlctl を真実源にする方が
+    # 失敗したときの診断が明確になる (VM 未登録 / 停止中 / IP 未割当を区別できる)。
+    ProxyCommand sh -c 'exec nc "$(macvm resolve-ip --vm "<vm>")" 22'
+    # 接続を多重化する。ProxyCommand は prlctl のディスパッチャ往復を含むので
+    # 1 接続あたり 0.1 秒台かかり、連続実行するとそのまま積み上がる。
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%r@%h:%p
+    ControlPersist 60s
+    # HostKeyAlias で VM 再構築後の known_hosts ミスマッチを回避する。
+    # IP が変わってもホスト鍵はエイリアス名で固定される。
+    HostKeyAlias <alias>
+    StrictHostKeyChecking accept-new
