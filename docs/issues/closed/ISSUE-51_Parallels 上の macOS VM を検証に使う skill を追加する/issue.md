@@ -1,5 +1,5 @@
 ---
-status: open
+status: closed
 ---
 
 # feat: Parallels 上の macOS VM を検証に使う skill を追加する
@@ -45,15 +45,15 @@ prlctl start -> IP 解決 -> SSH (鍵認証) -> open -a でアプリ起動 -> pr
 
 ## タスク
 
-- [ ] `macvm.py` を実装する (`resolve-ip` / `doctor` / `screenshot` / `push` / `pull` / `exec` / `health`)
-- [ ] `test_macvm.py` を書き、`scripts/python-tests-manifest.txt` を更新する
-- [ ] `SKILL.md` を書く
-- [ ] `references/ssh-config.template` を置く (ProxyCommand + ControlMaster)
-- [ ] `references/macos-bootstrap.md` に VM 側の準備手順を書く (Remote Login・鍵配置・自動ログイン)
-- [ ] `references/troubleshooting.md` に繋がらないときの切り分けを書く
-- [ ] full chain を実 VM で live smoke 実行する (純粋ロジックの緑だけで完了にしない)
-- [ ] `python3 scripts/gen-readme.py` で README を再生成する
-- [ ] ISSUE-10 へ macOS ゲストでの `prlctl exec` の壊れ方を追記する
+- [x] `macvm.py` を実装する (`resolve-ip` / `doctor` / `screenshot` / `push` / `pull` / `exec` / `health`)
+- [x] `test_macvm.py` を書き、`scripts/python-tests-manifest.txt` を更新する
+- [x] `SKILL.md` を書く
+- [x] `references/ssh-config.template` を置く (ProxyCommand + ControlMaster)
+- [x] `references/macos-bootstrap.md` に VM 側の準備手順を書く (Remote Login・鍵配置・自動ログイン)
+- [x] `references/troubleshooting.md` に繋がらないときの切り分けを書く
+- [x] full chain を実 VM で live smoke 実行する (純粋ロジックの緑だけで完了にしない)
+- [x] `python3 scripts/gen-readme.py` で README を再生成する
+- [x] ISSUE-10 へ macOS ゲストでの `prlctl exec` の壊れ方を追記する
 
 ## 関連
 
