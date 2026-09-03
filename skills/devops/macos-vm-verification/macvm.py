@@ -18,6 +18,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -32,6 +33,10 @@ REMOTE_MISSING_MARK = "MACVM_MISSING"
 # GUI セッションが無いことを表す ASCII の目印。console の所有者は root か実ユーザーで、
 # ログイン画面のままだと root のままになる。
 NO_AQUA_MARK = "MACVM_NO_AQUA"
+
+# 観測できなかった項目の表示。prlctl が返しうる値 ("unknown" 等) と衝突しない形にする。
+# 捏造した文字列を観測値の位置へ置くと、実際にその値が返った場合と区別できなくなる。
+UNKNOWN = "(未確認)"
 
 
 # ---------------------------------------------------------------------------
@@ -94,9 +99,12 @@ def parse_vm_list(json_text: str) -> list[dict]:
 
 
 def _normalize_uuid(value: str) -> str:
-    """UUID の中括弧と大小を落として比較用に揃える。UUID でなければそのまま返す。"""
-    v = value.strip().strip("{}").lower()
-    return v
+    """UUID 比較用に中括弧と大小と前後空白を落とす。UUID かどうかは判定しない。
+
+    名前の比較にこれを通してはいけない。大小無視の名前一致が意図せず入り、find_vm が
+    宣言する「名前は完全一致」という契約が壊れる。
+    """
+    return value.strip().strip("{}").lower()
 
 
 def find_vm(vms: list[dict], vm_id: str) -> dict | None:
@@ -104,18 +112,42 @@ def find_vm(vms: list[dict], vm_id: str) -> dict | None:
 
     prlctl が受け付ける識別子と同じ集合に揃える。ここだけ部分一致を許すと、macvm と prlctl を
     混ぜて使ったときに指す VM がずれる。
+
+    識別子は先に strip する。env ファイルやコピペ経由で前後に空白が混ざったとき、
+    「一覧に目的の名前が出ているのに引けない」という読みにくい失敗になる。空の識別子は
+    ここで弾く。`_require` は空白だけの値を truthy として通すので、正規化後の空文字が
+    ID キーを欠くレコードの "" と一致して無関係なレコードを返しうる。
+
+    走査は名前を全件見てから UUID を全件見る 2 パスにする。1 パスだとリストの並び順が
+    優先順位になり、ある VM の名前が別の VM の UUID と一致するとき返るレコードが
+    並びで変わる。名前一致をリスト全体で優先する、と決めておく。
     """
-    want = _normalize_uuid(vm_id)
+    ident = (vm_id or "").strip()
+    if not ident:
+        return None
     for v in vms:
-        if str(v.get("Name", "")) == vm_id:
+        if str(v.get("Name", "")) == ident:
             return v
+    want = _normalize_uuid(ident)
+    if not want:
+        return None
+    for v in vms:
         if _normalize_uuid(str(v.get("ID", ""))) == want:
             return v
     return None
 
 
 def pick_ipv4(network: object) -> str | None:
-    """Network レコードから最初の IPv4 を取る。無ければ None。"""
+    """Network レコードから最初の IPv4 を取る。無ければ None。
+
+    エントリは `{"type": "ipv4"|"ipv6", "ip": "..."}` で、停止中の VM は空リストになる。
+    選別は `type` で行う。そのうえで IPv4 として妥当かも確かめる。この戻り値は
+    `resolve-ip` の stdout になり、ssh config の `ProxyCommand` を通って `nc` の接続先
+    そのものになるので、値が壊れたエントリを素通しさせない。壊れた値を通すと、
+    doctor 側の `is_apipa` も「APIPA ではない = 正常」へ倒れて緑を報告する。
+
+    dict でない入力は例外にせず None へ倒す (parse_vm_list と同じ方針)。
+    """
     if not isinstance(network, dict):
         return None
     entries = network.get("ipAddresses")
@@ -127,17 +159,43 @@ def pick_ipv4(network: object) -> str | None:
         if str(e.get("type", "")) != "ipv4":
             continue
         ip = str(e.get("ip", "")).strip()
-        if ip:
-            return ip
+        try:
+            ipaddress.IPv4Address(ip)
+        except ValueError:
+            continue
+        return ip
     return None
 
 
 def is_apipa(ip: str) -> bool:
-    """169.254.0.0/16 かどうか。DHCP が取れていない状態の目印になる。"""
+    """169.254.0.0/16 かどうか。DHCP が取れていない状態の目印になる。
+
+    `pick_ipv4` を通った値は妥当性が済んでいるので通常ここで例外は出ない。`except` は
+    その前提が崩れたときのための第二層で、doctor の 1 項目を落とすために全体を
+    traceback で終わらせないためのもの。生産側の検証を消してここだけに頼らないこと。
+    """
     try:
         return ipaddress.ip_address(ip) in ipaddress.ip_network("169.254.0.0/16")
     except ValueError:
         return False
+
+
+def parse_tools(vm: dict) -> tuple[str | None, str | None]:
+    """レコードの `GuestTools` から (state, version) を返す。読めなければ (None, None)。
+
+    未導入の VM は `{"state": "not_installed"}` で version キーごと欠ける (実測)。
+    「読めなかった」を "unknown" のような文字列へ畳まない。畳むと判定側が
+    `== "installed"` で必ず False になり、確認できなかっただけの項目が FAIL になる。
+    """
+    tools = vm.get("GuestTools")
+    if not isinstance(tools, dict):
+        return None, None
+    state = tools.get("state")
+    version = tools.get("version")
+    return (
+        state if isinstance(state, str) else None,
+        version if isinstance(version, str) else None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -150,9 +208,14 @@ def remote_size_command(remote: str) -> str:
 
     不在は ASCII の目印に固定する。`stat` が返すエラー文は locale で変わるので、数字でも
     目印でもない出力を判定に混ぜないため、先に `-f` で分岐する。
+
+    `stat` には `-L` が要る。`[ -f ]` も scp も最終要素の symlink を辿って実体を見るのに、
+    `stat -f %z` だけは辿らずリンク自身 (= リンク先のパス文字列長) を返す。3 者の意味論が
+    揃っていないと、転送が正しく終わっているのにサイズ照合が外れて「転送が途中で切れた」
+    と誤報する。macOS ゲストでは Homebrew の bin がほぼ全て symlink なので現実に踏む。
     """
     q = shlex.quote(remote)
-    return f"if [ -f {q} ]; then stat -f %z {q}; else echo {REMOTE_MISSING_MARK}; fi"
+    return f"if [ -f {q} ]; then stat -L -f %z {q}; else echo {REMOTE_MISSING_MARK}; fi"
 
 
 def parse_remote_size(output: str) -> int | None:
@@ -168,12 +231,34 @@ def parse_remote_size(output: str) -> int | None:
 def remote_parent_mkdir_command(remote: str) -> str | None:
     """remote パスの親ディレクトリを作る sh コマンド。不要なら None。
 
-    親が `.` や `/` のときは発行しない。作る必要が無く、`/` への mkdir は無意味に失敗する。
+    親が `.` や `/` のときは発行しない。どちらも既に在るので作る必要が無い。`mkdir -p` は
+    既存ディレクトリを成功として扱うので発行しても壊れないが、ssh の往復が 1 回無駄に増える。
     """
     parent = str(PurePosixPath(remote).parent)
     if parent in (".", "/"):
         return None
     return f"mkdir -p {shlex.quote(parent)}"
+
+
+def reject_tilde_remote(path: str, label: str) -> str | None:
+    """先頭が `~` のリモートパスを拒む理由を返す。問題なければ None。
+
+    `shlex.quote` はチルダ展開を殺すので、mkdir とサイズ照合はリテラルな `~` という名前の
+    ディレクトリを見る。一方 scp の `host:~/...` はリモート側で展開される。同じ引数が
+    2 つの別の場所を指し、転送が成功していてもサイズ照合が外れて「転送が途中で切れた」と
+    誤報する。ホーム直下にリテラルな `~` ディレクトリも残る。
+
+    展開をこちら側で再現するのはシェルの語彙の再実装になるので、境界で弾く。ssh の作業
+    ディレクトリは `$HOME` なので、相対パスが等価な書き方として残り表現力は落ちない。
+    展開されるのは先頭の `~` だけなので、途中に現れる `~` は正当なパスとして通す。
+    """
+    if not path.startswith("~"):
+        return None
+    return (
+        f"{label} に ~ は使えません: {path}。"
+        "クォートするとゲスト側で展開されないため、scp の転送先とサイズ照合の対象がずれる。"
+        "$HOME 基準の相対パス (例 w/a.dmg) か絶対パスで指定する"
+    )
 
 
 def console_owner_command() -> str:
@@ -215,25 +300,43 @@ def build_health_shell(tools: list[str], repo: str | None) -> str:
         'echo "disk_avail=$(df -h / | tail -1 | awk \'{print $4}\')"',
         f'echo "console_owner=$({console_owner_command()})"',
     ]
+    # 値をシェル変数へ束縛してから参照する。sh の二重引用符の内側では $() と
+    # バッククォートが展開されるので、`echo "tool_{t}=..."` のようにラベルへ生で埋めると
+    # shlex.quote を通した値の位置だけが守られ、ラベルの位置でゲスト上のコマンド置換が
+    # 走る。アポストロフィを含む合法なパス (/Users/example/Ken's repo) では構文エラーになり、
+    # exit $fail に到達しないまま「VM が不健全」に見える。変数参照なら、展開結果が
+    # 再度展開されることはないので値は「データ」の位置に留まる。
     for t in tools:
-        q = shlex.quote(t)
+        lines.append(f"tool={shlex.quote(t)}")
         lines.append(
-            f'if command -v {q} >/dev/null 2>&1; then echo "tool_{t}=$(command -v {q})"; '
-            f'else echo "tool_{t}=MISSING"; fail=1; fi'
+            'if path=$(command -v "$tool" 2>/dev/null); then echo "tool_$tool=$path"; '
+            'else echo "tool_$tool=MISSING"; fail=1; fi'
         )
     if repo:
-        q = shlex.quote(repo)
+        lines.append(f"repo_path={shlex.quote(repo)}")
         lines.append(
-            f'if [ -d {q} ]; then echo "repo={q}"; '
-            f'else echo "repo=MISSING"; fail=1; fi'
+            'if [ -d "$repo_path" ]; then echo "repo=$repo_path"; '
+            'else echo "repo=MISSING"; fail=1; fi'
         )
     lines.append("exit $fail")
     return "\n".join(lines) + "\n"
 
 
 def remote_script_path(kind: str) -> str:
-    """VM 上に置く一時スクリプトのパス。衝突を避けるため用途を名前に含める。"""
-    return f"/tmp/macvm-{kind}.sh"
+    """VM 上に置く一時スクリプトのパス。呼び出しごとに一意。
+
+    固定名にすると、同じ VM へ並列に macvm を撃ったとき scp と実行の間に相手が同じパスを
+    上書きし、こちらのコマンドのつもりで相手のコマンドを実行して相手の結果を自分の結果と
+    して返す。エージェント駆動で同一 VM を並列に触る使い方が前提なので、起きうる競合では
+    なく起きる競合として扱う。一方の後始末の `rm -f` が他方の `sh` を追い越して、
+    無関係な rc 127 で落ちる形もある。
+
+    予測可能な名前を全ユーザー書き込み可能な `/tmp` (実測で 1777) に置くと、scp と実行の
+    間に差し替えられる窓も開く。一意名にすると両方まとめて閉じる。
+
+    kind は後始末に失敗して残ったときに、どのサブコマンドの残骸か読むためのもの。
+    """
+    return f"/tmp/macvm-{kind}-{uuid.uuid4().hex}.sh"
 
 
 def remote_sh_command(remote_path: str) -> str:
@@ -265,8 +368,17 @@ def remote_command_from_args(remote: list[str] | None) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def ssh_capture_full(host: str, remote: str) -> tuple[int, str, str]:
+    """doctor 用。rc と stderr も返す。
+
+    stdout だけを見ると「ssh が落ちた」と「観測できたが空だった」が同じ値になる。観測対象が
+    無セッションでも固有の目印を返す設計のとき、空を目印と同じ側へ畳むと失敗を断定へ化かす。
+    """
+    return run_capture(["ssh", *SSH_OPTS, host, remote])
+
+
 def ssh_capture(host: str, remote: str) -> str:
-    return run_capture(["ssh", *SSH_OPTS, host, remote])[1]
+    return ssh_capture_full(host, remote)[1]
 
 
 # 以下の ssh / scp ラッパは run_capture を使わない。remote コマンドの進捗とビルド出力を
@@ -321,6 +433,31 @@ def _require(value: str | None, flag: str, env_key: str) -> str | None:
         return value
     print(f"error: {flag} (または {env_key}) が必要です", file=sys.stderr)
     return None
+
+
+def _refuse_tilde(path: str, label: str) -> bool:
+    """`~` 始まりなら理由を stderr へ出して True。呼び出し側は exit 2 で止める。"""
+    reason = reject_tilde_remote(path, label)
+    if reason is None:
+        return False
+    print(f"error: {reason}", file=sys.stderr)
+    return True
+
+
+def _enable_line_buffering(*streams) -> None:
+    """print をブロックバッファから行バッファへ寄せる。
+
+    子プロセス (ssh/scp/prlctl) は端末へ直接書くのに対し、こちらの print は出力をファイルへ
+    リダイレクトするとブロックバッファされ、進捗メッセージが子プロセスの出力より後ろへ
+    ずれてログの因果が逆に読める。
+
+    現状の macvm では逆転しない。stdout 向けの print はいずれも直後が return で、子プロセスを
+    流す呼び出しの「あいだ」に挟まるものが 1 つも無い。これは予防で、stdout へ進捗出力を
+    足した人が気づかないまま踏むのを防ぐためのもの。
+    """
+    for stream in streams:
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(line_buffering=True)
 
 
 # ---------------------------------------------------------------------------
@@ -408,12 +545,20 @@ def collect_doctor_checks(
     *,
     run=run_capture,
     ssh_probe=_ssh_reachable,
-    console_probe=ssh_capture,
+    console_probe=ssh_capture_full,
 ) -> list[Check]:
     """VM が使える状態かをホスト側から観測する。各項目は観測値を持つ。"""
     vms, err = _load_vms(run)
     if err:
-        return [Check("prlctl", err, ok=False, hint="Parallels Desktop が起動しているか確認する")]
+        return [
+            Check(
+                "prlctl",
+                err,
+                ok=False,
+                # run_capture は OSError も戻り値へ倒すので、PATH に無い経路が実在する。
+                hint="Parallels Desktop が起動しているか、prlctl が PATH にあるか確認する",
+            )
+        ]
 
     vm = find_vm(vms, vm_id)
     if vm is None:
@@ -422,14 +567,17 @@ def collect_doctor_checks(
                 "VM 登録",
                 f"{vm_id} は見つからない / 登録済み: {_known_names(vms)}",
                 ok=False,
-                hint="名前は完全一致で照合する。prlctl list -a で確認する",
+                # 名前は完全一致だが UUID でも引ける。片側だけ書くと引き方を狭く伝える。
+                hint="prlctl list -a で名前か UUID を確認する (名前は完全一致)",
             )
         ]
 
     name = str(vm.get("Name", vm_id))
     state = str(vm.get("State", "unknown"))
     checks = [
-        Check("VM 登録", name, ok=True),
+        # UUID も出す。名前と UUID の両方で引ける以上、どのレコードを掴んだかを
+        # 出力から確認できないと、取り違えたときに気づく手段が無い。
+        Check("VM 登録", f"{name} ({vm.get('ID', '')})", ok=True),
         Check(
             "VM 状態",
             state,
@@ -438,14 +586,16 @@ def collect_doctor_checks(
         ),
     ]
 
-    tools = vm.get("GuestTools")
-    tools_state = str(tools.get("state", "unknown")) if isinstance(tools, dict) else "unknown"
+    tools_state, tools_version = parse_tools(vm)
     checks.append(
         Check(
             "Parallels Tools",
-            tools_state,
-            ok=(tools_state == "installed"),
-            hint="Tools が無いと IP 解決と capture が使えない",
+            " ".join(x for x in (tools_state, tools_version) if x) or UNKNOWN,
+            # 「確認できなかった」を FAIL へ潰さない。文字列へ畳んでから "installed" と
+            # 比べると、GuestTools が読めないだけで正常な VM が exit 1 になる。
+            ok=None if tools_state is None else tools_state == "installed",
+            # 矢印の先には行動が来る前提の書式なので、影響の説明ではなく手順を書く。
+            hint="VM のメニューから Parallels Tools をインストールする (references/troubleshooting.md)",
         )
     )
 
@@ -459,13 +609,23 @@ def collect_doctor_checks(
                 hint="VM が起動直後だと未割当のことがある。数秒待って再実行する",
             )
         )
+        # SSH は撃たない。ProxyCommand が resolve-ip に依存しているので、IP が無ければ
+        # 必ず落ちる。ただし省いたことは行として残す。行ごと消すと --host を渡した場合と
+        # 渡さない場合で report が完全に同一になり、同じ「見なかった」が 2 通りの
+        # 表現になる (--host 未指定の側は [ -- ] 行を残している)。
+        checks.append(Check("SSH", "IP 未割当のため未確認", ok=None, hint=None))
         return checks
     checks.append(
         Check(
             "IP",
             ip,
             ok=(not is_apipa(ip)),
-            hint="APIPA は DHCP が取れていない。VM のネットワーク設定を確認する",
+            # 疑い先はホスト側が先。VM 側のネットワーク設定だけを挙げると、共有ネットワークが
+            # 止まっているときに VM の中を探して時間を使う。
+            hint=(
+                "APIPA は DHCP が応答していない。Parallels の共有ネットワークが動いているか、"
+                "次に VM のネットワーク設定を見る (references/troubleshooting.md の APIPA の節)"
+            ),
         )
     )
 
@@ -487,8 +647,16 @@ def collect_doctor_checks(
     if not reachable:
         return checks
 
-    owner = console_probe(host, console_owner_command()).strip()
-    has_aqua = bool(owner) and owner != NO_AQUA_MARK
+    rc, out, err = console_probe(host, console_owner_command())
+    owner = out.strip()
+    if rc != 0 or not owner:
+        # 空を「Aqua セッション無し」へ畳まない。無セッションの信号は NO_AQUA_MARK で
+        # あって空ではないので、空は「その信号ではない何かが起きた」を意味する。
+        checks.append(
+            Check("GUI セッション", err.strip() or owner or f"rc={rc}", ok=None, hint=None)
+        )
+        return checks
+    has_aqua = owner != NO_AQUA_MARK
     checks.append(
         Check(
             "GUI セッション",
@@ -500,12 +668,22 @@ def collect_doctor_checks(
     return checks
 
 
-def cmd_doctor(args: argparse.Namespace, *, run=run_capture, ssh_probe=_ssh_reachable) -> int:
+def cmd_doctor(
+    args: argparse.Namespace,
+    *,
+    run=run_capture,
+    ssh_probe=_ssh_reachable,
+    console_probe=ssh_capture_full,
+) -> int:
+    # seam は 3 つとも転送する。1 つ落とすと、見えている seam を全部塞いだつもりの
+    # テストから実 ssh が飛ぶ (ConnectTimeout=10 なので 1 件あたり最大 10 秒の沈黙になる)。
     vm_id = _env_or(args.vm, "MACVM_VM")
     if not _require(vm_id, "--vm", "MACVM_VM"):
         return 2
     host = _env_or(args.host, "MACVM_HOST")
-    checks = collect_doctor_checks(vm_id, host, run=run, ssh_probe=ssh_probe)
+    checks = collect_doctor_checks(
+        vm_id, host, run=run, ssh_probe=ssh_probe, console_probe=console_probe
+    )
     print(format_doctor_report(checks))
     return doctor_exit_code(checks)
 
@@ -576,11 +754,13 @@ def cmd_push(args: argparse.Namespace, *, run=run_ssh, copy=scp, capture=ssh_cap
     host = _env_or(args.host, "MACVM_HOST")
     if not _require(host, "--host", "MACVM_HOST"):
         return 2
+    remote = args.remote
+    if _refuse_tilde(remote, "remote"):
+        return 2
     local = Path(args.local)
     if not local.is_file():
         print(f"error: ローカルファイルがありません: {local}", file=sys.stderr)
         return 1
-    remote = args.remote
     mk = remote_parent_mkdir_command(remote)
     if mk is not None and not run(host, mk):
         print("error: VM のディレクトリ作成に失敗しました", file=sys.stderr)
@@ -603,6 +783,8 @@ def cmd_pull(args: argparse.Namespace, *, copy=scp_pull, capture=ssh_capture) ->
     if not _require(host, "--host", "MACVM_HOST"):
         return 2
     remote = args.remote
+    if _refuse_tilde(remote, "remote"):
+        return 2
     local = Path(args.local)
     # 不在を後段のサイズ照合の失敗に化けさせず、転送前に明示して止める。
     remote_size = parse_remote_size(capture(host, remote_size_command(remote)))
@@ -641,7 +823,16 @@ def _run_remote_script(host: str, kind: str, body: str, *, run, copy) -> int:
     remote = remote_script_path(kind)
     try:
         if not copy(host, local, remote):
-            print(f"error: {kind} スクリプトの scp に失敗しました", file=sys.stderr)
+            # scp は -q 付きで、これは ssh(1) の warning と diagnostic も止める。閉じた
+            # ポートへの接続で出るはずの "Connection refused" が消え、macvm 全体で
+            # 接続失敗が診断情報ほぼ無しで返る唯一の経路になる。切り分け先を名指しする。
+            # 非 0 で終わったスクリプト自身の失敗 (下の run) には付けない。利用者の
+            # コマンドが失敗しただけのときに接続の切り分けを勧めると誤誘導になる。
+            print(
+                f"error: {kind} スクリプトの scp に失敗しました (VM 未起動 / SSH 未到達の可能性)。"
+                f"macvm doctor --vm <名前 or UUID> --host {host} で切り分ける",
+                file=sys.stderr,
+            )
             return 1
         try:
             return run(host, remote_sh_command(remote))
@@ -672,6 +863,8 @@ def cmd_health(args: argparse.Namespace, *, run=run_ssh_code, copy=scp) -> int:
     if not _require(host, "--host", "MACVM_HOST"):
         return 2
     repo = _env_or(args.repo, "MACVM_REPO")
+    if repo and _refuse_tilde(repo, "--repo"):
+        return 2
     # `--check-tools "git, cargo"` のように空白を入れて書かれても拾えるようにする。
     # strip しないと " cargo" を探して導入済みのツールを未導入と誤報する。
     tools = args.check_tools.split(",") if args.check_tools else []
@@ -699,18 +892,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     cp = sub.add_parser("screenshot", help="prlctl でホスト側から VM 画面を PNG に撮る")
     cp.add_argument("--vm", help="VM 名または UUID (env: MACVM_VM)")
-    cp.add_argument("--out", required=True, help="保存先パス")
+    # ホストもゲストも macOS で /Users/<name>/... が同形なので、どちら側かを明示する。
+    # ゲスト内のつもりで渡すとホスト側にディレクトリを黙って作る。
+    cp.add_argument("--out", required=True, help="保存先パス (ホスト側)")
     cp.set_defaults(func=cmd_screenshot)
 
     pp = sub.add_parser("push", help="ローカルファイルを VM へ転送 (サイズ照合つき)")
     pp.add_argument("--host", help="SSH ホスト (env: MACVM_HOST)")
     pp.add_argument("local", help="ローカルのファイルパス")
-    pp.add_argument("remote", help="VM 側の保存先パス")
+    pp.add_argument("remote", help="VM 側の保存先パス (~ 不可。$HOME 基準の相対パスで書く)")
     pp.set_defaults(func=cmd_push)
 
     lp = sub.add_parser("pull", help="VM のファイルをローカルへ転送 (サイズ照合つき)")
     lp.add_argument("--host", help="SSH ホスト (env: MACVM_HOST)")
-    lp.add_argument("remote", help="VM 側のファイルパス")
+    lp.add_argument("remote", help="VM 側のファイルパス (~ 不可。$HOME 基準の相対パスで書く)")
     lp.add_argument("local", help="ローカルの保存先パス")
     lp.set_defaults(func=cmd_pull)
 
@@ -729,6 +924,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _enable_line_buffering(sys.stdout, sys.stderr)
     args = build_parser().parse_args(argv)
     return args.func(args)
 
