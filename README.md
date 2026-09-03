@@ -37,6 +37,7 @@ component を持つパッケージ。skill と agent は `<plugin 名>:<componen
 
 | パス | 説明 |
 |---|---|
+| `skills/devops/macos-vm-verification` | Parallels Desktop 上の macOS 検証 VM を繋ぐ/調べる/検証する generic CLI (macvm)。SSH 越しの健全性確認 (OS / arch / ディスク / GUI セッション / 任意ツールの有無)、ホスト側からの画面キャプチャ (screenshot)、prlctl からの IP 解決、繋がらないときのホスト側診断 (doctor)、任意ファイルの転送 (push/pull)、クォート/パイプ安全な任意コマンド実行 (exec) を扱う。GUI アプリをホストの作業を止めずに起動して目視したい時や、Parallels Desktop の macOS VM を操作・検証する時に使う。 |
 | `skills/devops/windows-vm-verification` | Parallels Desktop 上の Windows 検証 VM を繋ぐ/調べる/検証する generic CLI (winvm)。SSH 越しの NTFS/health 確認、cfg(windows) コードの remote 検証 (ローカル変更を scp 同期して remote コマンド実行)、prlctl からの IP 解決、繋がらないときのホスト側診断 (doctor)、画面のスクリーンショット (screenshot)、任意ファイルの転送 (push/pull)、クォート/パイプ安全な任意 pwsh コマンド実行 (exec) を扱う。Parallels Desktop の Windows VM を操作・検証する時に使う。 |
 | `skills/meta/context-loading-mechanics` | Claude Code が session_start で何を必ずロードし、何を条件付きでロードするかの実測結果と、常時ロード層が膨らんだときの移設判断。公式ドキュメントに無い挙動を live probe で確定させたものを持つ。CLAUDE.md や rules が重いと感じたとき、規範を追加する前に置き場所を決めたいとき、paths 付き rules が発火しているか確かめたいとき、「指示を書いたのに効いていない」ときに使う。移設の判断と手順までが責務で、予算の検査機構そのものは持たない。 |
 | `skills/meta/session-handoff` | セッションの作業状態を引き継ぎ書 <リポルート>/.cache/handoff.md に書き出し、新しいセッションへ引き継ぐ。発動経路は3つ。(1) hook からのコンテキスト超過通知を受けたとき (2) hook からのツール呼び出し破損通知を受けたとき (3) ユーザーが手動で依頼したとき (「引き継ぎ書いて」「handoff して」「セッション切り替えたい」等)。新セッション側の読み込みは SessionStart hook (handoff-sentinel) が自動で行うため、このスキルは書き出しと案内までが責務。 |

@@ -73,6 +73,40 @@ SKILL.md のトラブルシューティング節はそこへのポインタし�
       結論する前に `cmd.exe /c ver` を対照に置くことを足す。同じ事実を 4 箇所目として書かない
 - [ ] SKILL.md から上記へ辿れる導線を作る。SSH 前提なのは `winvm exec` であって winvm 全体
       ではない (`resolve-ip` / `doctor` / `screenshot` は prlctl だけで動く) ことが分かる形にする
+- [ ] 文字コードの注意を Windows 固有として書く。macOS ゲストは UTF-8 で返すため、
+      同じ注意を両 skill へ複製しない
+
+## 2 度目の観測 (macOS ゲスト)
+
+ISSUE-51 の作業中に、同じ根を macOS ゲストで踏んだ。SSH がまだ無い段階の踏み台として
+`prlctl exec` を使い、公開鍵を配置しようとした場面である。
+
+本 Issue が「未実測」としていたクォート意味論は、この過程で実測できた。**ゲスト側で argv が
+再分割される。**
+
+| 試行 | 結果 |
+|---|---|
+| `prlctl exec "<vm>" sh -c 'echo hello > /tmp/probe.txt'` | ファイルは作られるが中身は**改行 1 バイト**。`echo hello` の引数が失われ、`sh -c 'echo'` 相当が実行された |
+| `cat key.pub \| prlctl exec "<vm>" tee -a <path>` | `PrlJob_GetRetCode: Invalid argument` (stdin パイプが通らない) |
+| `prlctl exec "<vm>" mv /tmp/x /etc/x` | `PrlJob_GetResult: Invalid argument` (特権パスへの書き込み) |
+
+引数が単純なもの (`mkdir -p <path>` / `chown -R <user>:<group> <path>` / `chmod 700 <path>`)
+は通った。トークン数が少なくリダイレクトを含まないコマンドだけが安全と考えてよい。
+
+**壊れ方が Windows 側と違う。** 本 Issue の背景が記録している Windows の症状は「空の出力と
+exit 2」で、少なくとも「何も返ってこなかった」ことは分かる。macOS ゲストでは**エラーに
+ならず部分的に実行される**。ファイルはできるので成功に見え、中身を確認しない限り気づけない。
+偽陰性としてはこちらの方が深い。
+
+なお macOS ゲストの出力は UTF-8 なので、本 Issue が挙げるもう 1 つの未文書項目 (`iconv` が
+要る / `tr` が不正バイト列で落ちる) は macOS 側では出ない。文字コードの注意は Windows
+固有として書ける。
+
+### 「採らなかった案」の条件について
+
+下の節は「同じ罠を再度踏んだらコード側へ移す」と条件を明記している。今回が 2 度目にあたり、
+先送りの根拠だった「クォート意味論は未実測」も上の表で解消された。判断そのものは変えずに
+事実だけを置くが、再検討の材料は揃っている。
 
 ## 検討して採らなかった案
 
@@ -94,3 +128,5 @@ live smoke の完走が要り、prlctl が argv をゲスト側でどう再結�
 - [ISSUE-1 (closed): winvm が VM の CP932 出力で UnicodeDecodeError になる](../closed/ISSUE-1_winvm%20が%20VM%20の%20CP932%20出力で%20UnicodeDecodeError%20になる/issue.md)
 - [ISSUE-9 (closed): doctor が APIPA アドレスを健全と判定する](../closed/ISSUE-9_doctor%20が%20APIPA%20アドレスを健全と判定する/issue.md)
   — 同じ調査中に見つかった
+- ISSUE-51 — macOS VM 版の skill。その作業中に同じ根を 2 度目に踏み、未実測だったクォート
+  意味論を実測した (上の「2 度目の観測」節)
