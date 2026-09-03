@@ -9,10 +9,12 @@ Parallels の出力に由来する固定値は、実機 (Parallels Desktop 27.0.
 from __future__ import annotations
 
 import argparse
+import ast
 import io
 import os
 import re
 import subprocess
+import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -21,8 +23,10 @@ from unittest.mock import patch
 
 import macvm
 
-# 実機 `prlctl list -a -i -j` の出力から、macvm が読むキーを抜き出したもの。
+# 実機 `prlctl list -a -i -j` の出力を、レコードの形を保ったまま縮めたもの。
 # 停止中の空 ipAddresses と、version キーごと欠ける GuestTools は実際の出力のままにしてある。
+# Home と Conditioned は macvm が読まないが、実機の出力に在るので残してある
+# (「ここにあるキーは全部読まれている」とは読まないこと)。
 PRLCTL_LIST_JSON = """[
 \t{
 \t\t"ID": "aaaa1111-bbbb-4ccc-8ddd-eeee22223333",
@@ -55,6 +59,15 @@ NO_TOOLS_LIST_JSON = PRLCTL_LIST_JSON.replace(
     '"GuestTools": {"state": "installed", "version": "27.0.0-58628"},\n', ""
 )
 assert NO_TOOLS_LIST_JSON != PRLCTL_LIST_JSON
+
+# 起動中なのに Parallels Tools が未導入の VM。PRLCTL_LIST_JSON では「停止中かつ未導入」
+# 「起動中かつ導入済み」しか無く 2 つの軸が完全に相関しているので、Tools の判定軸を
+# VM 状態へ付け替える変異を識別できない。
+RUNNING_NO_TOOLS_JSON = PRLCTL_LIST_JSON.replace(
+    '"GuestTools": {"state": "installed", "version": "27.0.0-58628"},',
+    '"GuestTools": {"state": "not_installed"},',
+)
+assert RUNNING_NO_TOOLS_JSON != PRLCTL_LIST_JSON
 
 # DHCP が応答しなかった VM。ipAddresses は埋まるので「IP は取れている」経路を通る。
 APIPA_LIST_JSON = PRLCTL_LIST_JSON.replace('"ip": "10.211.55.5"', '"ip": "169.254.10.20"')
@@ -140,6 +153,17 @@ class FindVm(unittest.TestCase):
         self.assertIsNotNone(macvm.find_vm(self.vms, f" {RUNNING_VM} "))
         self.assertIsNotNone(macvm.find_vm(self.vms, f"{RUNNING_VM}\n"))
 
+    def test_a_name_that_really_has_surrounding_spaces_is_still_matchable(self):
+        # strip だけにすると、前後へ空白を持つ名前の VM をその名前どおりに渡しても
+        # 引けなくなる。一覧に出ている文字列をそのまま渡して引けること。
+        vms = [{"Name": " Padded VM ", "ID": "{aaa}"}, *self.vms]
+        self.assertEqual(macvm.find_vm(vms, " Padded VM ")["ID"], "{aaa}")
+
+    def test_name_match_is_case_sensitive(self):
+        # UUID は大小無視だが名前は完全一致。名前比較に _normalize_uuid を通すと、
+        # この軸が静かに緩んで prlctl と指す VM がずれる。
+        self.assertIsNone(macvm.find_vm(self.vms, RUNNING_VM.upper()))
+
     def test_empty_identifier_matches_nothing(self):
         # 空白だけの識別子は _require を truthy で通ってここまで来る。正規化後の
         # 空文字が ID キーを欠くレコードの "" と一致して誤ヒットしないこと。
@@ -211,6 +235,37 @@ class PickIpv4(unittest.TestCase):
         self.assertIsNone(macvm.pick_ipv4("not-a-dict"))
 
 
+class ScanIpv4(unittest.TestCase):
+    """「ipv4 エントリが無い」と「あるが全部壊れている」を区別する。
+
+    どちらも pick_ipv4 は None を返すが、対処が違う。前者は起動直後なら待てば付き、
+    後者は待っても変わらない。畳むと診断が「数秒待って再実行」と案内し続ける。
+    """
+
+    def test_no_entries_reports_nothing_malformed(self):
+        self.assertEqual(macvm.scan_ipv4({"ipAddresses": []}), (None, []))
+
+    def test_ipv6_only_reports_nothing_malformed(self):
+        network = {"ipAddresses": [{"type": "ipv6", "ip": "fe80::1"}]}
+        self.assertEqual(macvm.scan_ipv4(network), (None, []))
+
+    def test_malformed_values_are_collected(self):
+        network = {"ipAddresses": [
+            {"type": "ipv4", "ip": "10.211"},
+            {"type": "ipv4", "ip": "-"},
+        ]}
+        self.assertEqual(macvm.scan_ipv4(network), (None, ["10.211", "-"]))
+
+    def test_a_valid_value_stops_the_scan(self):
+        network = {"ipAddresses": [
+            {"type": "ipv4", "ip": "-"},
+            {"type": "ipv4", "ip": "10.211.55.3"},
+            {"type": "ipv4", "ip": "also-bad"},
+        ]}
+        # 見つかった時点で返すので、後ろの不正値は集めない。
+        self.assertEqual(macvm.scan_ipv4(network), ("10.211.55.3", ["-"]))
+
+
 class IsApipa(unittest.TestCase):
     def test_link_local_is_apipa(self):
         self.assertTrue(macvm.is_apipa("169.254.10.20"))
@@ -277,23 +332,80 @@ class RemoteSizeCommand(unittest.TestCase):
         # macOS の stat は -f %z。Linux の -c %s ではない。
         self.assertIn("stat -L -f %z", macvm.remote_size_command("/tmp/x"))
 
+
+# BSD stat の `-L` と `-f %z` だけを真似る shim。
+#
+# 生成コマンドをそのまま走らせて観測したいが、ゲストは常に macOS なのに CI は Linux で、
+# `stat -f` の意味が違う (BSD=書式指定 / GNU=--file-system)。実行すると CI だけが必ず
+# 赤くなる。プラットフォームで skip する手も使えない (run-python-tests.py は skip された
+# テストを赤にする)。そこで BSD の意味論を再現した shim を PATH の先に置いて観測する。
+# 再現するのは実 VM で採った非対称そのもの: `stat -f %z` はリンク自身 (= リンク先パスの
+# 文字列長、実測 33)、`stat -L -f %z` は実体のサイズ (実測 4096)。lstat / stat が対応する。
+STAT_SHIM = """import os
+import sys
+
+args = sys.argv[1:]
+deref = False
+if args[:1] == ["-L"]:
+    deref, args = True, args[1:]
+if args[:2] != ["-f", "%z"] or len(args) != 3:
+    sys.exit(64)
+st = os.stat(args[2]) if deref else os.lstat(args[2])
+print(st.st_size)
+"""
+
+
+class RemoteSizeCommandSemantics(unittest.TestCase):
+    """生成したコマンドを実際に sh へ通し、symlink の扱いを観測する。
+
+    `[ -f ]` も scp も最終要素の symlink を辿る。stat だけ辿らないと、転送が正しく
+    終わっているのに照合が外れて「途中で切れた」と誤報する。macOS ゲストでは Homebrew の
+    bin がほぼ全て symlink なので現実に踏む。
+    """
+
+    def _run(self, command, tmp):
+        bindir = Path(tmp) / "bin"
+        bindir.mkdir(exist_ok=True)
+        shim = bindir / "stat"
+        shim.write_text(f"#!{sys.executable}\n{STAT_SHIM}", encoding="utf-8")
+        shim.chmod(0o755)
+        env = dict(os.environ, PATH=f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
+        return subprocess.run(
+            ["sh", "-c", command], capture_output=True, text=True, env=env
+        )
+
     def test_size_follows_a_symlink_the_way_scp_does(self):
-        # [ -f ] も scp も最終要素の symlink を辿る。stat だけ辿らないと、転送が
-        # 正しく終わっているのに照合が外れて「途中で切れた」と誤報する。
-        # macOS ゲストでは Homebrew の bin がほぼ全て symlink なので現実に踏む。
-        with TemporaryDirectory() as d:
-            real = Path(d) / "real.bin"
+        with TemporaryDirectory() as tmp:
+            real = Path(tmp) / "real.bin"
             real.write_bytes(b"x" * 16)
-            link = Path(d) / "link.bin"
+            link = Path(tmp) / "link.bin"
             link.symlink_to(real)
-            # symlink 自身のサイズはリンク先のパス文字列長。実体と同じだと識別力が無い。
+            command = macvm.remote_size_command(str(link))
+
+            p = self._run(command, tmp)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual(macvm.parse_remote_size(p.stdout), 16)
+
+            # 対照。shim が非対称を再現できていること。常に実体のサイズを返す壊れた
+            # shim だと、-L を落とす変異でもこのテストが緑になり歯が無くなる。
+            without_l = command.replace("stat -L -f %z", "stat -f %z")
+            self.assertNotEqual(without_l, command, "-L が生成コマンドに無い")
+            q = self._run(without_l, tmp)
+            self.assertEqual(macvm.parse_remote_size(q.stdout), link.lstat().st_size)
             self.assertNotEqual(link.lstat().st_size, 16)
-            out = subprocess.run(
-                ["sh", "-c", macvm.remote_size_command(str(link))],
-                capture_output=True,
-                text=True,
-            ).stdout
-            self.assertEqual(macvm.parse_remote_size(out), 16)
+
+    def test_a_missing_file_falls_to_the_ascii_mark(self):
+        with TemporaryDirectory() as tmp:
+            p = self._run(macvm.remote_size_command(f"{tmp}/nope.bin"), tmp)
+            self.assertEqual(p.stdout.strip(), macvm.REMOTE_MISSING_MARK)
+            self.assertIsNone(macvm.parse_remote_size(p.stdout))
+
+    def test_a_path_with_spaces_and_quotes_survives_the_shell(self):
+        with TemporaryDirectory() as tmp:
+            weird = Path(tmp) / "a b's c.bin"
+            weird.write_bytes(b"y" * 7)
+            p = self._run(macvm.remote_size_command(str(weird)), tmp)
+            self.assertEqual(macvm.parse_remote_size(p.stdout), 7)
 
 
 class ParseRemoteSize(unittest.TestCase):
@@ -326,34 +438,66 @@ class RemoteParentMkdirCommand(unittest.TestCase):
         self.assertEqual(cmd, "mkdir -p '/tmp/a b'")
 
 
-class RejectTildeRemote(unittest.TestCase):
-    """リモートパスの ~ は受け付けない。
+class RejectTildePath(unittest.TestCase):
+    """ゲスト側パスの先頭 ~ は受け付けない。
 
-    shlex.quote がチルダ展開を殺すので mkdir とサイズ照合はリテラルな `~` を見るのに、
-    scp の `host:~/...` はリモート側で展開される。同じ引数が 2 つの別の場所を指し、
-    転送が成功していてもサイズ照合が外れる。展開をこちらで再現するのはシェルの語彙の
-    再実装になるので境界で弾く。ssh の作業ディレクトリは $HOME なので、相対パスが
-    等価な書き方として残り表現力は落ちない。
+    shlex.quote がチルダ展開を殺すので、macvm が組み立てるコマンドはリテラルな `~` を
+    見る。ゲスト側のシェルが展開する経路 (scp の `host:~/...`) と食い違う。展開をこちらで
+    再現するのはシェルの語彙の再実装になるので境界で弾く。ssh の作業ディレクトリは
+    $HOME なので、相対パスが等価な書き方として残り表現力は落ちない。
     """
 
     def test_leading_tilde_is_refused(self):
         for path in ("~/w/a.dmg", "~", "~user/w/a.dmg"):
             with self.subTest(path=path):
-                self.assertIsNotNone(macvm.reject_tilde_remote(path, "remote"))
+                self.assertIsNotNone(macvm.reject_tilde_path(path, "remote"))
 
     def test_tilde_elsewhere_in_the_path_is_allowed(self):
         # 展開されるのは先頭だけ。/tmp/a~b は正当な macOS パス。
-        self.assertIsNone(macvm.reject_tilde_remote("/tmp/a~b", "remote"))
+        self.assertIsNone(macvm.reject_tilde_path("/tmp/a~b", "remote"))
 
     def test_absolute_and_relative_paths_are_allowed(self):
         for path in ("/tmp/x", "w/a.dmg", "./w/a.dmg"):
             with self.subTest(path=path):
-                self.assertIsNone(macvm.reject_tilde_remote(path, "remote"))
+                self.assertIsNone(macvm.reject_tilde_path(path, "remote"))
 
     def test_the_message_names_the_argument_and_the_workaround(self):
-        msg = macvm.reject_tilde_remote("~/w/a.dmg", "remote")
+        msg = macvm.reject_tilde_path("~/w/a.dmg", "remote")
         self.assertIn("remote", msg)
         self.assertIn("~", msg)
+
+    def test_the_message_does_not_mention_transfers(self):
+        # --repo からも呼ばれる。health は転送をしないので、scp の話を持ち出すと
+        # 存在しない転送の説明を読ませることになる。
+        self.assertNotIn("scp", macvm.reject_tilde_path("~/repo", "--repo"))
+
+
+class RejectDirectoryishRemote(unittest.TestCase):
+    """転送先/元はファイルを名指しすること。
+
+    scp はディレクトリ宛だとその中へ置くのに、サイズ照合は渡された文字列をそのまま
+    `[ -f ]` に掛けるので偽になる。転送が完全に終わっていても「途中で切れた」と誤報する。
+    `~` と同じ「同じ引数を scp と sh が別の場所として読む」欠陥クラス。
+    """
+
+    def test_a_trailing_slash_is_refused(self):
+        # scp 流の一番自然な書き方なので、初回利用で踏む。
+        self.assertIsNotNone(macvm.reject_directoryish_remote("w/", "remote"))
+        self.assertIsNotNone(macvm.reject_directoryish_remote("/tmp/w/", "remote"))
+
+    def test_an_empty_path_is_refused(self):
+        # scp は host: 宛だと $HOME 直下へ置く。
+        self.assertIsNotNone(macvm.reject_directoryish_remote("", "remote"))
+
+    def test_paths_that_name_a_file_are_allowed(self):
+        for path in ("/tmp/x.bin", "w/a.dmg", "a.dmg", "/tmp/a~b"):
+            with self.subTest(path=path):
+                self.assertIsNone(macvm.reject_directoryish_remote(path, "remote"))
+
+    def test_the_message_says_what_to_write_instead(self):
+        msg = macvm.reject_directoryish_remote("w/", "remote")
+        self.assertIn("remote", msg)
+        self.assertIn("ファイル名", msg)
 
 
 class ConsoleOwnerCommand(unittest.TestCase):
@@ -501,6 +645,13 @@ class FormatDoctorReport(unittest.TestCase):
         self.assertIn("[ -- ]", report)
 
 
+class UnknownMarker(unittest.TestCase):
+    def test_it_cannot_be_mistaken_for_a_value_prlctl_returns(self):
+        # "unknown" のような値にすると、「GuestTools を読めなかった」のか
+        # 「prlctl が state=unknown を返した」のかが出力から区別できなくなる。
+        self.assertIsNone(re.fullmatch(r"[a-z_]+", macvm.UNKNOWN))
+
+
 class DoctorExitCode(unittest.TestCase):
     def test_any_failure_is_exit_1(self):
         checks = [macvm.Check("a", "x", ok=True), macvm.Check("b", "y", ok=False)]
@@ -614,9 +765,63 @@ class CollectDoctorChecks(unittest.TestCase):
 
     def test_not_installed_guest_tools_is_still_a_failure(self):
         # 上の 1 本だけだと「常に None」へ滑る変異を検出できない。
-        checks = macvm.collect_doctor_checks(STOPPED_VM, None, run=self.run)
+        # 起動中かつ未導入のレコードを使う。PRLCTL_LIST_JSON は VM 状態と Tools 状態が
+        # 完全に相関しているので、停止中のレコードだと判定軸を VM 状態へ付け替える
+        # 変異 (state == "running") まで緑で通る。
+        run = FakeRunner({tuple(macvm.prlctl_list_argv()): (0, RUNNING_NO_TOOLS_JSON, "")})
+        checks = macvm.collect_doctor_checks(RUNNING_VM, None, run=run)
+        state = next(c for c in checks if c.label == "VM 状態")
         tools = next(c for c in checks if c.label == "Parallels Tools")
+        self.assertIs(state.ok, True)
         self.assertIs(tools.ok, False)
+
+    def test_an_empty_guest_tools_state_is_unconfirmed(self):
+        # 空文字を「読めた」扱いにすると [FAIL] と観測値 (未確認) が同時に出て、
+        # exit 1 の根拠が出力から辿れなくなる。
+        empty = PRLCTL_LIST_JSON.replace('"state": "installed"', '"state": ""')
+        self.assertNotEqual(empty, PRLCTL_LIST_JSON)
+        run = FakeRunner({tuple(macvm.prlctl_list_argv()): (0, empty, "")})
+        checks = macvm.collect_doctor_checks(RUNNING_VM, None, run=run)
+        tools = next(c for c in checks if c.label == "Parallels Tools")
+        self.assertIsNone(tools.ok)
+
+    def test_a_console_probe_that_returns_nothing_is_unconfirmed(self):
+        # rc が 0 でも観測値が空なら「Aqua 無し」ではない。無セッションの信号は
+        # NO_AQUA_MARK であって空ではない。rc だけを見る実装はここで落ちる。
+        checks = macvm.collect_doctor_checks(
+            RUNNING_VM,
+            "somehost",
+            run=self.run,
+            ssh_probe=lambda h: True,
+            console_probe=lambda h, c: (0, "\n", ""),
+        )
+        gui = next(c for c in checks if c.label == "GUI セッション")
+        self.assertIsNone(gui.ok)
+
+    def test_a_nonzero_console_probe_is_unconfirmed_even_with_output(self):
+        # 逆側。stdout に何か出ていても rc が非 0 なら断定しない。stdout だけを見る
+        # 実装はここで落ちる。
+        checks = macvm.collect_doctor_checks(
+            RUNNING_VM,
+            "somehost",
+            run=self.run,
+            ssh_probe=lambda h: True,
+            console_probe=lambda h, c: (255, "someuser\n", "boom"),
+        )
+        gui = next(c for c in checks if c.label == "GUI セッション")
+        self.assertIsNone(gui.ok)
+
+    def test_malformed_ipv4_values_are_not_reported_as_unassigned(self):
+        # 「待てば付く」と「待っても変わらない」を同じ「未割当」へ畳まない。
+        broken = PRLCTL_LIST_JSON.replace('"ip": "10.211.55.5"', '"ip": "10.211"')
+        self.assertNotEqual(broken, PRLCTL_LIST_JSON)
+        run = FakeRunner({tuple(macvm.prlctl_list_argv()): (0, broken, "")})
+        checks = macvm.collect_doctor_checks(RUNNING_VM, None, run=run)
+        ip = next(c for c in checks if c.label == "IP")
+        self.assertIs(ip.ok, False)
+        self.assertIn("10.211", ip.observed)
+        self.assertNotIn("未割当", ip.observed)
+        self.assertNotIn("数秒待って", ip.hint)
 
     def test_the_tools_row_reports_the_version_it_observed(self):
         checks = macvm.collect_doctor_checks(RUNNING_VM, None, run=self.run)
@@ -719,6 +924,17 @@ class CmdResolveIp(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(out.strip(), "10.211.55.5")
 
+    def test_malformed_ipv4_values_are_named_instead_of_suggesting_a_start(self):
+        # 起動中の VM に prlctl start を勧めると誤誘導になる。壊れた値そのものを出す。
+        broken = PRLCTL_LIST_JSON.replace('"ip": "10.211.55.5"', '"ip": "10.211"')
+        self.assertNotEqual(broken, PRLCTL_LIST_JSON)
+        run = FakeRunner({tuple(macvm.prlctl_list_argv()): (0, broken, "")})
+        rc, out, err = self._resolve(RUNNING_VM, run=run)
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn("10.211", err)
+        self.assertNotIn("prlctl start", err)
+
 
 class CmdScreenshot(unittest.TestCase):
     def setUp(self):
@@ -783,11 +999,12 @@ class TransferSpy:
     指しているか」という軸も、「撃っていない」と「撃って成功した」の違いも見えない。
     """
 
-    def __init__(self, *, mkdir_ok=True, copy_ok=True, size="28", writes=None):
+    def __init__(self, *, mkdir_ok=True, copy_ok=True, size="28", writes=None, capture_rc=0):
         self.mkdir_ok = mkdir_ok
         self.copy_ok = copy_ok
         self.size = size
         self.writes = writes
+        self.capture_rc = capture_rc
         self.hosts: list[str] = []
         self.runs: list[str] = []
         self.copies: list[tuple[str, str]] = []
@@ -811,9 +1028,13 @@ class TransferSpy:
         return self.copy_ok
 
     def capture(self, host, remote):
+        # ssh ラッパと同じ 3-tuple を返す。rc を落とすと「ssh が落ちた」と
+        # 「ファイルが無い」が同じ値になり、呼び出し側が誤断定する。
         self.hosts.append(host)
         self.captures.append(remote)
-        return self.size
+        if self.capture_rc != 0:
+            return self.capture_rc, "", "ssh: connect to host ... : Connection refused"
+        return 0, self.size, ""
 
 
 class CmdPush(unittest.TestCase):
@@ -831,7 +1052,7 @@ class CmdPush(unittest.TestCase):
                 args,
                 run=lambda h, c: True,
                 copy=lambda h, l, d: copy_ok,
-                capture=lambda h, c: remote_size,
+                capture=lambda h, c: (0, remote_size, ""),
             )
         )
 
@@ -860,7 +1081,10 @@ class CmdPush(unittest.TestCase):
         args = argparse.Namespace(host="h", local=str(Path(self.tmp) / "nope"), remote="/tmp/x")
         rc, _, err = capture_io(
             lambda: macvm.cmd_push(
-                args, run=lambda h, c: True, copy=lambda h, l, d: True, capture=lambda h, c: "0"
+                args,
+                run=lambda h, c: True,
+                copy=lambda h, l, d: True,
+                capture=lambda h, c: (0, "0", ""),
             )
         )
         self.assertEqual(rc, 1)
@@ -870,7 +1094,10 @@ class CmdPush(unittest.TestCase):
         args = argparse.Namespace(host=None, local=str(self.local), remote="/tmp/x")
         rc, _, err = capture_io(
             lambda: macvm.cmd_push(
-                args, run=lambda h, c: True, copy=lambda h, l, d: True, capture=lambda h, c: "28"
+                args,
+                run=lambda h, c: True,
+                copy=lambda h, l, d: True,
+                capture=lambda h, c: (0, "28", ""),
             )
         )
         self.assertEqual(rc, 2)
@@ -923,6 +1150,33 @@ class CmdPush(unittest.TestCase):
         self.assertEqual(spy.copies, [])
         self.assertIn("~", err)
 
+    def test_a_directoryish_remote_is_refused_without_touching_the_vm(self):
+        # scp 流の一番自然な書き方。転送は成功するのにサイズ照合が外れるので、
+        # 通してしまうと「途中で切れた」という嘘の報告になる。
+        for remote in ("w/", ""):
+            with self.subTest(remote=remote):
+                spy = TransferSpy()
+                rc, _, err = self._spied(spy, remote=remote)
+                self.assertEqual(rc, 2)
+                self.assertEqual(spy.copies, [])
+                self.assertIn("ファイル名", err)
+
+    def test_an_ssh_failure_after_the_transfer_is_not_called_a_truncation(self):
+        # scp が完全なファイルを届けた後で ssh だけが落ちることがある。これを
+        # 「転送が途中で切れた」と報告すると、届いているものを再転送させる。
+        spy = TransferSpy(capture_rc=255)
+        rc, _, err = self._spied(spy)
+        self.assertEqual(rc, 1)
+        self.assertIn("ssh", err)
+        self.assertNotIn("途中で切れた", err)
+        self.assertIn("macvm doctor", err)
+
+    def test_an_scp_failure_names_where_to_triage(self):
+        # scp は -q 付きなので ssh の接続失敗の診断が出力に残らない。
+        spy = TransferSpy(copy_ok=False)
+        _, _, err = self._spied(spy)
+        self.assertIn("macvm doctor", err)
+
     def test_env_var_supplies_the_host(self):
         os.environ["MACVM_HOST"] = "from-env"
         spy = TransferSpy()
@@ -949,7 +1203,7 @@ class CmdPull(unittest.TestCase):
             return copy_ok
 
         return capture_io(
-            lambda: macvm.cmd_pull(args, copy=copy, capture=lambda h, c: remote_size)
+            lambda: macvm.cmd_pull(args, copy=copy, capture=lambda h, c: (0, remote_size, ""))
         )
 
     def test_matching_size_is_success(self):
@@ -1004,6 +1258,25 @@ class CmdPull(unittest.TestCase):
         self.assertEqual(spy.captures, [])
         self.assertEqual(spy.copies, [])
         self.assertIn("~", err)
+
+    def test_a_directoryish_remote_is_refused_without_touching_the_vm(self):
+        for remote in ("w/", ""):
+            with self.subTest(remote=remote):
+                spy = TransferSpy(writes=b"x" * 28)
+                rc, _, err = self._spied(spy, remote=remote)
+                self.assertEqual(rc, 2)
+                self.assertEqual(spy.captures, [])
+                self.assertIn("ファイル名", err)
+
+    def test_an_ssh_failure_is_not_called_an_absent_file(self):
+        # ssh の障害を「ファイルが無い」へすり替えると、切り分け先が VM の中へ逸れる。
+        spy = TransferSpy(capture_rc=255, writes=b"x" * 28)
+        rc, _, err = self._spied(spy)
+        self.assertEqual(rc, 1)
+        self.assertEqual(spy.copies, [])
+        self.assertIn("ssh", err)
+        self.assertNotIn("不在の可能性", err)
+        self.assertIn("macvm doctor", err)
 
     def test_env_var_supplies_the_host(self):
         os.environ["MACVM_HOST"] = "from-env"
@@ -1325,19 +1598,76 @@ class LineBuffering(unittest.TestCase):
         # 差し替えられた stdout (テストの StringIO 等) で落ちない。
         macvm._enable_line_buffering(object())
 
+    def test_main_enables_it_before_dispatching(self):
+        # ヘルパ単体だけを見ると、main() からの呼び出しが消えても全テストが緑のまま
+        # 通る。予防機構は「取り付いていること」まで pin しないと意味が無い。
+        calls = []
+        with patch.object(macvm, "_enable_line_buffering", lambda *s: calls.append(s)):
+            with redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    macvm.main([])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls[0]), 2)  # stdout と stderr の両方
+
 
 class SourceInvariants(unittest.TestCase):
     """ソース走査で守る不変条件。個々のテストでは「全経路」を見られない。"""
 
     SOURCE = Path(macvm.__file__).read_text(encoding="utf-8")
 
+    # ssh/scp を起動するリストリテラルの数。増減したらこのテストを直す前に、
+    # 増えた起動が SSH_OPTS を通っているかを確かめること。件数の対照が無いと、
+    # 走査から落ちた起動が「違反なし」として緑になる。
+    EXPECTED_LAUNCH_SITES = 5
+
+    def _launch_lists(self):
+        """先頭要素が "ssh" / "scp" のリストリテラルを AST で全部拾う。
+
+        正規表現だと改行や空白の揺れで母集団から落ち、落ちたものは「違反なし」として
+        緑になる。AST なら書式に依らない (ただし argv を変数で組み立てる書き方は
+        どちらの方法でも映らない。射程はリストリテラルまで)。
+        """
+        return [
+            node
+            for node in ast.walk(ast.parse(self.SOURCE))
+            if isinstance(node, ast.List)
+            and node.elts
+            and isinstance(node.elts[0], ast.Constant)
+            and node.elts[0].value in ("ssh", "scp")
+        ]
+
     def test_every_ssh_and_scp_launch_applies_the_shared_options(self):
-        # 診断だけを硬くすると「doctor は 10 秒で返るのに health は固まる」という
-        # 逆転が起きる。ソース全体を assert に渡すと失敗時に本文を丸ごと吐くので、
-        # 違反した起動だけを取り出して比較する。
-        launches = re.findall(r'\["(?:ssh|scp)",[^\]]*', self.SOURCE)
-        self.assertTrue(launches, "ssh/scp の起動が 1 つも見つからない (検査が空振り)")
-        self.assertEqual([x[:40] for x in launches if "*SSH_OPTS" not in x], [])
+        # 診断だけを硬くすると「doctor はすぐ返るのに health は固まる」という逆転が
+        # 起きる。ソース全体を assert に渡すと失敗時に本文を丸ごと吐くので、違反した
+        # 起動だけを取り出して比較する。
+        launches = self._launch_lists()
+        self.assertEqual(
+            len(launches),
+            self.EXPECTED_LAUNCH_SITES,
+            "ssh/scp の起動地点が増減した。SSH_OPTS を通しているか確かめてから件数を直す",
+        )
+        offenders = [
+            ast.unparse(node)[:60]
+            for node in launches
+            if not any(
+                isinstance(e, ast.Starred)
+                and isinstance(e.value, ast.Name)
+                and e.value.id == "SSH_OPTS"
+                for e in node.elts
+            )
+        ]
+        self.assertEqual(offenders, [])
+
+    def test_the_launch_scan_can_actually_see_a_violation(self):
+        # 対照。走査が違反を検出できることを、対象と同じ形の合成物で確かめる。
+        # これが無いと「0 件」が「違反なし」なのか「見ていない」なのか区別できない。
+        class Synthetic(SourceInvariants):
+            SOURCE = 'subprocess.run(["ssh", host, remote])\n'
+            EXPECTED_LAUNCH_SITES = 1
+
+        probe = Synthetic("test_every_ssh_and_scp_launch_applies_the_shared_options")
+        with self.assertRaises(AssertionError):
+            probe.test_every_ssh_and_scp_launch_applies_the_shared_options()
 
     # print( から file=sys.stderr までを取る。途中に別の print( を挟まない
     # (stdout 向けの print から跨いで拾うと、検査対象でない文字列を判定してしまう)。

@@ -23,8 +23,9 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 # 対話プロンプトで無期限にブロックしないための共通 ssh オプション。
-# 診断だけに付けると「doctor は 10 秒で返るのに health は固まる」という逆転が起きるので、
-# ssh を起動する経路すべてで同じものを使う。
+# 診断だけに付けると「doctor はすぐ返るのに health は固まる」という逆転が起きるので、
+# ssh を起動する経路すべてで同じものを使う。待ち時間の値はこの定数が canonical で、
+# 散文に再掲しない (再掲した側だけが drift する)。
 SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
 
 # リモートファイル不在を表す ASCII の目印。locale で変わる stat のエラー文を判定に混ぜない。
@@ -34,8 +35,10 @@ REMOTE_MISSING_MARK = "MACVM_MISSING"
 # ログイン画面のままだと root のままになる。
 NO_AQUA_MARK = "MACVM_NO_AQUA"
 
-# 観測できなかった項目の表示。prlctl が返しうる値 ("unknown" 等) と衝突しない形にする。
-# 捏造した文字列を観測値の位置へ置くと、実際にその値が返った場合と区別できなくなる。
+# GuestTools が読めなかったときの表示。prlctl が返しうる値 ("unknown" 等) と衝突しない
+# 形にしてある。観測値の位置へ prlctl が返しうる文字列を置くと、実際にその値が返った場合と
+# 区別できなくなるため。なお VM 状態 (State) の既定値は今もこの形になっていない
+# (ISSUE-53 で扱う)。ここが全体の規約だと読まないこと。
 UNKNOWN = "(未確認)"
 
 
@@ -113,10 +116,13 @@ def find_vm(vms: list[dict], vm_id: str) -> dict | None:
     prlctl が受け付ける識別子と同じ集合に揃える。ここだけ部分一致を許すと、macvm と prlctl を
     混ぜて使ったときに指す VM がずれる。
 
-    識別子は先に strip する。env ファイルやコピペ経由で前後に空白が混ざったとき、
-    「一覧に目的の名前が出ているのに引けない」という読みにくい失敗になる。空の識別子は
-    ここで弾く。`_require` は空白だけの値を truthy として通すので、正規化後の空文字が
-    ID キーを欠くレコードの "" と一致して無関係なレコードを返しうる。
+    名前の照合は生の識別子を先に、strip した識別子を後に見る。env ファイルやコピペ経由で
+    前後に空白が混ざったとき strip 無しでは「一覧に目的の名前が出ているのに引けない」と
+    いう読みにくい失敗になるが、strip だけにすると逆に、前後へ空白を持つ名前の VM を
+    その名前どおりに渡しても引けなくなる。両方を順に見ればどちらも引ける。
+
+    空の識別子はここで弾く。`_require` は空白だけの値を truthy として通すので、
+    正規化後の空文字が ID キーを欠くレコードの "" と一致して無関係なレコードを返しうる。
 
     走査は名前を全件見てから UUID を全件見る 2 パスにする。1 パスだとリストの並び順が
     優先順位になり、ある VM の名前が別の VM の UUID と一致するとき返るレコードが
@@ -125,9 +131,10 @@ def find_vm(vms: list[dict], vm_id: str) -> dict | None:
     ident = (vm_id or "").strip()
     if not ident:
         return None
-    for v in vms:
-        if str(v.get("Name", "")) == ident:
-            return v
+    for candidate in (vm_id, ident):
+        for v in vms:
+            if str(v.get("Name", "")) == candidate:
+                return v
     want = _normalize_uuid(ident)
     if not want:
         return None
@@ -148,11 +155,23 @@ def pick_ipv4(network: object) -> str | None:
 
     dict でない入力は例外にせず None へ倒す (parse_vm_list と同じ方針)。
     """
+    return scan_ipv4(network)[0]
+
+
+def scan_ipv4(network: object) -> tuple[str | None, list[str]]:
+    """(最初の妥当な IPv4, 妥当でなかった ipv4 値のリスト) を返す。
+
+    `pick_ipv4` が None を返す理由は「ipv4 エントリが無い」と「あるが全部壊れている」の
+    2 つあり、対処が違う。前者は起動直後なら待てば付くが、後者は待っても変わらない。
+    2 つを同じ「未割当」へ畳むと、診断が「数秒待って再実行」と案内し続けて利用者が
+    無限に待つ。壊れた値そのものを観測値に出さないと手掛かりがどこにも残らない。
+    """
     if not isinstance(network, dict):
-        return None
+        return None, []
     entries = network.get("ipAddresses")
     if not isinstance(entries, list):
-        return None
+        return None, []
+    malformed: list[str] = []
     for e in entries:
         if not isinstance(e, dict):
             continue
@@ -162,9 +181,10 @@ def pick_ipv4(network: object) -> str | None:
         try:
             ipaddress.IPv4Address(ip)
         except ValueError:
+            malformed.append(ip)
             continue
-        return ip
-    return None
+        return ip, malformed
+    return None, malformed
 
 
 def is_apipa(ip: str) -> bool:
@@ -192,9 +212,11 @@ def parse_tools(vm: dict) -> tuple[str | None, str | None]:
         return None, None
     state = tools.get("state")
     version = tools.get("version")
+    # 空文字も「読めなかった」へ倒す。畳まないと [FAIL] と観測値 (未確認) が同時に出て、
+    # exit 1 の根拠が出力から辿れなくなる。
     return (
-        state if isinstance(state, str) else None,
-        version if isinstance(version, str) else None,
+        state if isinstance(state, str) and state else None,
+        version if isinstance(version, str) and version else None,
     )
 
 
@@ -240,24 +262,48 @@ def remote_parent_mkdir_command(remote: str) -> str | None:
     return f"mkdir -p {shlex.quote(parent)}"
 
 
-def reject_tilde_remote(path: str, label: str) -> str | None:
-    """先頭が `~` のリモートパスを拒む理由を返す。問題なければ None。
+def reject_tilde_path(path: str, label: str) -> str | None:
+    """先頭が `~` のゲスト側パスを拒む理由を返す。問題なければ None。
 
-    `shlex.quote` はチルダ展開を殺すので、mkdir とサイズ照合はリテラルな `~` という名前の
-    ディレクトリを見る。一方 scp の `host:~/...` はリモート側で展開される。同じ引数が
-    2 つの別の場所を指し、転送が成功していてもサイズ照合が外れて「転送が途中で切れた」と
-    誤報する。ホーム直下にリテラルな `~` ディレクトリも残る。
+    `shlex.quote` はチルダ展開を殺すので、macvm が組み立てる sh コマンドはリテラルな `~`
+    という名前のディレクトリを見る。ゲスト側のシェルが展開する経路 (scp の `host:~/...`)
+    と食い違い、同じ引数が 2 つの別の場所を指す。
 
     展開をこちら側で再現するのはシェルの語彙の再実装になるので、境界で弾く。ssh の作業
     ディレクトリは `$HOME` なので、相対パスが等価な書き方として残り表現力は落ちない。
     展開されるのは先頭の `~` だけなので、途中に現れる `~` は正当なパスとして通す。
+
+    この関数は転送しない経路 (`--repo`) からも呼ばれるので、理由に scp を持ち出さない。
     """
     if not path.startswith("~"):
         return None
     return (
         f"{label} に ~ は使えません: {path}。"
-        "クォートするとゲスト側で展開されないため、scp の転送先とサイズ照合の対象がずれる。"
+        "クォートするとゲスト側で展開されないので、macvm が組み立てるコマンドは"
+        "リテラルな ~ ディレクトリを指す。"
         "$HOME 基準の相対パス (例 w/a.dmg) か絶対パスで指定する"
+    )
+
+
+def reject_directoryish_remote(path: str, label: str) -> str | None:
+    """転送先/元がファイルを名指ししていない書き方を拒む理由を返す。問題なければ None。
+
+    push では scp がディレクトリ宛の転送をその中へ置く (`host:w/` へ a.dmg を送ると
+    `w/a.dmg`)。空文字なら `$HOME` 直下。一方サイズ照合は渡された文字列をそのまま `[ -f ]` に
+    掛けるので偽になり、転送が完全に終わっていても「転送が途中で切れた可能性」で exit 1 に
+    なる。pull では scp がディレクトリを単一ファイルとして扱えないので、そもそも転送が
+    成立しない。どちらも `~` と同じ「同じ引数を scp と sh が別のものとして読む」欠陥クラス。
+
+    ここで塞げるのは書き方から判る形 (空・末尾 `/`) だけ。ゲスト側に同名のディレクトリが
+    既に在る場合は、問い合わせないと区別できないので通ってしまう (ISSUE-53)。
+    """
+    if path and not path.endswith("/"):
+        return None
+    return (
+        f"{label} はファイル名まで書いてください: {path or '(空)'}。"
+        "ディレクトリを渡すと scp とサイズ照合が同じものを見ません "
+        "(push は scp がディレクトリの中へ置くのに照合はディレクトリ自身を見る、"
+        "pull は scp が単一ファイルとして扱えない)"
     )
 
 
@@ -435,13 +481,38 @@ def _require(value: str | None, flag: str, env_key: str) -> str | None:
     return None
 
 
-def _refuse_tilde(path: str, label: str) -> bool:
-    """`~` 始まりなら理由を stderr へ出して True。呼び出し側は exit 2 で止める。"""
-    reason = reject_tilde_remote(path, label)
+def _refuse(reason: str | None) -> bool:
+    """拒む理由があれば stderr へ出して True。呼び出し側は exit 2 で止める。"""
     if reason is None:
         return False
     print(f"error: {reason}", file=sys.stderr)
     return True
+
+
+def _triage(host: str) -> str:
+    """接続が疑わしいときの切り分け先。
+
+    scp は `-q` 付きで、これは ssh(1) の warning と diagnostic も止める。閉じたポートへの
+    接続で出るはずの "Connection refused" が消えるので、scp の失敗は原因がほぼ残らない
+    形で返る。ssh 側も捕捉した経路では stderr を握っているだけで人には見えない。宛先を
+    実値で名指しして、次に叩くコマンドを出力に残す。
+    """
+    return f"macvm doctor --vm <名前 or UUID> --host {host} で切り分ける"
+
+
+def _remote_size_via_ssh(host: str, remote: str, capture) -> tuple[int | None, str | None]:
+    """(サイズ, ssh 自体が失敗した理由) を返す。両方 None なら「問い合わせは成功したが
+    ファイルが無い」。
+
+    rc を捨てると「ssh が落ちた」と「ファイルが無い」が同じ None になる。push は前者を
+    「転送が途中で切れた」、pull は「不在の可能性」と断定し、どちらも切り分け先を VM の
+    中へ逸らす。実際には scp が完全なファイルを届けた後で ssh だけが落ちた場合がある
+    (VM のスリープ、sshd の再起動、接続のタイムアウト)。
+    """
+    rc, out, err = capture(host, remote_size_command(remote))
+    if rc != 0:
+        return None, err.strip() or out.strip() or f"rc={rc}"
+    return parse_remote_size(out), None
 
 
 def _enable_line_buffering(*streams) -> None:
@@ -482,13 +553,15 @@ def cmd_resolve_ip(args: argparse.Namespace, *, run=run_capture) -> int:
         return 1
     name = str(vm.get("Name", vm_id))
     status = str(vm.get("State", "unknown"))
-    ip = pick_ipv4(vm.get("Network"))
+    ip, malformed = scan_ipv4(vm.get("Network"))
     if ip is None:
-        print(
-            f"error: IP を解決できません (status={status})。"
-            f'VM が起動していない場合は prlctl start "{name}" で起動する',
-            file=sys.stderr,
+        detail = (
+            f"prlctl が IPv4 として読めない値を返している: "
+            f"{', '.join(repr(x) for x in malformed)}"
+            if malformed
+            else f'VM が起動していない場合は prlctl start "{name}" で起動する'
         )
+        print(f"error: IP を解決できません (status={status})。{detail}", file=sys.stderr)
         return 1
     if is_apipa(ip):
         # stdout と exit code は変えない。このコマンドは ProxyCommand の中で動くので stdout は
@@ -599,14 +672,23 @@ def collect_doctor_checks(
         )
     )
 
-    ip = pick_ipv4(vm.get("Network"))
+    ip, malformed = scan_ipv4(vm.get("Network"))
     if ip is None:
+        # 「エントリが無い」と「あるが全部壊れている」を同じ「未割当」へ畳まない。
+        # 後者に「数秒待って再実行」と案内すると、待っても変わらないので無限に待つ。
         checks.append(
             Check(
                 "IP",
-                "未割当",
+                f"ipv4 として読めない値のみ: {', '.join(repr(x) for x in malformed)}"
+                if malformed
+                else "未割当",
                 ok=False,
-                hint="VM が起動直後だと未割当のことがある。数秒待って再実行する",
+                hint=(
+                    "prlctl が IPv4 として妥当でない値を返している。VM を再起動しても"
+                    "変わらないので、prlctl list -a -i -j の出力を直接確認する"
+                    if malformed
+                    else "VM が起動直後だと未割当のことがある。数秒待って再実行する"
+                ),
             )
         )
         # SSH は撃たない。ProxyCommand が resolve-ip に依存しているので、IP が無ければ
@@ -676,7 +758,7 @@ def cmd_doctor(
     console_probe=ssh_capture_full,
 ) -> int:
     # seam は 3 つとも転送する。1 つ落とすと、見えている seam を全部塞いだつもりの
-    # テストから実 ssh が飛ぶ (ConnectTimeout=10 なので 1 件あたり最大 10 秒の沈黙になる)。
+    # テストから実 ssh が飛び、SSH_OPTS の ConnectTimeout ぶんテストが沈黙する。
     vm_id = _env_or(args.vm, "MACVM_VM")
     if not _require(vm_id, "--vm", "MACVM_VM"):
         return 2
@@ -750,12 +832,16 @@ def _report_size_mismatch(expected: int, actual: int | None) -> None:
     )
 
 
-def cmd_push(args: argparse.Namespace, *, run=run_ssh, copy=scp, capture=ssh_capture) -> int:
+def cmd_push(
+    args: argparse.Namespace, *, run=run_ssh, copy=scp, capture=ssh_capture_full
+) -> int:
     host = _env_or(args.host, "MACVM_HOST")
     if not _require(host, "--host", "MACVM_HOST"):
         return 2
     remote = args.remote
-    if _refuse_tilde(remote, "remote"):
+    if _refuse(reject_tilde_path(remote, "remote")) or _refuse(
+        reject_directoryish_remote(remote, "remote")
+    ):
         return 2
     local = Path(args.local)
     if not local.is_file():
@@ -766,11 +852,19 @@ def cmd_push(args: argparse.Namespace, *, run=run_ssh, copy=scp, capture=ssh_cap
         print("error: VM のディレクトリ作成に失敗しました", file=sys.stderr)
         return 1
     if not copy(host, str(local), remote):
-        print(f"error: scp 失敗: {local}", file=sys.stderr)
+        print(f"error: scp 失敗: {local} (VM 未起動 / SSH 未到達の可能性)。{_triage(host)}",
+              file=sys.stderr)
         return 1
     # scp の rc 0 を「完了」と読み替えない。実体のサイズで途中切れを検出する。
     local_size = local.stat().st_size
-    remote_size = parse_remote_size(capture(host, remote_size_command(remote)))
+    remote_size, ssh_error = _remote_size_via_ssh(host, remote, capture)
+    if ssh_error is not None:
+        print(
+            f"error: 転送後のサイズ照合ができませんでした (ssh の失敗: {ssh_error})。"
+            f"ファイルは届いている可能性がある。{_triage(host)}",
+            file=sys.stderr,
+        )
+        return 1
     if remote_size != local_size:
         _report_size_mismatch(local_size, remote_size)
         return 1
@@ -778,16 +872,25 @@ def cmd_push(args: argparse.Namespace, *, run=run_ssh, copy=scp, capture=ssh_cap
     return 0
 
 
-def cmd_pull(args: argparse.Namespace, *, copy=scp_pull, capture=ssh_capture) -> int:
+def cmd_pull(args: argparse.Namespace, *, copy=scp_pull, capture=ssh_capture_full) -> int:
     host = _env_or(args.host, "MACVM_HOST")
     if not _require(host, "--host", "MACVM_HOST"):
         return 2
     remote = args.remote
-    if _refuse_tilde(remote, "remote"):
+    if _refuse(reject_tilde_path(remote, "remote")) or _refuse(
+        reject_directoryish_remote(remote, "remote")
+    ):
         return 2
     local = Path(args.local)
     # 不在を後段のサイズ照合の失敗に化けさせず、転送前に明示して止める。
-    remote_size = parse_remote_size(capture(host, remote_size_command(remote)))
+    remote_size, ssh_error = _remote_size_via_ssh(host, remote, capture)
+    if ssh_error is not None:
+        print(
+            f"error: リモートのサイズを問い合わせる ssh が失敗しました: {ssh_error}。"
+            f"ファイルの不在とは限らない。{_triage(host)}",
+            file=sys.stderr,
+        )
+        return 1
     if remote_size is None:
         print(
             f"error: リモートファイルのサイズを取得できません (不在の可能性): {host}:{remote}",
@@ -796,7 +899,8 @@ def cmd_pull(args: argparse.Namespace, *, copy=scp_pull, capture=ssh_capture) ->
         return 1
     local.parent.mkdir(parents=True, exist_ok=True)
     if not copy(host, remote, str(local)):
-        print(f"error: scp 失敗: {remote}", file=sys.stderr)
+        print(f"error: scp 失敗: {remote} (VM 未起動 / SSH 未到達の可能性)。{_triage(host)}",
+              file=sys.stderr)
         return 1
     local_size = local.stat().st_size if local.is_file() else None
     if local_size != remote_size:
@@ -823,14 +927,11 @@ def _run_remote_script(host: str, kind: str, body: str, *, run, copy) -> int:
     remote = remote_script_path(kind)
     try:
         if not copy(host, local, remote):
-            # scp は -q 付きで、これは ssh(1) の warning と diagnostic も止める。閉じた
-            # ポートへの接続で出るはずの "Connection refused" が消え、macvm 全体で
-            # 接続失敗が診断情報ほぼ無しで返る唯一の経路になる。切り分け先を名指しする。
             # 非 0 で終わったスクリプト自身の失敗 (下の run) には付けない。利用者の
             # コマンドが失敗しただけのときに接続の切り分けを勧めると誤誘導になる。
             print(
                 f"error: {kind} スクリプトの scp に失敗しました (VM 未起動 / SSH 未到達の可能性)。"
-                f"macvm doctor --vm <名前 or UUID> --host {host} で切り分ける",
+                f"{_triage(host)}",
                 file=sys.stderr,
             )
             return 1
@@ -863,7 +964,7 @@ def cmd_health(args: argparse.Namespace, *, run=run_ssh_code, copy=scp) -> int:
     if not _require(host, "--host", "MACVM_HOST"):
         return 2
     repo = _env_or(args.repo, "MACVM_REPO")
-    if repo and _refuse_tilde(repo, "--repo"):
+    if repo and _refuse(reject_tilde_path(repo, "--repo")):
         return 2
     # `--check-tools "git, cargo"` のように空白を入れて書かれても拾えるようにする。
     # strip しないと " cargo" を探して導入済みのツールを未導入と誤報する。
