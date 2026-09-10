@@ -13,3 +13,24 @@
 # 作り直すと id が変わって一致しなくなるが、そのときは CI が赤で教えてくれる
 # (fail-closed)。黙って無効化されることはない。
 8227014bed73fcba9d9997c27a88d439641de60a:docs/issues/4_VM の pwsh probe が偽陽性で exec と health が実機で動かない/issue.md:user-path:18
+
+# vm-uuid ルールを足したことで、ISSUE-15 の scrub より前の test_winvm.py が引っかかる
+# ようになった。当時の fixture は開発機に実在する VM の UUID をそのまま使っており、
+# `prlctl list -a` の出力と 1 文字違わず一致していた (実測)。ツリー側は 2026-08-24 に
+# 合成 fixture へ置換済みで、置換後も検査力が落ちないことを確認してある。
+#
+# 履歴を書き換えないのは上と同じ理由。PUBLIC リポジトリの main への force-push になる。
+# 漏れたのは開発機のローカル VM の識別子で、外部から到達できる資源を指さない。
+#
+# gitleaks はコミットの差分を走査するので、fingerprint は行を追加したコミットを指す。
+# d039316 (winvm を Parallels 一本化へ移した回) が 8 件、その 3 日後に exec などを
+# 足した 8227014 が 1 件で、計 9 件になる。
+8227014bed73fcba9d9997c27a88d439641de60a:skills/devops/windows-vm-verification/test_winvm.py:vm-uuid:914
+d03931638f41a945e26e56407810d1adff872114:skills/devops/windows-vm-verification/test_winvm.py:vm-uuid:28
+d03931638f41a945e26e56407810d1adff872114:skills/devops/windows-vm-verification/test_winvm.py:vm-uuid:36
+d03931638f41a945e26e56407810d1adff872114:skills/devops/windows-vm-verification/test_winvm.py:vm-uuid:89
+d03931638f41a945e26e56407810d1adff872114:skills/devops/windows-vm-verification/test_winvm.py:vm-uuid:92
+d03931638f41a945e26e56407810d1adff872114:skills/devops/windows-vm-verification/test_winvm.py:vm-uuid:97
+d03931638f41a945e26e56407810d1adff872114:skills/devops/windows-vm-verification/test_winvm.py:vm-uuid:101
+d03931638f41a945e26e56407810d1adff872114:skills/devops/windows-vm-verification/test_winvm.py:vm-uuid:281
+d03931638f41a945e26e56407810d1adff872114:skills/devops/windows-vm-verification/test_winvm.py:vm-uuid:413
