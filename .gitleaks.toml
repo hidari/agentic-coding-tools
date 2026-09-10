@@ -49,21 +49,39 @@ tags = ["pii", "path"]
     '''[\\/]+Users[\\/]+(?i)(example|user|username|runner|shared|Public|Default|DefaultAppPool|All)([\\/."]|$)''',
   ]
 
-# 実 VM の UUID。ISSUE-15 のスイープで開発機に実在する UUID が 2 件、テストの fixture の
-# 中から出た。形が決まっているので固有名詞リストを要さず、この PUBLIC な設定ファイルに
-# ルールを置ける。
+# UUID 形の識別子。ISSUE-15 のスイープで開発機に実在する VM の UUID が 2 件、テストの
+# fixture の中から出た。形が決まっているので固有名詞リストを要さず、この PUBLIC な設定
+# ファイルにルールを置ける。実在するかどうかは形からは分からないので、regex は UUID 形を
+# 一律に撃ち、実在しない値は下の allowlist が値で外す。
 #
 # **パスで免除しない。** 露出は test_winvm.py の中で起きたので、テストファイルを免除すると
 # 見つけた穴をそのまま作り直すことになる。免除は値で持ち、新しい fixture を足すときは
 # ここを触らせる。触る手間が「その値は公開してよいか」を一度考えさせる。
+#
+# **単語境界 \b を置かない。** 当初は前後に置いていたが、素通りする形が 3 つあった (実測)。
+#
+#   seed_<UUID>   `_` は単語文字なので先頭の境界が成立しない
+#   <UUID>9       末尾 12 桁の直後に hex が続くと末尾の境界が成立しない
+#   <UUID>z       同上。hex でない単語文字でも同じ
+#
+# 1 つ目は仮想の話ではなく、security-blue-red-team plugin が `security_redteam_<UUID>` を
+# seed の既定形式として文書化している。境界を外しても免除は縮まない。免除は match 全体
+# (= 素の UUID) に ^...$ で掛かるので、接頭辞や接尾辞が付いても fixture は fixture のまま
+# 許可される (実測)。ハイフンを持たない hex 列 (sha256 等) は 8-4-4-4-12 の形に合わない。
 [[rules]]
 id = "vm-uuid"
-description = "実マシンに実在する VM やデバイスの UUID の漏洩"
-regex = '''\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b'''
+description = "UUID 形の識別子の漏洩 (実在する VM やデバイスのものを想定)"
+regex = '''[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'''
 tags = ["pii", "identifier"]
 
   # 大小を両方受けるのは、小文字だけで数えて取りこぼした実績が 2 度あるため
   # (ISSUE-15 の「大文字小文字を無視した再計測」と、それを書いている最中の sed)。
+  #
+  # **(?i) はエントリごとに独立しない。** gitleaks は allowlist の regexes を 1 本へ束ねて
+  # 評価するので、先頭エントリの (?i) が後続エントリすべてへ前方に漏れる (実測: (?i) 付きを
+  # 先頭に置くと (?i) 無しの後続まで大小無視になり、順序を逆にすると効かない)。どの
+  # エントリの (?i) が効いているかは書いた場所では決まらないので、全エントリに書いて
+  # 並べ替えで壊れないようにしてある。1 つ消したときに何が起きるかは対照ケースが決める。
   [rules.allowlist]
   description = "合成 fixture と仕様上固定の値は許可"
   regexTarget = "match"
@@ -75,18 +93,36 @@ tags = ["pii", "identifier"]
 
 # メールアドレス。CLAUDE.md が MUST で禁じているのに、既定ルールも user-path も 1 件も
 # 見ていなかった (対照ファイルで実測)。
+#
+# 形だけで撃つので、メールボックスではない `user@host` 形も捕まえる。実測で確かめた
+# 既知の誤検出クラスを挙げておく。いずれも現在の追跡ツリーには 1 件も無い。
+#
+# ここへ実物の形を literal で書けるのは、gitleaks が `.gitleaks.toml` という名前の
+# ファイルを走査対象から外すため (実測: 別名へコピーすると同じ内容が 12 件検出される)。
+# 上の user-path ルールの説明にある `/Users/name` も同じ理由で書けている。
+# 対照ケース側 (scripts/check-leak-guard-rules.py) にはこの免除が無いので、
+# あちらでは値を変数から組み立てること。
+#
+#   git@github.com:owner/repo.git       SSH の clone URL
+#   admin@host.local / runner@box.lan   ssh の user@host
+#   NNN+user@users.noreply.github.com   GitHub の noreply 形
+#
+# 免除へ足していないのは、壊れる向きが fail-closed (コミットが止まる) で目に見えるうえ、
+# 内部ホスト名は層 2 が扱う対象そのものだから。必要になったらここへ値で足し、対照も
+# 同時に足すこと。値を足さずに `--no-verify` で回すと、この層だけでなく全層が飛ぶ。
 [[rules]]
 id = "email-address"
 description = "メールアドレスの漏洩"
 regex = '''\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'''
 tags = ["pii", "contact"]
 
-  # RFC 2606 と RFC 6761 が文書用・テスト用に予約したドメイン。追跡下に実在する 8 出現は
-  # すべて .invalid で、この免除に収まる (実測)。
+  # RFC 2606 と RFC 6761 が文書用・テスト用に予約したドメイン。予約された 2LD の下位
+  # (mail.example.com 等) も文書中の例として現れるので覆う。覆っている範囲の canonical は
+  # 対照ケース (scripts/check-leak-guard-rules.py) で、件数はここへ書かない。
   [rules.allowlist]
   description = "文書用に予約されたドメイン宛は許可"
   regexTarget = "match"
   regexes = [
-    '''(?i)@example\.(com|org|net)$''',
+    '''(?i)@([A-Za-z0-9-]+\.)*example\.(com|org|net)$''',
     '''(?i)\.(test|example|invalid|localhost)$''',
   ]
