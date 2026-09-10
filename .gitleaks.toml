@@ -48,3 +48,45 @@ tags = ["pii", "path"]
   regexes = [
     '''[\\/]+Users[\\/]+(?i)(example|user|username|runner|shared|Public|Default|DefaultAppPool|All)([\\/."]|$)''',
   ]
+
+# 実 VM の UUID。ISSUE-15 のスイープで開発機に実在する UUID が 2 件、テストの fixture の
+# 中から出た。形が決まっているので固有名詞リストを要さず、この PUBLIC な設定ファイルに
+# ルールを置ける。
+#
+# **パスで免除しない。** 露出は test_winvm.py の中で起きたので、テストファイルを免除すると
+# 見つけた穴をそのまま作り直すことになる。免除は値で持ち、新しい fixture を足すときは
+# ここを触らせる。触る手間が「その値は公開してよいか」を一度考えさせる。
+[[rules]]
+id = "vm-uuid"
+description = "実マシンに実在する VM やデバイスの UUID の漏洩"
+regex = '''\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b'''
+tags = ["pii", "identifier"]
+
+  # 大小を両方受けるのは、小文字だけで数えて取りこぼした実績が 2 度あるため
+  # (ISSUE-15 の「大文字小文字を無視した再計測」と、それを書いている最中の sed)。
+  [rules.allowlist]
+  description = "合成 fixture と仕様上固定の値は許可"
+  regexTarget = "match"
+  regexes = [
+    '''(?i)^aaaa1111-bbbb-4ccc-8ddd-eeee22223333$''',
+    '''(?i)^ffff4444-aaaa-4bbb-8ccc-dddd55556666$''',
+    '''^00000000-0000-0000-0000-000000000000$''',
+  ]
+
+# メールアドレス。CLAUDE.md が MUST で禁じているのに、既定ルールも user-path も 1 件も
+# 見ていなかった (対照ファイルで実測)。
+[[rules]]
+id = "email-address"
+description = "メールアドレスの漏洩"
+regex = '''\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'''
+tags = ["pii", "contact"]
+
+  # RFC 2606 と RFC 6761 が文書用・テスト用に予約したドメイン。追跡下に実在する 8 出現は
+  # すべて .invalid で、この免除に収まる (実測)。
+  [rules.allowlist]
+  description = "文書用に予約されたドメイン宛は許可"
+  regexTarget = "match"
+  regexes = [
+    '''(?i)@example\.(com|org|net)$''',
+    '''(?i)\.(test|example|invalid|localhost)$''',
+  ]
