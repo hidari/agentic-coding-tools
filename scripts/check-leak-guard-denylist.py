@@ -44,7 +44,12 @@ worktree は symlink 追従 (リポジトリ外の実体を読み、コミット
 `rev-parse --show-toplevel` で解決する。
 
 パスも照合対象に含める。追跡ファイルのパスは走査対象と同じ自由テキストで、このリポジトリの
-Issue ディレクトリ名は日本語タイトルを含む (追跡 140 件中 59 件が非 ASCII パス。実測)。
+Issue ディレクトリ名は日本語タイトルを含む (追跡ファイルの 4 割強が非 ASCII パス。実測)。
+
+内容の照合から外れるのは gitlink・上限超えの blob・NUL を含むファイルの 3 つ。UTF-16 は
+NUL を持つので 3 つ目に落ちるが、BOM がある形だけはテキストとして読んで走査する。BOM 無しの
+UTF-16 は binary に数えたまま残る (BOM 無しから byte order を当てる形は、外すと中身が化けた
+まま「成功」するので採らない)。除外の件数は要約に出るので、0 でない値として見える。
 
 ## 照合
 
@@ -59,7 +64,8 @@ Issue や PR への貼り付け、CI ログ、エージェント経由なら会�
 座標だけで、座標はリストを持っている人だけがローカルで解決できる。
 
 パス由来の検出でパスを印字すると出力が語そのものになるので、パスが禁止語に一致した
-ファイルは `tracked file <i>` という位置指標で報告する。列オフセットや一致長も出さない
+ファイルは位置指標で報告する。組み立てと oid を併記する理由は `_locator` が持つ。検査不能の
+メッセージも同じ位置指標を使う。列オフセットや一致長は出さない
 (同じ行番号を指す複数行の共通部分文字列から語が計算できるため、1 件で確定させない)。
 
 座標に `#<数字>` の形を使わないのは、このリポジトリが `#N` を GitHub の番号空間を指す記法
@@ -134,8 +140,14 @@ CANARY_TEMPLATE = "canary {} canary"
 # ことがこの分岐の存在理由なので、テストは文言まで見る (定数を共有して drift を防ぐ)。
 BLANK_VALUE_HINT = "の値が空・空白のみ・前後に空白を持つ"
 
-_MODE_SYMLINK = "120000"
 _MODE_GITLINK = "160000"
+
+# BOM を見てから UTF-16 と判定する。BOM 無しで decode("utf-16") を試す形は採らない:
+# 8 バイトのランダム列の 89%・32 バイトの 61% が「デコードに成功」してテキスト扱いに
+# なり (実測。4096 バイトでは 0%)、小さいバイナリほど誤判定する。さらに BOM 無しの
+# UTF-16BE は成功したうえで中身が化けるので、失敗がエラーではなく結果として返る。
+# BOM は PNG/JPEG/GIF/PDF/ZIP/GZIP/TTF/WOFF2/ELF/Mach-O のどの magic とも衝突しない (実測)
+_UTF16_BOMS = (b"\xff\xfe", b"\xfe\xff")
 
 
 class Unable(RuntimeError):
@@ -272,6 +284,16 @@ def parse_entries(raw: bytes) -> list[Entry]:
     entries = []
     for lineno, line in enumerate(text.split("\n"), 1):
         s = line.strip()
+        # 本文側とリスト側では同じ「\n だけを境界にする」規約の帰結が違う。本文側は
+        # 座標がずれるだけだが、リスト側はエントリが黙って結合して比較対象から消える。
+        # CR のみのファイルは全体が 1 エントリになり、entries 非 0 / self_check 成功 /
+        # 検出 0 件という最も健全に見える形で緑を返す (実測)。self_check の canary は
+        # parse 後の結合済み raw から作るので、この形を原理的に見られない
+        if s and len(s.splitlines()) > 1:
+            raise Unable(
+                f"禁止語リストの {lineno} 行目が \\n 以外の行境界文字を含む。"
+                "エディタ上の行と一致せず、エントリが黙って結合する"
+            )
         if not s or s.startswith("#"):
             continue
         entries.append(Entry(lineno, fold(s), s))
@@ -326,6 +348,10 @@ def self_check(entries: list[Entry]) -> list[Entry]:
     「エントリ数は非 0 なのに 1 件も当たらない」形はエントリ数の要約まで正常に見えるので、
     出力からは読めない。BOM・NFD・末尾空白・fold の片側適用がどれもこの形で出る。
     照合の前に毎回走らせて、静かな緑を騒がしい赤へ変える。
+
+    射程は「parse を通過したエントリが自分自身に一致するか」まで。canary は parse 後の
+    raw から作るので、parse の段階で結合・消失したエントリは原理的に見えない。その面は
+    parse_entries の行境界の検査が持つ。
     """
     return [e for e in entries if not scan_text(canary_text(e), [e])]
 
@@ -401,8 +427,8 @@ def _ls_files(root: Path) -> list[tuple[str, str, str]]:
 
     -z を使うのは、既定出力が非 ASCII パスを C クォートするため (実測:
     `"docs/issues/ISSUE-1_\\343\\201\\202"`)。クォートされた名前は照合にも open にも
-    使えず、しかもエラーではなく短い正常な結果で返る。このリポジトリは追跡 140 件中
-    59 件が非 ASCII パスなので、-z を外すと 4 割強が走査面から落ちる (実測)。
+    使えず、しかもエラーではなく短い正常な結果で返る。このリポジトリは追跡ファイルの
+    4 割強が非 ASCII パスなので、-z を外すとその分が走査面から落ちる (実測)。
     """
     out = _git(root, "ls-files", "-s", "-z")
     entries = []
@@ -445,20 +471,35 @@ def _blob_sizes(root: Path, oids: list[str]) -> list[int]:
     return sizes
 
 
-def _read_blobs(root: Path, oids: list[str], sizes: list[int]) -> list[bytes]:
-    """--batch で内容を取る。合計が BATCH_BYTES を超えないチャンクに分ける。"""
-    bodies: list[bytes] = []
+def _iter_blobs(root: Path, oids: list[str], sizes: list[int]):
+    """--batch で内容を取り、読めたものから 1 件ずつ返す。
+
+    list へ貯めて返す形は採らない。それだと BATCH_BYTES の分割が抑えるのは cat-file
+    1 回の stdout だけで、常駐量は走査対象の合計サイズに比例する (ホストには cgroup
+    境界が無いというのが CLAUDE.md の [MUST GLOBAL])。
+
+    逐次返しても 1 チャンクぶんにはならない。_read_chunk が stdout 全体を持ったまま
+    そこから切り出した bytes のリストも作るので、常駐はチャンクの約 2 倍で頭打ちになる
+    (実測: 合計 35.2 MiB を BATCH 8 MiB で読むと peak 17.6 MiB。list へ貯める版は
+    39.6 MiB で合計に比例する)。頭打ちになることが要件で、倍率は要件ではない。
+
+    上限の強制もここへ置く。呼び出し側の選別だけに頼ると、選別を外す変更が「読まずに
+    除外する」という保証を黙って落とす。ここなら blob を読む関数自身が上限を知っている。
+    """
     chunk: list[str] = []
     total = 0
     for oid, size in zip(oids, sizes):
+        if size > MAX_BLOB_BYTES:
+            # 序数はこの関数からは分からないので oid だけを出す。捏造した序数を
+            # 位置指標の形で出すと、運用者が引ける鍵に見えて別のファイルを指す
+            raise Unable(f"上限を超える blob を読もうとした (oid {oid[:12]})")
         if chunk and total + size > BATCH_BYTES:
-            bodies.extend(_read_chunk(root, chunk))
+            yield from _read_chunk(root, chunk)
             chunk, total = [], 0
         chunk.append(oid)
         total += size
     if chunk:
-        bodies.extend(_read_chunk(root, chunk))
-    return bodies
+        yield from _read_chunk(root, chunk)
 
 
 def _read_chunk(root: Path, oids: list[str]) -> list[bytes]:
@@ -503,20 +544,35 @@ def scan_tracked(start: Path, entries: list[Entry]) -> Report:
             for entry_lineno in scan_path(path, entries)
         )
 
-    # 内容は blob から読む。gitlink は別リポジトリの commit を指すので読めない
+    # 内容は blob から読む。gitlink は別リポジトリの commit を指すので読めない。
+    # symlink は除外しない: blob の中身がリンク先パス文字列で、それ自体が走査面に要る
     readable = [(i, m, o, p) for i, (m, o, p) in enumerate(tracked, 1) if m != _MODE_GITLINK]
     gitlinks = len(tracked) - len(readable)
     sizes = _blob_sizes(root, [o for _, _, o, _ in readable])
 
     wanted = [(i, p, o, s) for (i, _m, o, p), s in zip(readable, sizes) if s <= MAX_BLOB_BYTES]
     oversize = len(readable) - len(wanted)
-    bodies = _read_blobs(root, [o for _, _, o, _ in wanted], [s for _, _, _, s in wanted])
-    # zip は短い方で黙って止まるので、長さのずれは「一部を走査しただけの緑」になる
-    if len(bodies) != len(wanted):
-        raise Unable("読み出した blob の数が走査対象と一致しない")
+    blobs = _iter_blobs(root, [o for _, _, o, _ in wanted], [s for _, _, _, s in wanted])
 
-    scanned = binary = 0
-    for (index, path, oid, _size), body in zip(wanted, bodies):
+    scanned = binary = consumed = 0
+    for (index, path, oid, _size), body in zip(wanted, blobs):
+        consumed += 1
+        if body.startswith(_UTF16_BOMS):
+            # UTF-16 のテキストは ASCII 域の文字ごとに NUL を持つので、NUL による binary
+            # 判定を先に置くと丸ごと未走査になる。Windows のエディタが書く形なので、
+            # 非 ASCII の禁止語を運ぶ経路としては CP932 と同程度に現実的
+            try:
+                text = body.decode("utf-16")
+            except UnicodeDecodeError:
+                raise Unable(
+                    f"UTF-16 の BOM を持つのに読めない追跡ファイルがある ({_locator(index, oid)})"
+                ) from None
+            scanned += 1
+            findings.extend(
+                Finding(index, path, oid, lineno, entry_lineno, False)
+                for lineno, entry_lineno in scan_text(text, entries)
+            )
+            continue
         if b"\0" in body:
             binary += 1
             continue
@@ -527,7 +583,7 @@ def scan_tracked(start: Path, entries: list[Entry]) -> Report:
             # 最も検査されない形式になる。unreadable に数えて緑を返すとバイナリを飛ばした
             # ときと同じ数え方になり、要約を読んでも異常に見えない
             raise Unable(
-                f"UTF-8 で読めない追跡ファイルがある (tracked file {index})。"
+                f"UTF-8 で読めない追跡ファイルがある ({_locator(index, oid)})。"
                 "テキストなら UTF-8 へ直し、バイナリなら NUL を含む形で保存する"
             ) from None
         scanned += 1
@@ -536,22 +592,38 @@ def scan_tracked(start: Path, entries: list[Entry]) -> Report:
             for lineno, entry_lineno in scan_text(text, entries)
         )
 
+    # zip は短い方で黙って止まるので、長さのずれは「一部を走査しただけの緑」になる。
+    # 逐次消費では len() が取れないので数え、余った側も next() で見る (多い向きのずれも
+    # zip に飲まれる)
+    if consumed != len(wanted) or next(blobs, None) is not None:
+        raise Unable("読み出した blob の数が走査対象と一致しない")
+
     return Report(findings, len(tracked), scanned, binary, oversize, gitlinks)
 
 
 # --- 入口 ----------------------------------------------------------------------
 
 
+def _locator(index: int, oid: str) -> str:
+    """パスの代わりに出す位置指標。
+
+    序数は走査した index に対するもので、運用者が後から引く `git ls-files` とずれるので
+    oid を併記する (理由は Finding の docstring)。組み立てを 1 箇所に集約するのは、
+    位置指標を出す場所が増えたときに片方だけ oid を落とす形を避けるため。実際に
+    検査不能メッセージの側が序数だけを出しており、一時 index では別のファイルを指していた。
+    """
+    return f"tracked file {index} (oid {oid[:12]})"
+
+
 def _render(finding: Finding, tainted: set[str]) -> str:
     """検出 1 件を座標だけの行にする。
 
     パスが禁止語に一致したファイルは、パスを印字すると出力が語そのものになるので
-    位置指標へ置き換える。序数は走査した index に対するものなので oid を併記する
-    (理由は Finding の docstring)。oid は blob のハッシュで、blob 自体はコミットされて
+    位置指標へ置き換える。oid は blob のハッシュで、blob 自体はコミットされて
     公開されるものなので、これを出しても露出は増えない。
     """
     if finding.path in tainted:
-        label = f"tracked file {finding.index} (oid {finding.oid[:12]})"
+        label = _locator(finding.index, finding.oid)
     else:
         label = finding.path
     if finding.is_path:

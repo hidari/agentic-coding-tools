@@ -7,7 +7,7 @@ scripts/check-leak-guard-rules.py が NAME 変数で解いている。
 
 この検査は「緑のまま何も見ていない」形が最も危険なので、テストの重心は検出側ではなく
 「検査不能を緑にしないこと」に置く。禁止語リストが空・BOM 付き・NFD・fold の片側適用
-ミスのいずれでも、素朴な実装は「走査したファイル 140 個 / 違反なし」という最も健全に
+ミスのいずれでも、素朴な実装は「走査したファイル全件 / 違反なし」という最も健全に
 見える要約で緑を返す (前セッションの失敗モード列挙で 5 角度すべてが独立に指摘した形)。
 
 fixture は tempfile + git init で作る。実ツリーに依存すると、現ツリーがたまたま合格して
@@ -27,6 +27,7 @@ import tempfile
 import unicodedata
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 CHECKER = "scripts/check-leak-guard-denylist.py"
@@ -58,6 +59,26 @@ GIT_ENV = {
     "GIT_COMMITTER_EMAIL": "probe@example.invalid",
 }
 
+# GIT_ENV が守るのは env= を渡した subprocess だけ。このファイルは scan_tracked と main を
+# プロセス内でも呼び、その先の checker._git は env= 無しで git を起こすので os.environ を
+# 読む。git は commit -a / commit -- <paths> のとき hook へ GIT_INDEX_FILE を渡すため、
+# 隔離が無いと fixture の tempdir ではなく呼び出し元の index を読む (実測: この形で
+# TrackedSurface の 7 件が errors になる)。先例と理由は scripts/test_check_related_refs.py
+_GIT_ENV_PATCH = mock.patch.dict(os.environ, GIT_ENV, clear=True)
+
+
+def setUpModule() -> None:
+    _GIT_ENV_PATCH.start()
+
+
+def tearDownModule() -> None:
+    _GIT_ENV_PATCH.stop()
+
+
+def git_vars(env) -> dict[str, str]:
+    """環境の GIT_* だけを取り出す。プロセスの環境と GIT_ENV を同じ規約で比べるため。"""
+    return {k: v for k, v in env.items() if k.startswith("GIT_")}
+
 
 def load():
     """ハイフン名のスクリプトは import 文では読めないため importlib で読む。"""
@@ -74,7 +95,13 @@ WORD = "zorblatt"
 WORD_JA = "ほげ社内"
 # casefold と lower の差を作る語。片側 lower・片側 casefold の実装で外れる
 WORD_SHARP_S = "Straße"
-FICTIONAL = (WORD, WORD_JA, WORD_SHARP_S, "quuxcorp")
+# 表現差の対照。WORD の全角大文字形と、半角形を持つカタカナ語を定数で持つ。
+# 漢字を含む WORD_JA には半角形が無いのでカナ側は別に要る。inline の literal に
+# しないのは、架空語であることの保証と assertNoSecrets の射程を 1 箇所へ寄せるため
+WORD_FW = "ＺＯＲＢＬＡＴＴ"
+WORD_KANA = "ゾルバット"
+WORD_KANA_HW = "ｿﾞﾙﾊﾞｯﾄ"
+FICTIONAL = (WORD, WORD_JA, WORD_SHARP_S, WORD_FW, WORD_KANA, WORD_KANA_HW, "quuxcorp")
 
 # 見えない文字。fold がこれらを吸収すること (本文側) と、エントリが実質空になる形を
 # 検査不能へ倒すこと (リスト側) の両方で使う
@@ -151,7 +178,7 @@ class Fold(unittest.TestCase):
     def test_identity_holds_for_tricky_literals(self):
         # 同じ literal を両側へ置いたとき必ず当たること。lower と casefold の混用や、
         # 本文側だけ NFKC をもう一度掛ける実装はここで落ちる
-        for word in (WORD, WORD_JA, WORD_SHARP_S, "ǰ", "ΐ", "がぎぐ", "ＨＡＭＩＬＴＯＮ"):
+        for word in (WORD, WORD_JA, WORD_SHARP_S, "ǰ", "ΐ", "がぎぐ", WORD_FW):
             with self.subTest(word=word):
                 hits = checker.scan_text(f"x {word} y", entries_of(word))
                 self.assertEqual(hits, [(1, 1)], f"{word!r} が自分自身に一致しない")
@@ -191,9 +218,9 @@ class Fold(unittest.TestCase):
         # IME の全角、Finder / zip 由来の NFD、旧システムの半角カナ。どれも運用者の
         # 事故として現実に入る表現差で、素朴な部分一致は 3 形とも素通りする
         cases = [
-            ("hamilton", "ＨＡＭＩＬＴＯＮ project"),
+            (WORD, f"{WORD_FW} project"),
             ("がぎぐ", unicodedata.normalize("NFD", "がぎぐ")),
-            ("ハミルトン", "ﾊﾐﾙﾄﾝ"),
+            (WORD_KANA, WORD_KANA_HW),
             ("a b", "a　b"),
         ]
         for word, line in cases:
@@ -204,7 +231,7 @@ class Fold(unittest.TestCase):
         # 逆向き。fold がリスト側にも掛かっていることを pin する。片側適用だと
         # 上のテストだけが緑になり、リストへ全角で書いた語が永久に当たらない
         cases = [
-            ("ＨＡＭＩＬＴＯＮ", "hamilton project"),
+            (WORD_FW, f"{WORD} project"),
             (unicodedata.normalize("NFD", "がぎぐ"), "がぎぐ"),
         ]
         for word, line in cases:
@@ -216,7 +243,7 @@ class Fold(unittest.TestCase):
         # PDF / Word 由来の SHY、Web ページ由来の ZWSP がこの形で入る
         for c in (ZWSP, SHY, BOM, "⁠"):
             with self.subTest(char=hex(ord(c))):
-                self.assertTrue(checker.scan_text(f"hamil{c}ton", entries_of("hamilton")))
+                self.assertTrue(checker.scan_text(f"zorb{c}latt", entries_of(WORD)))
 
     def test_does_not_absorb_spelling_variants(self):
         # 負の pin。ここが吸収する側へ動いたらこのテストが赤くなり、docstring の
@@ -230,6 +257,21 @@ class Fold(unittest.TestCase):
     def test_does_not_match_across_lines(self):
         # 行単位の照合なので行を跨いだ語は原理的に当たらない。既知の限界として pin する
         self.assertEqual(checker.scan_text("zorb\nlatt", entries_of(WORD)), [])
+
+
+class EnvironmentIsolation(unittest.TestCase):
+    """プロセス内呼び出しが呼び出し元の git 環境を継承しないことを固定する。
+
+    run-python-tests.py の child_env も GIT_* を落とすが、防御を 1 層に頼らない。
+    直接 `python3 -m unittest` で回す開発時や、git hook から継承した環境ではその層が無い。
+    """
+
+    def test_the_process_environment_carries_the_isolated_git_vars(self):
+        # 非空虚性を先に見るのは、GIT_ENV から GIT_* の追加が落ちると両辺が空になり
+        # 比較が無条件に通るため。合格の観測値と、機構が働かなかったときの観測値が
+        # 同じになる形をこの 1 行が分けている
+        self.assertTrue(git_vars(GIT_ENV), "GIT_ENV が GIT_* を持たず pin が空虚")
+        self.assertEqual(git_vars(GIT_ENV), git_vars(os.environ))
 
 
 class LineNumbering(unittest.TestCase):
@@ -324,6 +366,38 @@ class DenylistValidation(unittest.TestCase):
             checker.load_entries(path)
         self.assertIn("2", str(cm.exception))
 
+    def test_non_lf_line_boundaries_are_unable(self):
+        # 本文側とリスト側で同じ「\n だけを境界にする」規約の帰結が違う。リスト側では
+        # エントリが結合して比較対象から消え、entries 非 0 / self_check 成功 / 検出 0 件
+        # という最も健全に見える形で緑になる。self_check の canary は parse 後の raw から
+        # 作るのでこの形を原理的に見られず、ここで止めるしかない
+        for label, body in (
+            ("cr-only", f"{WORD}\r{WORD_JA}\r"),
+            ("line-separator", f"{WORD} {WORD_JA}\n"),
+            ("after-comment", f"# note {WORD}\n"),
+        ):
+            with self.subTest(label=label):
+                path = self.dir / f"{label}.txt"
+                path.write_text(body, encoding="utf-8")
+                with self.assertRaises(checker.Unable) as cm:
+                    checker.load_entries(path)
+                self.assertIn("1", str(cm.exception))
+                # 語を出さないこと。座標だけで報告する
+                self.assertNotIn(WORD, str(cm.exception))
+
+    def test_lf_and_crlf_lists_still_load(self):
+        # 上の負の対照。CRLF の \r は strip が落とすので行境界の検査に掛からない。
+        # これが無いと「全部 Unable にする」実装でも上のテストが緑になる
+        for label, body in (
+            ("lf", f"{WORD}\n{WORD_JA}\n"),
+            ("crlf", f"{WORD}\r\n{WORD_JA}\r\n"),
+        ):
+            with self.subTest(label=label):
+                path = self.dir / f"{label}.txt"
+                path.write_text(body, encoding="utf-8", newline="")
+                entries = checker.load_entries(path)
+                self.assertEqual([e.raw for e in entries], [WORD, WORD_JA])
+
     def test_non_utf8_list_is_unable_not_silently_partial(self):
         # UTF-16 保存を errors='replace' で読むとエントリ数は数えられるのに 1 件も
         # 当たらない。encoding 指定だけだと traceback で落ちる
@@ -360,8 +434,8 @@ class SelfCheck(unittest.TestCase):
         # 掛かっていない」実装を検出できず、自明に通る空の検査になる。fold は冪等なので
         # self_check の戻り値では raw 側と folded 側を区別できない。canary が組む本文を
         # 直接見ないとこの pin は dead になる
-        entry = checker.Entry(1, checker.fold("ＨＡＭＩＬＴＯＮ"), "ＨＡＭＩＬＴＯＮ")
-        self.assertIn("ＨＡＭＩＬＴＯＮ", checker.canary_text(entry))
+        entry = checker.Entry(1, checker.fold(WORD_FW), WORD_FW)
+        self.assertIn(WORD_FW, checker.canary_text(entry))
         self.assertEqual(checker.self_check([entry]), [])
 
 
@@ -477,7 +551,7 @@ class TrackedSurface(unittest.TestCase):
 
     def test_non_ascii_paths_are_not_lost_to_c_quoting(self):
         # git ls-files の既定出力は非 ASCII パスを C クォートする。このリポジトリは
-        # 追跡 140 件中 59 件が非 ASCII パスなので、-z を外すと 4 割強が壊れる。
+        # 追跡ファイルの 4 割強が非 ASCII パスなので、-z を外すとその分が壊れる。
         #
         # 対照には非 ASCII の禁止語をパスへ置く。C クォートは非 ASCII バイトだけを
         # エスケープして ASCII 部分をそのまま残すので、ASCII の語だけを対照にすると
@@ -496,6 +570,14 @@ class TrackedSurface(unittest.TestCase):
         self.assertEqual(len(report.findings), 1)
         self.assertTrue(report.findings[0].is_path)
 
+    def test_path_is_folded_before_matching(self):
+        # 上の fixture は fold(x) == x の語しか使わないので、scan_path の fold を外しても
+        # 当たってしまい何も pin しない (実測: folded = fold(path) を folded = path に
+        # 変えても全件緑)。全角は Issue ディレクトリ名に実際に入る形
+        add(self.repo, f"docs/{WORD_FW}/notes.md", "harmless content\n")
+        report = self.scan()
+        self.assertEqual([f.is_path for f in report.findings], [True])
+
     def test_oversize_blobs_are_excluded_without_being_read(self):
         # read_text は「decode できないから安全に飛ばす」ように見えて、例外が上がる前に
         # ファイル全体を読み切っている。ホストには cgroup 境界が無い
@@ -506,6 +588,27 @@ class TrackedSurface(unittest.TestCase):
         self.assertEqual(report.oversize, 1)
         self.assertEqual(report.scanned, 1)
         self.assertEqual(len(report.findings), 1)
+        # 上の 3 件は「全部読んでから捨てる」実装でも同じ値になるので、名前の後半
+        # (without being read) を検査していない。読む関数自身が上限を知っていることを
+        # 関数境界で見る。呼び出し側の選別を外す変更はここで止まる
+        # decode を省くと oid が bytes のまま f-string へ入り、git が解釈できずに
+        # 別の Unable が上がる。assertRaises は通るが上限の検査には一度も到達しない
+        oid = git(self.repo, "rev-parse", ":big.bin").stdout.decode().strip()
+        with self.assertRaises(checker.Unable):
+            list(checker._iter_blobs(self.repo, [oid], [len(big)]))
+
+    def test_a_short_blob_read_is_unable_not_a_partial_green(self):
+        # zip は短い方で黙って止まるので、読み出しが 1 件足りないと「一部だけ走査して
+        # 違反なし」に化ける。逐次消費では len() が取れず、数え落としが見えない。
+        # 実際に短い読み出しを起こすには読み出し側を差し替えるしかない
+        add(self.repo, "a.md", f"has {WORD}\n")
+        add(self.repo, "b.md", "harmless\n")
+        real = checker._read_chunk
+        with mock.patch.object(
+            checker, "_read_chunk", lambda root, oids: real(root, oids)[:-1]
+        ):
+            with self.assertRaises(checker.Unable):
+                self.scan()
 
     def test_binary_blobs_are_counted_separately(self):
         add(self.repo, "image.bin", b"\x89PNG\x00\x01\x02")
@@ -514,13 +617,36 @@ class TrackedSurface(unittest.TestCase):
         self.assertEqual(report.binary, 1)
         self.assertEqual(report.scanned, 1)
 
+    def test_utf16_text_blob_is_scanned_not_counted_as_binary(self):
+        # UTF-16 は ASCII 域の文字ごとに NUL を持つので、NUL を先に見る実装では丸ごと
+        # 未走査になる。binary は増えるが findings は 0 件で、要約も緑も正常に見える。
+        # Windows のエディタが書く形なので CP932 と同じく現実の混入経路
+        add(self.repo, "notes.txt", f"{WORD} project\n".encode("utf-16"))
+        report = self.scan()
+        self.assertEqual(report.binary, 0)
+        self.assertEqual(report.scanned, 1)
+        self.assertEqual([(f.lineno, f.entry_lineno) for f in report.findings], [(1, 1)])
+
+    def test_utf16_without_bom_stays_binary(self):
+        # 上の負の対照。BOM 無しから byte order を当てる形は採らない (BE は「成功」した
+        # うえで中身が化ける)。拾えない範囲は docstring が宣言しており、binary の
+        # 件数として要約に出る。これが無いと「全部走査する」実装でも上のテストが緑になる
+        add(self.repo, "notes.txt", f"{WORD} project\n".encode("utf-16-le"))
+        add(self.repo, "text.md", "harmless\n")
+        report = self.scan()
+        self.assertEqual(report.binary, 1)
+        self.assertEqual(report.findings, [])
+
     def test_undecodable_text_blob_is_unable(self):
         # 非 ASCII の禁止語を運ぶ可能性が最も高いファイル形式 (CP932 のテキスト) が
         # そのまま最も検査されない形式になる。unreadable に数えて緑を返す実装は
         # 「唯一の保有者が CP932 だった」ケースを取りこぼす
         add(self.repo, "cp932.txt", WORD_JA.encode("cp932"))
-        with self.assertRaises(checker.Unable):
+        with self.assertRaises(checker.Unable) as cm:
             self.scan()
+        # 序数だけだと一時 index で別のファイルを指す。検出側と同じ位置指標を使うこと
+        # (序数だけへ戻す変異はこの assert が無いと緑で通る)
+        self.assertRegex(str(cm.exception), r"tracked file \d+ \(oid [0-9a-f]{12}\)")
 
     def test_empty_tracked_set_is_unable(self):
         with self.assertRaises(checker.Unable):
@@ -682,10 +808,15 @@ class Redaction(unittest.TestCase):
     def test_path_findings_do_not_print_the_path(self):
         # パスも照合対象なので、パス由来の検出でパスを印字すると出力が語そのものになる
         deny = denylist(self.dir / "deny.txt", WORD)
-        add(self.repo, f"docs/{WORD}/notes.md", "harmless\n")
+        # 本文にも語を入れる。内容が harmless だとパス由来の finding しか生まれず、
+        # 内容由来の finding が汚染パス判定を通る分岐が一度も実行されない。その分岐だけを
+        # パス印字へ戻す変異は assertNoSecrets を素通りする (実測)
+        add(self.repo, f"docs/{WORD}/notes.md", f"has {WORD}\n")
         rc, out = run_cli("--check", env={checker.ENV_VAR: str(deny)}, cwd=self.repo)
         self.assertEqual(rc, 1)
         self.assertNoSecrets(out)
+        # パス由来 1 件 + 内容由来 1 件の両方が位置指標になること
+        self.assertEqual(len(re.findall(r"tracked file 1 \(oid [0-9a-f]{12}\)", out)), 2)
         # 序数は走査した index に対するものなので oid を併記する。git は commit -a /
         # commit -- <pathspec> のとき hook へ一時 index を渡し、そこでの序数は運用者が
         # 後から引く `git ls-files` とずれる (実測)。oid はどの index からでも引ける
@@ -966,9 +1097,16 @@ class Attachment(unittest.TestCase):
         # `stages: [manual]` を 1 行足すと、この hook は commit 時にも
         # `pre-commit run --all-files` にも現れないまま追跡ファイル面が消える。
         # Skipped の表示すら出ないので、出力を見比べても異常に見えない (実測)
-        block = self.hook_block(self.live_lines(PRE_COMMIT_CONFIG), "--check")
+        # この hook は stages を宣言しないので top-level の default_stages を継承する。
+        # hook ブロック内だけを見る形は、宣言が無いとループが一度も回らず空虚に緑になり、
+        # 26 行目を [manual] へ変える 1 行で全 stage から消えても捕まらない (実測)
+        lines = self.live_lines(PRE_COMMIT_CONFIG)
+        block = self.hook_block(lines, "--check")
         self.assertTrue(block, "--check の hook 定義が見つからない")
-        for line in [l for l in block if l.lstrip().startswith("stages:")]:
+        own = [l for l in block if l.lstrip().startswith("stages:")]
+        effective = own or [l for l in lines if re.match(r"^default_stages:", l)]
+        self.assertTrue(effective, "--check の stage を決める宣言がどこにも無い")
+        for line in effective:
             self.assertIn(
                 "pre-commit", line, "--check の hook が pre-commit stage から外れている"
             )
