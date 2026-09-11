@@ -20,8 +20,14 @@ Claude Code のための skill と plugin を集めた PUBLIC リポジトリ。
 - private リポジトリの内部事情 (未公開の設計、社内固有の運用) を書かない。一般化できる
   知見だけを、出所を伴わない形で書く
 
-`gitleaks` が検査する。ルールの canonical は `.gitleaks.toml`。既定ルールだけでは
-ユーザー名を含むパスは捕捉されないため custom ルールを置いてある。
+形の決まったカテゴリ (パス・UUID・メールアドレス) は `gitleaks` が検査する。ルールの
+canonical は `.gitleaks.toml`。既定ルールだけではユーザー名を含むパスは捕捉されないため
+custom ルールを置いてある。
+
+固有名詞は形が決まらないので禁止語リストが要る。リストを PUBLIC なここへ置けないため外から
+指す形にしてあり、取り付けと確認手順の canonical は `scripts/check-leak-guard-denylist.py` の
+docstring が持つ (置き場所も環境変数名もここには再掲しない)。**設定していない環境では静かに
+skip して緑になる**ので、設定したら docstring の確認手順を一度通すこと。
 
 **検査の網は書いた分しか広がらない。** 当初は macOS の `/Users/<name>` しか見ていなかった
 ため `C:\Users\<name>` が素通りして履歴へ入った。次に OS 別へ割ったところ、今度はどちらの

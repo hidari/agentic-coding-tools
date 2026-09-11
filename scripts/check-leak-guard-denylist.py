@@ -1,0 +1,688 @@
+#!/usr/bin/env python3
+"""禁止語リストで固有名詞の流入を検査する (ISSUE-15 の層 2)。
+
+層 1 (`.gitleaks.toml` の形が決まったルール) が捕まえられないのは固有名詞で、それには
+禁止語リストが要る。リストを PUBLIC な設定ファイルへ literal で書くとルールファイル
+自身が露出になるので、置き場所は環境変数 LEAK_GUARD_DENYLIST で外から指す。
+
+## 分岐 (canonical)
+
+ISSUE-15-spec.md は 3 分岐 (未設定 / ファイルあり / ファイル無し) で設計したが、
+「ファイルはある」と「比較に使えるエントリが取れる」は別の検査で、後者が 0 でも
+前者は通る。実際に緑のまま何も見ていない形を 30 通り数えたので、判定軸を足してある。
+spec の表はその時点の見立てで、実際の分岐はこの表が canonical。
+
+| 状態                                                      | 終了コード |
+|-----------------------------------------------------------|-----------|
+| 環境変数が未設定                                           | 0 (skip)  |
+| 環境変数が空・空白のみ・前後に空白                         | 2         |
+| リストの指し先が通常ファイルでない / 読めない / UTF-8 でない | 2         |
+| 実効エントリが 0 件                                        | 2         |
+| fold 後に空になるエントリがある                            | 2         |
+| エントリが自分自身に一致しない (自己照合の失敗)             | 2         |
+| 追跡ファイルが 0 件 / git を呼べない                       | 2         |
+| merge conflict 中の index (stage 0 以外がある)             | 2         |
+| 追跡ファイルが UTF-8 で読めない (NUL を含まないのに decode 不能) | 2   |
+| index が指す object を読めない / cat-file の出力が欠ける    | 2         |
+| `--check-text` の対象を読めない                            | 2         |
+| 余分な引数を渡された                                       | 2         |
+| 上記以外の失敗                                             | 2         |
+| 禁止語を検出した                                           | 1         |
+| 検出 0 件                                                  | 0         |
+
+2 を 1 と分けるのは、規約違反と「検査を走らせられなかった」を同じ赤にしないため。
+未設定を無条件の fail-closed にしないのは、このリポジトリが PUBLIC で第三者が clone
+するためで、その人と無関係な理由で常に赤くなる形は採れない。
+
+## 走査面
+
+照合対象は worktree の中身ではなく index の blob にする。コミットされるのは blob で、
+worktree は symlink 追従 (リポジトリ外の実体を読み、コミットされるリンク先パス文字列は
+一度も見ない)・smudge filter・sparse-checkout の 3 経路で blob と食い違う。起動位置でも
+食い違う: `git ls-files` は cwd 相対なので、サブディレクトリから起動すると配下しか
+返さず、「走査 1 件 / 違反 0 件」という健全に見える形で緑になる。root は
+`rev-parse --show-toplevel` で解決する。
+
+パスも照合対象に含める。追跡ファイルのパスは走査対象と同じ自由テキストで、このリポジトリの
+Issue ディレクトリ名は日本語タイトルを含む (追跡 140 件中 59 件が非 ASCII パス。実測)。
+
+## 照合
+
+大小と表現の揺れは fold() が吸収する。両側へ同一に適用することが要件で、片側だけ違う
+関数や余分な正規化を掛けると、同じ literal でも一致しなくなる。何を吸収して何を
+書き手の責任に置くかは fold() の docstring が持つ。
+
+## 出力
+
+禁止語そのものを印字しない。出力の宛先は端末だけではなく、tmux や script のログ、
+Issue や PR への貼り付け、CI ログ、エージェント経由なら会話ログにも残る。出すのは
+座標だけで、座標はリストを持っている人だけがローカルで解決できる。
+
+パス由来の検出でパスを印字すると出力が語そのものになるので、パスが禁止語に一致した
+ファイルは `tracked file <i>` という位置指標で報告する。列オフセットや一致長も出さない
+(同じ行番号を指す複数行の共通部分文字列から語が計算できるため、1 件で確定させない)。
+
+座標に `#<数字>` の形を使わないのは、このリポジトリが `#N` を GitHub の番号空間を指す記法
+として機械検査で禁じているため (canonical は issue-id.py の docstring)。意味は別物だが
+機械検査に区別はできないので、免除を広げるのではなく衝突する記法を避ける。
+
+CI へは取り付けない。PUBLIC リポジトリの Actions ログは誰でも読め、対象のコミットは
+push 済みなので、公開された座標の交差から語を復元できる。決定は scripts/
+test_check_leak_guard_denylist.py の Attachment が negative pin で保持する。
+
+## セットアップの確認
+
+環境変数を設定したら、**コミットを打つのと同じ起動元から**次を実行すること。
+
+    python3 scripts/check-leak-guard-denylist.py --check
+
+`status=checked` が出れば、その起動元へ変数が届いている。`status=skipped` なら届いていない。
+
+コマンドの前に `LEAK_GUARD_DENYLIST=...` を置かないこと。その形は変数をその場で注入するので
+必ず `status=checked` になり、見たい失敗 (変数が届いていない) を原理的に出せない。確かめたい
+のはスクリプトが動くことではなく、変数がその起動元に届くことである。
+
+届かない起動元は実在する: `.zshrc` の export は非対話シェル (`zsh -c`) に届かず、`launchctl
+getenv` も空を返すので GUI の git クライアントや IDE の VCS 機能が継承する環境にも入らない
+(実測)。設定したつもりのまま全コミットが skip で緑になる形は spec が「既知の限界」として
+引き受けており、この層は自分の取り付けを自分では検査できない。
+
+リストの置き場所をここへ書かない。PUBLIC なこのリポジトリへ private な配線規約を literal で
+書くと、ISSUE-15 が禁じている当のものに自分で抵触する。
+"""
+
+from __future__ import annotations
+
+import argparse
+import errno as errno_mod
+import os
+import stat
+import subprocess
+import sys
+import unicodedata
+from pathlib import Path
+from typing import NamedTuple
+
+ENV_VAR = "LEAK_GUARD_DENYLIST"
+
+EXIT_OK = 0
+EXIT_VIOLATION = 1
+EXIT_UNABLE = 2
+
+# 機械可読な状態語。pre-commit は rc 0 の hook の stdout も stderr も表示しないので
+# (実測)、skip したことは verbose: true を付けた hook の出力としてしか見えない。
+# 表示されたときに「守っていない」と「見て 0 件だった」が読み分けられる必要がある。
+STATUS_SKIPPED = "status=skipped"
+STATUS_CHECKED = "status=checked"
+
+# 1 blob あたりの上限。超えたものは内容を読まずに除外する。read_text は「decode できない
+# から安全に飛ばす」ように見えて例外が上がる前に全体を読み切っており (実測: 200MB の
+# ファイルで peak 615MB)、この検査は全コミットで追跡ファイル全体を走るので、動画や
+# フォントが 1 つ入った時点で毎コミットその倍以上を確保する。ホストには cgroup 境界が
+# 無いというのが CLAUDE.md の [MUST GLOBAL]。
+MAX_BLOB_BYTES = 1024 * 1024
+
+# cat-file --batch へ一度に流すサイズの目安。出力は丸ごと stdout に載るので、
+# 追跡ファイルの合計が大きいリポジトリでも常駐量がこの付近で頭打ちになるよう分ける。
+BATCH_BYTES = 8 * 1024 * 1024
+
+# 自己照合で使う枠。語を囲む文字列自体は禁止語に一致しない無害な語にする。
+CANARY_TEMPLATE = "canary {} canary"
+
+# 空・空白のみ・前後に空白を持つ値を弾いたときの文言。後段の stat / S_ISREG も同じ値を
+# 検査不能へ倒すので、終了コードだけではこの分岐が生きているか分からない。原因が読める
+# ことがこの分岐の存在理由なので、テストは文言まで見る (定数を共有して drift を防ぐ)。
+BLANK_VALUE_HINT = "の値が空・空白のみ・前後に空白を持つ"
+
+_MODE_SYMLINK = "120000"
+_MODE_GITLINK = "160000"
+
+
+class Unable(RuntimeError):
+    """検査を走らせられなかった。違反 (1) と混ぜないために送出する。"""
+
+
+class Entry(NamedTuple):
+    """禁止語 1 件。
+
+    lineno はリストファイルの行番号 (パース後の index ではない)。コメント行・空行・
+    重複除去・sort のどれでも index はファイルの行番号からずれ、運用者はその番号を
+    頼りにリストを開くので、ずれると別のエントリを消す。
+
+    raw は fold 前の語。自己照合で本文へ埋めるのに使う。fold 済みの語を埋めると
+    「本文側に fold が掛かっていない」実装を検出できない。
+    """
+
+    lineno: int
+    folded: str
+    raw: str
+
+
+class Finding(NamedTuple):
+    """検出 1 件。語は持たない。
+
+    index はパスを印字できないときの位置指標だが、**走査した index に対する序数**であって
+    運用者が後から引く `git ls-files` の序数とは限らない。git は `commit -a` (worktree に
+    削除がある) や `commit -- <pathspec>` (pathspec 外に staged がある) のとき hook へ
+    `GIT_INDEX_FILE=.git/next-index-<pid>.lock` を渡し、そこは実 index とエントリ集合が
+    違う (実測)。序数だけを頼りにすると別のファイルが指され、語が無いので誤検出と判断される。
+    そのため oid を併記する: `git ls-files -s | grep <oid>` はどの index からでも引ける。
+    """
+
+    index: int
+    path: str
+    oid: str
+    lineno: int  # 本文の行番号。パス由来なら 0
+    entry_lineno: int
+    is_path: bool
+
+
+class Report(NamedTuple):
+    findings: list[Finding]
+    tracked: int
+    scanned: int
+    binary: int
+    oversize: int
+    gitlinks: int
+
+
+# --- 正規化と照合 --------------------------------------------------------------
+
+
+def fold(text: str) -> str:
+    """照合の前にリスト側と本文側へ同一に掛ける正規化。
+
+    NFKC → category Cf 除去 → casefold → NFKC の 4 段。前後の NFKC は別のものを守る。
+    当初どちらも「casefold が NFKC 正規形へ戻さない code point のため」と書いていたが、
+    どちらを外しても既存のテストが赤くならなかったので測り直した結果がこれ。
+
+    先頭の NFKC は冪等性を守る。外すと fold(fold(x)) != fold(x) になる code point が
+    BMP に現れる (実測: U+037A, U+03D2-U+03D4, U+03F2 ほか)。照合の結果そのものは
+    変えないので、冪等性を見る対照が無いと外しても気づけない。
+
+    末尾の NFKC は照合の結果を変える。Cf 除去がゼロ幅文字を落とすと、それまで隣接して
+    いなかった base と結合文字が隣り合うので、そこで合成をやり直す必要がある (実測:
+    'ｶ' + ZWSP + 'ﾞ' は末尾 NFKC が無いと 'ガ' に一致しない。'か' + ZWSP + U+3099 と
+    'jose' + SHY + U+0301 も同じ)。ゼロ幅文字は Web ページや PDF からのペーストで入るので、
+    この組み合わせは難読化ではなく事故として現実に起きる。
+
+    casefold を lower より優先するのは、両側へ同一に掛ける限り差は一致範囲が広がる側
+    (ß→ss, ſ→s, 最終シグマ) にしか出ず、fail-closed へ倒れるため。
+
+    吸収するもの: 大小、NFC/NFD、全角/半角の英数とカナ、U+3000、ゼロ幅文字と SHY
+    (category Cf)。どれも IME・Finder・Web や PDF からのペーストという「運用者の事故」で
+    入る表現差で、この検査の脅威モデルはそこにある。
+
+    吸収しないもの: ダッシュの異体 (U+2010/2013/2014/2212/30FC は NFKC が畳まない)、
+    ラテンのアクセント (José/Jose)、ローマ字とかなの表記揺れ、行を跨いだ語、意図的な
+    難読化。綴りの異体は書き手がリストへ列挙する側に置く。畳み表を手で持つと表 1 つごとに
+    pin が要るうえ、'ー' はかな文字なので畳むとかな側と衝突する。この線引きは
+    test_check_leak_guard_denylist.py の Fold が両側から挟んで pin している。
+    """
+    s = unicodedata.normalize("NFKC", text)
+    s = "".join(c for c in s if unicodedata.category(c) != "Cf")
+    return unicodedata.normalize("NFKC", s.casefold())
+
+
+def split_lines(text: str) -> list[str]:
+    """`\\n` だけで行を割る。
+
+    str.splitlines() は `\\v` `\\f` `\\x1c`-`\\x1e` NEL `U+2028` `U+2029` と単独の `\\r` も
+    行境界にするが、git・grep・エディタは `\\n` だけを境界にする。語を出力しない設計では
+    行番号が唯一の手がかりなので、ずれると「示された行を開いても何も無い」状態になり、
+    運用者は誤検出と判断してその語をリストから外す。露出を防ぐ検査が防御を外させる。
+    先例は issue-id.py の _split_lines。
+    """
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+def scan_text(text: str, entries: list[Entry]) -> list[tuple[int, int]]:
+    """(本文の行番号, エントリのリスト行番号) を返す。"""
+    found = []
+    for lineno, line in enumerate(split_lines(text), 1):
+        folded = fold(line)
+        found.extend((lineno, e.lineno) for e in entries if e.folded in folded)
+    return found
+
+
+def scan_path(path: str, entries: list[Entry]) -> list[int]:
+    """パス文字列に一致したエントリのリスト行番号を返す。"""
+    folded = fold(path)
+    return [e.lineno for e in entries if e.folded in folded]
+
+
+# --- 禁止語リスト --------------------------------------------------------------
+
+
+def parse_entries(raw: bytes) -> list[Entry]:
+    """バイト列から禁止語を読む。
+
+    utf-8-sig で読むのは BOM を落とすため。Windows の Notepad や PowerShell 5 の
+    Out-File が既定で付けるもので、`encoding='utf-8'` で読むと 1 行目だけが永久に
+    当たらない。1 行目がコメントなら `\\ufeff#` が startswith('#') を外れてエントリへ
+    昇格し、以降の「リスト内の位置」が全部 1 ずれる (実測)。
+
+    行の strip はコメント判定より先に行う。CRLF の `\\r` もここで落ちる。strip しない
+    実装では、末尾に空白が 1 つ付いたエントリが本文中の同じ語に一致しなくなる (実測)。
+    """
+    text = raw.decode("utf-8-sig")
+    entries = []
+    for lineno, line in enumerate(text.split("\n"), 1):
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        entries.append(Entry(lineno, fold(s), s))
+    return entries
+
+
+def load_entries(path: Path) -> list[Entry]:
+    """リストを読んで検証する。使えない形はすべて Unable。
+
+    「存在する」と「比較に使えるエントリが 1 件以上取れる」を別の検査にしている。
+    後者が 0 でも走査は完走して 0 件の緑を返し、走査件数が十分大きいので要約からは
+    何も比較していないことが読めない (実測: コメント行だけのファイルも空ファイルも
+    エントリ 0 件で完走した)。
+    """
+    try:
+        raw = path.read_bytes()
+    except OSError as e:
+        raise Unable(
+            f"{ENV_VAR} の指す先を読めない (errno={e.errno})。パスは印字しない"
+        ) from None
+    try:
+        entries = parse_entries(raw)
+    except UnicodeDecodeError:
+        # errors='replace' で読むとエントリ数は数えられるのに 1 件も当たらない
+        # (UTF-16 保存で実測)。件数の要約まで正常に見えるので最も危険な形
+        raise Unable(f"{ENV_VAR} の指す先が UTF-8 で読めない") from None
+
+    # fold 後に空になる行は全ファイル全行に一致する。エディタでは空行に見えるので
+    # (U+200B だけの行など)、原因のエントリを特定できない騒がしい赤になる
+    empty = [e.lineno for e in entries if not e.folded]
+    if empty:
+        raise Unable(
+            f"禁止語リストの {', '.join(map(str, empty))} 行目が fold 後に空になる "
+            "(見えない文字だけの行)。全行に一致するので検査を止める"
+        )
+    if not entries:
+        raise Unable(
+            "禁止語リストに実効エントリが 1 件も無い。"
+            "0 件での全走査は「違反なし」ではなく「何も比較していない」"
+        )
+    return entries
+
+
+def canary_text(entry: Entry) -> str:
+    """自己照合で走査する合成テキスト。fold 前の語を埋める。"""
+    return CANARY_TEMPLATE.format(entry.raw)
+
+
+def self_check(entries: list[Entry]) -> list[Entry]:
+    """リストに書いた語をそのまま本文へ書いたら検出されることを確かめる。
+
+    「エントリ数は非 0 なのに 1 件も当たらない」形はエントリ数の要約まで正常に見えるので、
+    出力からは読めない。BOM・NFD・末尾空白・fold の片側適用がどれもこの形で出る。
+    照合の前に毎回走らせて、静かな緑を騒がしい赤へ変える。
+    """
+    return [e for e in entries if not scan_text(canary_text(e), [e])]
+
+
+def resolve_denylist(env) -> Path | None:
+    """環境変数から置き場所を解決する。未設定なら None (skip)。
+
+    値そのものは決して印字しない。リストは PUBLIC に書けないから外に置くので、その
+    置き場所のパス自体がユーザー名 (層 1 の対象) と私的プロジェクト名 (層 2 の対象) を
+    含みがちで、「リストが無い」という最もありふれた設定ミスのたびに露出する。
+    """
+    raw = env.get(ENV_VAR)
+    if raw is None:
+        return None
+    stripped = raw.strip()
+    if not stripped or stripped != raw:
+        # 空文字列は `.env` の値なし行・`export VAR=$UNSET_VAR`・値を取るラッパの失敗で
+        # 日常的に生じる。`if not env.get(VAR)` 型は未設定と同じ skip へ落とし、
+        # `Path('')` は PosixPath('.') になって exists() が True を返す (どちらも実測)。
+        # 末尾改行は `$(cat ...)` 由来。表示に空白と改行が見えないので原因が読めない
+        raise Unable(f"{ENV_VAR} {BLANK_VALUE_HINT}。値は印字しない")
+    path = Path(raw)
+    try:
+        st = path.stat()  # symlink は辿る。壊れた symlink はここで ENOENT
+    except OSError as e:
+        raise Unable(
+            f"{ENV_VAR} の指す先を stat できない (errno={e.errno})。パスは印字しない"
+        ) from None
+    if not stat.S_ISREG(st.st_mode):
+        # ディレクトリとディレクトリへの symlink は exists() が True を返すので、
+        # 存在で分岐すると「ファイルあり」へ進んで read が IsADirectoryError で落ちる。
+        # 未捕捉なら rc 1 になり、設計上の 1 は「違反あり」なので検査不能が違反に化ける
+        raise Unable(
+            f"{ENV_VAR} の指す先が通常ファイルではない (errno={errno_mod.EISDIR} 相当)。"
+            "パスは印字しない"
+        )
+    return path
+
+
+# --- git ----------------------------------------------------------------------
+
+
+def _git(root: Path, *args: str, stdin: bytes | None = None) -> bytes:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), *args],
+            input=stdin,
+            capture_output=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        raise Unable("git が見つからない") from None
+    if proc.returncode != 0:
+        # stderr を貼らない。git のエラーはパスを含むことがあり、この検査の出力は
+        # 端末以外にも残る。原因の特定には rc と引数で足りる
+        raise Unable(f"git {' '.join(args)} に失敗した (rc={proc.returncode})")
+    return proc.stdout
+
+
+def resolve_root(start: Path) -> Path:
+    """走査の起点となるリポジトリ root。
+
+    `git ls-files` は cwd 相対なので、サブディレクトリから起動すると配下しか返さない。
+    0 件ではなく部分欠落なので「追跡 0 件なら止める」ガードを素通りし、
+    「走査 1 件 / 読めずに飛ばした 0 件」という完全に健全な形で緑になる (実測)。
+    """
+    out = _git(start, "rev-parse", "--show-toplevel")
+    return Path(out.decode("utf-8").strip())
+
+
+def _ls_files(root: Path) -> list[tuple[str, str, str]]:
+    """(mode, oid, path) の一覧。
+
+    -z を使うのは、既定出力が非 ASCII パスを C クォートするため (実測:
+    `"docs/issues/ISSUE-1_\\343\\201\\202"`)。クォートされた名前は照合にも open にも
+    使えず、しかもエラーではなく短い正常な結果で返る。このリポジトリは追跡 140 件中
+    59 件が非 ASCII パスなので、-z を外すと 4 割強が走査面から落ちる (実測)。
+    """
+    out = _git(root, "ls-files", "-s", "-z")
+    entries = []
+    for record in out.decode("utf-8", "replace").split("\0"):
+        if not record:
+            continue
+        meta, sep, path = record.partition("\t")
+        fields = meta.split()
+        # 読めないレコードを静かに飛ばさない。走査面が痩せる向きの失敗なので、
+        # 「違反なし」ではなく「何を見たか分からない」として止める
+        if not sep or len(fields) < 3:
+            raise Unable("git ls-files の出力を解釈できない (走査面を確定できない)")
+        mode, oid, stage = fields[0], fields[1], fields[2]
+        # stage 0 以外は merge conflict 中の index。同じパスが 3 回出るので件数も
+        # 照合結果も実態とずれる。競合の解決前は検査の前提が崩れているので止める
+        if stage != "0":
+            raise Unable(
+                "merge conflict 中の index では走査面を確定できない (競合を解決してから実行する)"
+            )
+        entries.append((mode, oid, path))
+    return entries
+
+
+def _blob_sizes(root: Path, oids: list[str]) -> list[int]:
+    """--batch-check で内容を読まずにサイズだけ取る。"""
+    if not oids:
+        return []
+    stdin = "".join(f"{oid}\n" for oid in oids).encode()
+    out = _git(root, "cat-file", "--batch-check", stdin=stdin)
+    sizes = []
+    for line in out.decode("utf-8", "replace").splitlines():
+        fields = line.split()
+        if len(fields) < 3:
+            # `<oid> missing`。index が指す oid を読めないのはリポジトリの破損で、
+            # 握って「飛ばした」に数えると壊れたリポジトリが違反 0 件の緑になる
+            raise Unable("index が指す object を読めない (リポジトリの破損)")
+        sizes.append(int(fields[2]))
+    if len(sizes) != len(oids):
+        raise Unable("cat-file --batch-check の行数が要求と一致しない")
+    return sizes
+
+
+def _read_blobs(root: Path, oids: list[str], sizes: list[int]) -> list[bytes]:
+    """--batch で内容を取る。合計が BATCH_BYTES を超えないチャンクに分ける。"""
+    bodies: list[bytes] = []
+    chunk: list[str] = []
+    total = 0
+    for oid, size in zip(oids, sizes):
+        if chunk and total + size > BATCH_BYTES:
+            bodies.extend(_read_chunk(root, chunk))
+            chunk, total = [], 0
+        chunk.append(oid)
+        total += size
+    if chunk:
+        bodies.extend(_read_chunk(root, chunk))
+    return bodies
+
+
+def _read_chunk(root: Path, oids: list[str]) -> list[bytes]:
+    stdin = "".join(f"{oid}\n" for oid in oids).encode()
+    out = _git(root, "cat-file", "--batch", stdin=stdin)
+    bodies = []
+    pos = 0
+    for _ in oids:
+        nl = out.find(b"\n", pos)
+        if nl < 0:
+            raise Unable("cat-file --batch の出力が途中で切れている")
+        fields = out[pos:nl].decode("utf-8", "replace").split()
+        if len(fields) < 3:
+            raise Unable("index が指す object を読めない (リポジトリの破損)")
+        size = int(fields[2])
+        # 宣言されたサイズぶんのバイトが実際にあることを確かめる。スライスは範囲外でも
+        # 例外を出さず短い bytes を返すので、出力が途中で切れると「短い内容を走査して
+        # 違反なし」に化ける。ここから先のレコード境界も全部ずれる
+        if nl + 1 + size > len(out):
+            raise Unable("cat-file --batch の出力が宣言されたサイズに足りない")
+        bodies.append(out[nl + 1 : nl + 1 + size])
+        pos = nl + 1 + size + 1  # レコード末尾の改行
+    if len(bodies) != len(oids):
+        raise Unable("cat-file --batch が要求した数の blob を返さなかった")
+    return bodies
+
+
+def scan_tracked(start: Path, entries: list[Entry]) -> Report:
+    """追跡ファイルのパスと blob を走査する。"""
+    root = resolve_root(start)
+    tracked = _ls_files(root)
+    if not tracked:
+        # 0 件は「違反なし」ではなく「何も見ていない」
+        raise Unable("追跡下のファイルが 1 件も無い。走査対象ゼロは合格ではない")
+
+    findings: list[Finding] = []
+
+    # パスは全エントリを見る。gitlink も自分のパスは持つ
+    for index, (_mode, oid, path) in enumerate(tracked, 1):
+        findings.extend(
+            Finding(index, path, oid, 0, entry_lineno, True)
+            for entry_lineno in scan_path(path, entries)
+        )
+
+    # 内容は blob から読む。gitlink は別リポジトリの commit を指すので読めない
+    readable = [(i, m, o, p) for i, (m, o, p) in enumerate(tracked, 1) if m != _MODE_GITLINK]
+    gitlinks = len(tracked) - len(readable)
+    sizes = _blob_sizes(root, [o for _, _, o, _ in readable])
+
+    wanted = [(i, p, o, s) for (i, _m, o, p), s in zip(readable, sizes) if s <= MAX_BLOB_BYTES]
+    oversize = len(readable) - len(wanted)
+    bodies = _read_blobs(root, [o for _, _, o, _ in wanted], [s for _, _, _, s in wanted])
+    # zip は短い方で黙って止まるので、長さのずれは「一部を走査しただけの緑」になる
+    if len(bodies) != len(wanted):
+        raise Unable("読み出した blob の数が走査対象と一致しない")
+
+    scanned = binary = 0
+    for (index, path, oid, _size), body in zip(wanted, bodies):
+        if b"\0" in body:
+            binary += 1
+            continue
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError:
+            # 非 ASCII の禁止語を運ぶ可能性が最も高い形式 (CP932 のテキスト) が、そのまま
+            # 最も検査されない形式になる。unreadable に数えて緑を返すとバイナリを飛ばした
+            # ときと同じ数え方になり、要約を読んでも異常に見えない
+            raise Unable(
+                f"UTF-8 で読めない追跡ファイルがある (tracked file {index})。"
+                "テキストなら UTF-8 へ直し、バイナリなら NUL を含む形で保存する"
+            ) from None
+        scanned += 1
+        findings.extend(
+            Finding(index, path, oid, lineno, entry_lineno, False)
+            for lineno, entry_lineno in scan_text(text, entries)
+        )
+
+    return Report(findings, len(tracked), scanned, binary, oversize, gitlinks)
+
+
+# --- 入口 ----------------------------------------------------------------------
+
+
+def _render(finding: Finding, tainted: set[str]) -> str:
+    """検出 1 件を座標だけの行にする。
+
+    パスが禁止語に一致したファイルは、パスを印字すると出力が語そのものになるので
+    位置指標へ置き換える。序数は走査した index に対するものなので oid を併記する
+    (理由は Finding の docstring)。oid は blob のハッシュで、blob 自体はコミットされて
+    公開されるものなので、これを出しても露出は増えない。
+    """
+    if finding.path in tainted:
+        label = f"tracked file {finding.index} (oid {finding.oid[:12]})"
+    else:
+        label = finding.path
+    if finding.is_path:
+        return f"{label}: denylist line {finding.entry_lineno}"
+    return f"{label}:{finding.lineno}: denylist line {finding.entry_lineno}"
+
+
+def run_check(start: Path, entries: list[Entry]) -> int:
+    report = scan_tracked(start, entries)
+    tainted = {f.path for f in report.findings if f.is_path}
+    for finding in report.findings:
+        print(f"  [x] {_render(finding, tainted)}", file=sys.stderr)
+    # どの index を走査したかを出す。git は commit -a / commit -- <pathspec> のとき hook へ
+    # 一時 index を渡すので、そこでの序数は運用者が後から引く `git ls-files` とずれる (実測)。
+    # ずれたことに気づける手がかりが要る
+    index_kind = "temporary" if os.environ.get("GIT_INDEX_FILE") else "default"
+    print(
+        f"{STATUS_CHECKED} tracked={report.tracked} scanned={report.scanned} "
+        f"entries={len(entries)} binary={report.binary} oversize={report.oversize} "
+        f"gitlinks={report.gitlinks} index={index_kind} findings={len(report.findings)}"
+    )
+    print(
+        f"追跡 {report.tracked} 件のパスと {report.scanned} 件の内容を"
+        f"禁止語 {len(entries)} 件と照合した"
+    )
+    if report.findings:
+        print(
+            f"[x] 検出 {len(report.findings)} 件。"
+            "座標が指す行と、禁止語リストの該当行を突き合わせること"
+        )
+        return EXIT_VIOLATION
+    return EXIT_OK
+
+
+def run_check_text(source: str, entries: list[Entry]) -> int:
+    """テキスト 1 本を走査する。コミットメッセージの入口。
+
+    渡るのは git の cleanup より前の message ファイル全文で、コメント行も
+    `git commit -v` が末尾へ足す diff も含まれる。`#` 行の除去も scissors 行以降の
+    切り落としも行わない。既定の cleanup は編集経由が strip、-m / -F は whitespace で、
+    同じ本文でも `#` 行の運命が経路で逆になる (実測: 同一の `# ...` 行がエディタ経由では
+    commit object から消え、-F では残った)。本リポジトリの規約は -F なので、日常の経路が
+    まさに残る側にあたる。git の cleanup 規則を再実装すると二重管理になり、誤検出を
+    嫌って剥がす向きの変更がそのまま fail-open へ倒れる。既存の issue-id.py の
+    commit-msg hook が同じ面で誤検出を引き受けている。
+
+    既知の限界: この入口が発火しない経路がある (すべて実測)。`git cherry-pick` と
+    `git revert` は元のメッセージを持つ新しいコミットを作るが hook は 1 度も発火せず、
+    revert が自動生成する件名は元の件名を丸ごと含む。`git rebase` の再生も発火しない
+    (発火するのは reword で編集した回だけ)。`--no-verify` も当然通らない。GitHub 上の
+    squash merge は PR タイトルと本文が main の恒久コミットメッセージになるが、ローカル
+    hook は原理的に走らない。もう一方の入口 (追跡ファイル) はコミットメッセージを走査面に
+    持たず、gitleaks もメッセージを見ないので backstop が無い。
+
+    PR タイトルと本文をこの入口へ手で通す手順は spec の実装順序 5 が扱う (未実装)。
+    """
+    path = Path(source)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        raise Unable(
+            f"走査対象のテキストを読めない ({type(e).__name__})。パスは印字しない"
+        ) from None
+    hits = scan_text(text, entries)
+    # source を印字しない。1 起動で走査するのは 1 ファイルなので読む側は対象を知っており、
+    # 座標は行番号で足りる。印字すると 2 つの経路で漏れる: (1) message ファイルのパスが
+    # 禁止語を含む場合、source は照合対象でないのでその語がそのまま出力になる。
+    # (2) linked worktree からのコミットでは git が commit-msg hook へ
+    # `<main>/.git/worktrees/<name>/COMMIT_EDITMSG` という絶対パスを渡す (main worktree では
+    # 相対の `.git/COMMIT_EDITMSG`)。絶対パスの先頭はホームディレクトリを含むので、層 1 が
+    # 守っているユーザー名が Failed ブロックへ出る (実測)。
+    for lineno, entry_lineno in hits:
+        print(f"  [x] line {lineno}: denylist line {entry_lineno}", file=sys.stderr)
+    print(
+        f"{STATUS_CHECKED} lines={len(split_lines(text))} "
+        f"entries={len(entries)} findings={len(hits)}"
+    )
+    if hits:
+        print(f"[x] 検出 {len(hits)} 件。禁止語リストの該当行と突き合わせること")
+        return EXIT_VIOLATION
+    return EXIT_OK
+
+
+def main(argv: list[str] | None = None, *, env=None) -> int:
+    env = os.environ if env is None else env
+    # allow_abbrev の既定 (True) は `--che` を別モードの短縮として受理する。
+    # typo が静かに別の入口へ落ちないよう完全形の明示だけに絞る (先例 issue-id.py)
+    parser = argparse.ArgumentParser(
+        description="禁止語リストで固有名詞の流入を検査する",
+        allow_abbrev=False,
+    )
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--check", action="store_true", help="追跡ファイルを走査する")
+    mode.add_argument("--check-text", metavar="PATH", help="テキスト 1 本を走査する")
+    # parse_args ではなく parse_known_args を使う。argparse の
+    # `error: unrecognized arguments: <argv 全部>` は余分な引数をそのまま stderr へ出すので、
+    # hook から `pass_filenames: false` が落ちて追跡パスが引数で渡ると、汚染パスの置き換えが
+    # 隠すはずのパス (= 語そのもの) が Failed ブロックへ並ぶ (実測)。配線に依存しない防御に
+    # するため、件数だけを報告してここで止める。
+    args, extra = parser.parse_known_args(argv)
+    if extra:
+        print(f"[x] 余分な引数が {len(extra)} 件ある。引数は印字しない", file=sys.stderr)
+        return EXIT_UNABLE
+
+    try:
+        path = resolve_denylist(env)
+        if path is None:
+            print(f"{STATUS_SKIPPED} reason=env-unset")
+            print(f"禁止語ガードを skip した ({ENV_VAR} が未設定)")
+            return EXIT_OK
+        entries = load_entries(path)
+        failed = self_check(entries)
+        if failed:
+            raise Unable(
+                "禁止語リストの "
+                f"{', '.join(str(e.lineno) for e in failed)} 行目が自己照合に失敗した。"
+                "そのエントリは本文に同じ語があっても検出できない"
+            )
+        if args.check_text is not None:
+            return run_check_text(args.check_text, entries)
+        return run_check(Path.cwd(), entries)
+    except Unable as e:
+        print(f"[x] {e}", file=sys.stderr)
+        return EXIT_UNABLE
+    except Exception as e:  # noqa: BLE001
+        # traceback を出力経路から閉じる。例外の str と traceback はリストのパスも
+        # 語も載せることがあり (FileNotFoundError・KeyError・ValueError で実測)、
+        # pre-commit は Failed ブロックへ hook の stdout+stderr を切り詰めずに出す
+        print(f"[x] 予期しない失敗: {type(e).__name__}", file=sys.stderr)
+        return EXIT_UNABLE
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
