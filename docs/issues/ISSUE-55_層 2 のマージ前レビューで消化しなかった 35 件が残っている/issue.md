@@ -26,6 +26,9 @@ CLAUDE.md がボーイスカウトルールの境界に置いている「今回�
   ここに残したのは題と位置だけなので、着手時は現物を読んで再判断すること
 - **再判断を省かないこと。** 消化した 19 件のうち 2 件は、適用したテストが「間違った理由で
   通る」形になっていて変異注入が暴いた。レビューの指摘は出発点であって結論ではない
+- **起票直後から `[x]` が付いている項目がある。** ISSUE-15 の PR が別の指摘を直す過程で
+  ついでに解決したもので、その旨を項目ごとに書いてある。群の見出しの件数は引き取った総数で、
+  未消化の数ではない (未消化の数を書くと、消化するたびに散文だけが古びる)
 
 ## タスク
 
@@ -41,7 +44,7 @@ CLAUDE.md がボーイスカウトルールの境界に置いている「今回�
 - [ ] **テスト:429** — gitlink (mode 160000) の除外と gitlinks カウンタに対照が無い (F48 / pin-quality)
 - [ ] **テスト:693** — index=temporary の分岐に到達するテストが無く、定数 default に潰しても緑 (F50 / pin-quality)
 - [ ] **本体:362** — 非通常ファイル全部に errno=21 (EISDIR) と印字しており、そのためだけに errno を import している (F6 / simplification)
-- [ ] **本体:39** — 走査面節が内容照合から外れる 3 クラスを書いていない。docstring が canonical と名指しされている面での宣言過大 (F17 / altitude)
+- [x] **本体:39** — 走査面節が内容照合から外れる 3 クラスを書いていない。docstring が canonical と名指しされている面での宣言過大 (F17 / altitude) — ISSUE-15 の PR で解決済み。UTF-16 の手当てを書くときに 3 クラス (gitlink / 上限超え / NUL を含むもの) を明記した
 - [ ] **本体:196** — fold() の docstring に履歴説明コメントが残っており、同じ経緯が issue.md にもある (F33 / boy-scout)
 - [ ] **テスト:499** — test_oversize_blobs_are_excluded_without_being_read は「読まずに」を pin していない (F47 / pin-quality)
 - [ ] **テスト:424** — 「symlink は辿る」(resolve_denylist の stat) に正の対照が無く lstat へ戻しても緑 (F49 / pin-quality)
@@ -49,7 +52,7 @@ CLAUDE.md がボーイスカウトルールの境界に置いている「今回�
 - [ ] **テスト:878** — .pre-commit-config.yaml を読む 4 つのヘルパが scripts/test_issue_id_attachment.py から逐語で複製されている (F38 / boy-scout)
 - [ ] **本体:609** — run_check_text の docstring が spec の項目を序数で指し、未実装ステータスをコードで持っている (F35 / boy-scout)
 - [ ] **本体:10** — モジュール docstring が spec の旧表を再掲しており、同じ訂正が spec 側にも入って二重になっている (F34 / boy-scout)
-- [ ] **本体:2** — CLAUDE.md が canonical に指名した module docstring に、リストの書式と内容を読まない blob の条件が無い (F22 / canonical-drift)
+- [x] **本体:2** — CLAUDE.md が canonical に指名した module docstring に、リストの書式と内容を読まない blob の条件が無い (F22 / canonical-drift) — ISSUE-15 の PR で解決済み。両方を書いた (「リストの書式」節の新設と、走査面節の 3 クラス)。リストを実際に作る段になって、canonical に指名された文書から書式が読めないことが表面化したもの
 - [ ] **本体:91** — 恒久ルールの出所としてコード内で ISSUE-15 を引いている (canonical は CLAUDE.md) (F36 / boy-scout)
 
 ### 余力があれば (15 件)
