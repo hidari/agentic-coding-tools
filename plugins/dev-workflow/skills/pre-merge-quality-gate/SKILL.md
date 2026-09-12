@@ -117,10 +117,11 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
    - Phase 4 (執行) ではなくここへ置くのは、同梱が issue.md の編集と `git mv` と相対リンクの補正というファイル変更を伴うため。Phase 4 に置くと、この Phase の再検証を通らない変更が PR へ入る
    - マージ経路から入ったときは、同梱で作ったコミットをリモートの対象ブランチへ push してから Phase 4 へ進む。`gh pr merge` がマージするのはリモート側の内容なので、手元に積んだだけだと同梱が黙って落ちる
    - その push は必須チェックを pending へ戻す。待たずに Phase 4 へ進むと `gh pr merge` が拒否されるので、`gh pr checks <num> --watch` で緑を見てから進む。同梱をマージ経路で行うとこの再走のぶん CI が余計に走る (作成経路には無い費用で、同梱節が書く費用の比較は作成経路の話)
-3. `make format` (該当エリアのみ)
-4. `make ci-<area>` で全テスト pass を確認
-   - area 名はプロジェクトの `Makefile` に依存する。`ci-frontend` / `ci-backend` のようにデプロイ単位で切られていることが多い
-   - 不明なら `make help` か `Makefile` を grep して該当 target を探す
+3. フォーマッタを走らせる (該当エリアのみ)
+4. 全テストが pass することを確認する
+   - どちらも入口はプロジェクトごとに違う。canonical はプロジェクトの CLAUDE.md なので、ここでは特定のコマンドを既定にしない
+   - CLAUDE.md が書いていなければリポジトリのルートにあるタスクランナーの定義 (`Makefile` / `justfile` / `package.json` / `.pre-commit-config.yaml` など) を読んで確かめる。この列挙は手がかりであって網羅ではない
+   - エリアで切られているプロジェクトでは、触ったエリアの target を選ぶ。エリアの切り方はデプロイ単位であることが多い
 5. UI 変更なら **chrome-devtools-mcp で実ブラウザ動作確認** (CLAUDE.md MUST: フロントエンド変更は実ブラウザで確認)
    - 主要ツール: `mcp__plugin_chrome-devtools-mcp_chrome-devtools__navigate_page`, `take_snapshot`, `take_screenshot`, `list_console_messages`, `click`, `hover`, `fill`
    - フロントエンド再起動後は `isolatedContext` パラメータを必ず使う (CLAUDE.md MUST)
@@ -128,9 +129,11 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 
 ### Phase 4: マージ / PR 作成実行
 
-ここで初めて `gh pr merge <num> --squash --delete-branch` または `gh pr create`。
+ここで初めてマージまたは PR 作成を実行する。どちらもコマンドの形と本文の渡し方は `dev-workflow:commit-and-pr-message` の Phase C に従う。Tirith が止めるのは本文をインラインで渡したときだけで、フラグの形は見ていない。
 
-`gh pr create` する場合、PR 本文の書き方と渡し方は `dev-workflow:commit-and-pr-message` の Phase C に従う (従わないと Tirith にブロックされコマンドごと失敗する)。
+マージ側の形をここへ再掲しないのは、squash の subject が in-repo Issue の識別子規約に縛られており、その canonical が本 skill の外にあるため。写すと規約が変わったときに写した側だけが取り残される。しかも subject はサーバ側で生成されるので commit-msg hook が届かず、どの経路も赤くならないまま履歴へ違反が残る。`--subject` を省いた形でマージすると実際に違反が 1 件履歴へ入った (実測)。
+
+ブランチ削除だけは本 skill が決める。Phase C が示す形に `--delete-branch` を足して渡すこと。このフラグはローカルとリモートの両方を消すので、リモート側の `delete_branch_on_merge` を有効にしているリポジトリでも要る (設定が消すのはリモートだけで、ローカルは残る)。
 
 ### Phase 5: Issue クローズ処理 (gh pr merge 実行時のみ)
 
@@ -147,7 +150,7 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 | 「simplify は表面的な改善だけ」 | simplify は 4 並列で reuse / simplification / efficiency / altitude を見る。dead code、leaky abstraction、hot path bloat、redundant state に加え、特殊ケースの積み重ねや集合の二重管理といった構造の問題も検出される |
 | 「テストが pass してるから OK」 | テスト pass は仕様通り動くことの証明だが、a11y バグ・UX 問題はテストで検出されにくい |
 | 「ボーイスカウト確認はユーザーに毎回聞けば良い」 | NG。CLAUDE.md MUST ルール「ボーイスカウト」を skill 内で構造化するためにこの skill がある。Phase 1 の Boy Scout Sweep を毎回必ず動かす |
-| 「Boy Scout Sweep は触ったファイルだけで充分」 | 触ったファイルの **同 directory 隣接ファイル** も対象。empty state パターンの不統一など、隣接ファイルとの一貫性は touched files だけ見ても気付けない |
+| 「Boy Scout Sweep は触ったファイルだけ読めば充分」 | 抽出対象は触ったファイルのみだが、表記揺れを判断するには同 directory の隣接ファイルを **コンテキストとして読む** 必要がある。empty state パターンの不統一など、隣接ファイルとの一貫性は touched files だけ見ても気付けない |
 
 ## 出力フォーマット
 
@@ -161,7 +164,7 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 - boy-scout-sweep: [completed / skipped (reason)]
 - dev-workflow:e2e-scenario-impact-check: [completed / skipped (reason: e.g., no frontend changes)]
 - Findings applied: [N items (incl. M boy scout, K e2e impact) / no findings]
-- Re-verification: [make ci-* pass / manual QA done / N/A]
+- Re-verification: [全テスト pass / manual QA done / N/A]
 
 → Merge OK
 ```
@@ -171,7 +174,7 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 
 ## 関連
 
-- `dev-workflow:commit-and-pr-message` (sibling skill): コミット本文と PR 本文の書き方と渡し方。Phase 4 で `gh pr create` する直前に使う
+- `dev-workflow:commit-and-pr-message` (sibling skill): 本文の書き方と渡し方、および `gh pr create` / `gh pr merge` へ渡すフラグの形。Phase 4 はどちらの実行もここへ委ねる。同 skill は「何をどう書いて渡すか」だけを持ち「いつ実行してよいか」は持たないので、判断は本 skill に残る
 - `dev-workflow:in-repo-issue` (sibling skill): Issue のライフサイクル。同梱の判定 (Phase 0 で事実収集、Phase 2 で判断、Phase 3 で適用) と、マージ後の自動クローズ (Phase 5) がここを参照する
 - `simplify` (built-in skill): 4 並列レビューと修正適用
 - `feature-dev:code-reviewer` (subagent): バグ・logic・security の confidence-based filtering
