@@ -129,11 +129,11 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 
 ### Phase 4: マージ / PR 作成実行
 
-ここで初めてマージまたは PR 作成を実行する。どちらもコマンドの形と本文の渡し方は `dev-workflow:commit-and-pr-message` の Phase C に従う (従わないと Tirith にブロックされコマンドごと失敗する)。
+ここで初めてマージまたは PR 作成を実行する。どちらもコマンドの形と本文の渡し方は `dev-workflow:commit-and-pr-message` の Phase C に従う。Tirith が止めるのは本文をインラインで渡したときだけで、フラグの形は見ていない。
 
-マージ側の形をここへ再掲しないのは、squash の subject が in-repo Issue の識別子規約に縛られており、その canonical が本 skill の外にあるため。写すと規約が変わったときに写した側だけが取り残される。しかも subject はサーバ側で生成されるので commit-msg hook が届かず、どの経路も赤くならないまま履歴へ違反が残る。実際にこの skill の旧版が `--subject` の無い形を例示しており、そのとおり実行したマージが 1 件違反を作った。
+マージ側の形をここへ再掲しないのは、squash の subject が in-repo Issue の識別子規約に縛られており、その canonical が本 skill の外にあるため。写すと規約が変わったときに写した側だけが取り残される。しかも subject はサーバ側で生成されるので commit-msg hook が届かず、どの経路も赤くならないまま履歴へ違反が残る。`--subject` を省いた形でマージすると実際に違反が 1 件履歴へ入った (実測)。
 
-ブランチ削除だけは本 skill が決める。`--delete-branch` はローカルとリモートの両方を消すので、リモート側の `delete_branch_on_merge` を有効にしているリポジトリでも渡す意味がある (設定が消すのはリモートだけで、ローカルは残る)。
+ブランチ削除だけは本 skill が決める。Phase C が示す形に `--delete-branch` を足して渡すこと。このフラグはローカルとリモートの両方を消すので、リモート側の `delete_branch_on_merge` を有効にしているリポジトリでも要る (設定が消すのはリモートだけで、ローカルは残る)。
 
 ### Phase 5: Issue クローズ処理 (gh pr merge 実行時のみ)
 
@@ -150,7 +150,7 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 | 「simplify は表面的な改善だけ」 | simplify は 4 並列で reuse / simplification / efficiency / altitude を見る。dead code、leaky abstraction、hot path bloat、redundant state に加え、特殊ケースの積み重ねや集合の二重管理といった構造の問題も検出される |
 | 「テストが pass してるから OK」 | テスト pass は仕様通り動くことの証明だが、a11y バグ・UX 問題はテストで検出されにくい |
 | 「ボーイスカウト確認はユーザーに毎回聞けば良い」 | NG。CLAUDE.md MUST ルール「ボーイスカウト」を skill 内で構造化するためにこの skill がある。Phase 1 の Boy Scout Sweep を毎回必ず動かす |
-| 「Boy Scout Sweep は触ったファイルだけで充分」 | 触ったファイルの **同 directory 隣接ファイル** も対象。empty state パターンの不統一など、隣接ファイルとの一貫性は touched files だけ見ても気付けない |
+| 「Boy Scout Sweep は触ったファイルだけ読めば充分」 | 抽出対象は触ったファイルのみだが、表記揺れを判断するには同 directory の隣接ファイルを **コンテキストとして読む** 必要がある。empty state パターンの不統一など、隣接ファイルとの一貫性は touched files だけ見ても気付けない |
 
 ## 出力フォーマット
 
