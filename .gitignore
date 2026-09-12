@@ -21,3 +21,7 @@ __pycache__/
 # エディタ
 .idea/
 .vscode/
+
+# tgrep (Homebrew 導入の trigram 索引付き grep) がリポジトリルートへ作る索引ディレクトリ。
+# 数 MB の索引本体とメタデータが入る生成物で、ソースから再構築できる (tgrep index)。
+.tgrep/
