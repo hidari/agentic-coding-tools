@@ -53,6 +53,42 @@ repos:
         pass_filenames: false
         files: ^(\.gitleaks\.toml|scripts/(check-leak-guard-rules\.py|leak-guard-cases-manifest\.txt))$
 
+      # 層 2 (固有名詞)。禁止語リストは PUBLIC なこのリポジトリへ置けないので環境変数で
+      # 外から指す。設定していない第三者の環境では skip して緑になる (clone した人が
+      # その人と無関係な理由で常に赤くなる形は採れない)。何を見て何を見ていないかは
+      # スクリプトの docstring が canonical で、ここでは再掲しない。
+      #
+      # verbose: true が両方に要る。pre-commit は rc 0 の hook の stdout も stderr も
+      # 表示しないので (実測)、これが無いと「設定し忘れて skip した」と「検査して 0 件
+      # だった」が端末上で同じ `... Passed` の 1 行になる。この層の既知の限界 (設定忘れの
+      # silent skip) がちょうどその形なので、skip を見せる経路を塞ぐと限界が見えなくなる。
+      #
+      # 走査対象は追跡ファイル全体で固定するので files: で絞らない。下の issue-id-notation
+      # と同じ理由で、実際に走ることを保証しているのは always_run: true の方。
+      - id: leak-guard-denylist
+        name: 禁止語リストで固有名詞の流入を検査する (追跡ファイル)
+        language: system
+        entry: scripts/check-leak-guard-denylist.py --check
+        pass_filenames: false
+        always_run: true
+        verbose: true
+
+      # コミットメッセージは追跡ファイルではないので --check の走査集合に入らない。
+      # always_run: true が無いと、この stage では絞り込みが「絞る」ではなく「常に skip」に
+      # なる (渡るファイルが message ファイル 1 本しかないため)。理由の実測は下の
+      # issue-id-notation-commit-msg のコメントが持つ。
+      #
+      # 既知の限界も同じで、渡るのは message ファイルの全文。コメント行の除去も scissors 行
+      # 以降の切り落としも行わない理由は run_check_text の docstring が持つ (剥がす向きの
+      # 手当てが -F 経路で fail-open へ倒れるため)。
+      - id: leak-guard-denylist-commit-msg
+        name: 禁止語リストで固有名詞の流入を検査する (コミットメッセージ)
+        language: system
+        entry: scripts/check-leak-guard-denylist.py --check-text
+        stages: [commit-msg]
+        always_run: true
+        verbose: true
+
       - id: plugin-validate
         name: claude plugin validate --strict (plugin.json の妥当性)
         language: system
