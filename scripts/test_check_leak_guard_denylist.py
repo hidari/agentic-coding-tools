@@ -823,6 +823,35 @@ class Redaction(unittest.TestCase):
         self.assertRegex(out, r"tracked file \d+ \(oid [0-9a-f]{12}\): denylist line \d+")
         self.assertIn("index=default", out)
 
+    def test_index_kind_is_default_when_the_variable_points_at_the_real_index(self):
+        # 変数の有無で分けると、as-is の `git commit` が hook へ渡す `.git/index` まで
+        # temporary になる (実測)。毎回 temporary が出るなら序数ずれの手がかりにならない。
+        # 有無ではなく値で分けていることをこちら側から pin する
+        deny = denylist(self.dir / "deny.txt", WORD)
+        add(self.repo, "a.md", "harmless\n")
+        rc, out = run_cli(
+            "--check",
+            env={checker.ENV_VAR: str(deny), "GIT_INDEX_FILE": ".git/index"},
+            cwd=self.repo,
+        )
+        self.assertEqual(rc, 0)
+        self.assertIn("index=default", out)
+
+    def test_index_kind_is_temporary_for_a_git_written_temporary_index(self):
+        # git が `commit -- <pathspec>` で使う形。実 index とエントリ集合が違うので、
+        # そこでの序数は運用者が後から引く `git ls-files` とずれる
+        deny = denylist(self.dir / "deny.txt", WORD)
+        add(self.repo, "a.md", "harmless\n")
+        tmp_index = self.repo / ".git" / "next-index-1.lock"
+        tmp_index.write_bytes((self.repo / ".git" / "index").read_bytes())
+        rc, out = run_cli(
+            "--check",
+            env={checker.ENV_VAR: str(deny), "GIT_INDEX_FILE": str(tmp_index)},
+            cwd=self.repo,
+        )
+        self.assertEqual(rc, 0)
+        self.assertIn("index=temporary", out)
+
     def test_entry_position_is_the_list_file_line_number(self):
         # コメント 3 行 + 空行 1 行の後に語を置く。パース後の index なら 1 行目を指す
         deny = self.dir / "deny.txt"

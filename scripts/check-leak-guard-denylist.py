@@ -192,10 +192,11 @@ class Finding(NamedTuple):
     """検出 1 件。語は持たない。
 
     index はパスを印字できないときの位置指標だが、**走査した index に対する序数**であって
-    運用者が後から引く `git ls-files` の序数とは限らない。git は `commit -a` (worktree に
-    削除がある) や `commit -- <pathspec>` (pathspec 外に staged がある) のとき hook へ
-    `GIT_INDEX_FILE=.git/next-index-<pid>.lock` を渡し、そこは実 index とエントリ集合が
-    違う (実測)。序数だけを頼りにすると別のファイルが指され、語が無いので誤検出と判断される。
+    運用者が後から引く `git ls-files` の序数とは限らない。git は `commit -a` のとき
+    `.git/index.lock`、`commit -- <pathspec>` のとき `.git/next-index-<pid>.lock` を hook へ
+    渡し (実測)、そこは実 index とエントリ集合が違う。どちらの形かの判定は
+    resolve_index_kind が持つ。序数だけを頼りにすると別のファイルが指され、語が無いので
+    誤検出と判断される。
     そのため oid を併記する: `git ls-files -s | grep <oid>` はどの index からでも引ける。
     """
 
@@ -440,6 +441,31 @@ def resolve_root(start: Path) -> Path:
     return Path(out.decode("utf-8").strip())
 
 
+def resolve_index_kind(root: Path, env) -> str:
+    """走査した index が既定のものか一時のものかを返す。
+
+    変数の有無では分けられない。git は as-is の `git commit` でも hook へ
+    `GIT_INDEX_FILE=.git/index` を渡す (実測 git 2.55.0。`-a` は `.git/index.lock`、
+    `commit -- <pathspec>` は `.git/next-index-<pid>.lock`)。有無で判定すると hook 経由の
+    全コミットが temporary になり、本当に一時 index で序数がずれた回と区別が付かない。
+    手がかりとして機能させるには値を既定の index と突き合わせる必要がある。
+
+    対照に `rev-parse --git-path index` は使えない。`GIT_INDEX_FILE` を尊重して上書き後の
+    値を返すので、常に一致して全部 default になる。`--absolute-git-dir` は index の
+    指し先に影響されないので使える。
+    """
+    raw = env.get("GIT_INDEX_FILE")
+    if not raw:
+        return "default"
+    out = _git(root, "rev-parse", "--absolute-git-dir")
+    git_dir = Path(out.decode("utf-8").strip())
+    # 相対値は hook の cwd 基準。git は hook を worktree の top-level で起動する。
+    # 絶対値のときは `/` の右辺が絶対パスなら左辺を捨てる pathlib の規則で root が落ちる
+    scanned = os.path.realpath(root / raw)
+    default = os.path.realpath(git_dir / "index")
+    return "default" if scanned == default else "temporary"
+
+
 def _ls_files(root: Path) -> list[tuple[str, str, str]]:
     """(mode, oid, path) の一覧。
 
@@ -649,15 +675,15 @@ def _render(finding: Finding, tainted: set[str]) -> str:
     return f"{label}:{finding.lineno}: denylist line {finding.entry_lineno}"
 
 
-def run_check(start: Path, entries: list[Entry]) -> int:
+def run_check(start: Path, entries: list[Entry], env) -> int:
     report = scan_tracked(start, entries)
     tainted = {f.path for f in report.findings if f.is_path}
     for finding in report.findings:
         print(f"  [x] {_render(finding, tainted)}", file=sys.stderr)
     # どの index を走査したかを出す。git は commit -a / commit -- <pathspec> のとき hook へ
     # 一時 index を渡すので、そこでの序数は運用者が後から引く `git ls-files` とずれる (実測)。
-    # ずれたことに気づける手がかりが要る
-    index_kind = "temporary" if os.environ.get("GIT_INDEX_FILE") else "default"
+    # ずれたことに気づける手がかりが要る。判定規則は resolve_index_kind が持つ
+    index_kind = resolve_index_kind(start, env)
     print(
         f"{STATUS_CHECKED} tracked={report.tracked} scanned={report.scanned} "
         f"entries={len(entries)} binary={report.binary} oversize={report.oversize} "
@@ -762,7 +788,7 @@ def main(argv: list[str] | None = None, *, env=None) -> int:
             )
         if args.check_text is not None:
             return run_check_text(args.check_text, entries)
-        return run_check(Path.cwd(), entries)
+        return run_check(Path.cwd(), entries, env)
     except Unable as e:
         print(f"[x] {e}", file=sys.stderr)
         return EXIT_UNABLE
