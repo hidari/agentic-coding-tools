@@ -46,7 +46,7 @@ Issue のクローズをこの PR へ同梱するかの判定に要る事実 (ma
 
 ### Phase 1: 並列でレビュー実行
 
-simplify / code-reviewer / boy-scout-sweep / dev-workflow:e2e-scenario-impact-check は独立しているので **同じメッセージ内で 4 つ並列に launch する**。
+simplify / code-reviewer / boy-scout-sweep / dev-workflow:e2e-scenario-impact-check / PUBLIC 漏洩スイープ は独立しているので **同じメッセージ内で並列に launch する**。最後の 1 つはリポジトリが PUBLIC のときだけ起動するので、体数は 4 か 5 になる。
 
 1. **`Skill` tool で `simplify` を起動**
    - args: 変更概要 + 変更ファイルのリスト
@@ -79,9 +79,22 @@ simplify / code-reviewer / boy-scout-sweep / dev-workflow:e2e-scenario-impact-ch
    - 検出対象: `getByRole` / `getByLabel` 整合性、画面構造変化（保存ボタン2個など strict mode violation 系）、`<button>` ↔ `<Link>` 化、role / aria-label 変更、ルート変更、同じ画面を別経路で叩く別テストの取りこぼし
    - staging E2E は唯一の自動 E2E 検出網（ローカル E2E は CI で動かない）であるため、shift-left で爆発前に検出する価値が高い
 
-5. 4 つの結果を **アグリゲート** する
+5. **`Agent` tool で `general-purpose` を起動 (PUBLIC 漏洩スイープ)** — **リポジトリが PUBLIC のときだけ**
+   - 起動可否は公開範囲で決まる。`gh repo view --json visibility` で確かめてから判断する (グローバル CLAUDE.md が「リポジトリの公開範囲は常に確認する」を規定している)
+   - prompt: 「差分に含まれる文書とコードを読み、PUBLIC なリポジトリへ入れてよい状態かを判定してほしい。判断規範はプロジェクトの CLAUDE.md が canonical。
+     - **検査層の緑を根拠にしないこと。** 漏洩検査が見るのは形の決まったものと、禁止語リストに載っている語だけである。載っていないものは 0 件で通る (実測: 15 ファイルすべてが 0 件を返したが、実際には 4 つのプロダクト名が残っていた)
+     - **語単位の照合では原理的に捕まらない 2 形を特に見ること**:
+       - **集合が指紋になる形**: 個々は残してよい公開 OSS 名なのに、列挙の組み合わせが対象を特定してしまう。1 語ずつの可否しか測らない照合では、どの語も「正しく残す」と判定されたまますり抜ける
+       - **解釈を反転させる一行**: 「この文書は特定の対象を念頭に書いた」と明かすメタ記述。それ自体は固有名詞を 1 つも含まないのに、文書中の全ての例示を架空のものから実在の答えへ読み替えさせる
+     - **例なのか実運用なのかで判定が逆になる。** 同じ固有名詞が出ていても、例の列挙の一員なら残してよく、実際にそうしていると読める書き方なら落とす。この見分けは機械検査には原理的に持てない
+     - 公開 OSS の名前 (誰でも検索して辿り着けるもの) と、既に公開済みの情報 (LICENSE の著作権表示、`plugin.json` の author、リポジトリ参照) は対象外。隠しても露出は減らず、文章が不自然になるだけ
+     - 出力は `<file>:<line> → <何が露出しているか> / <一般化の案>` の形で、確信度 80 以上のみ。検出 0 件なら**何を何件読んだ結果か** (ファイル数・行数) を添えて明示」
+   - 観点の根拠: グローバル CLAUDE.md「どんなときでもユーザーデータを守るセキュリティを第一に考える」とプロジェクト CLAUDE.md の PUBLIC 制約。ISSUE-15 で機械検査の層を作ったが、**読解を要する分は落とせない**ことが実測で確定している
+   - 一般化するときは発火条件の具体性を残し、出所だけを落とす。削ると文書の価値が目減りする
 
-並列で投げると 30〜90 秒で 4 つの結果が揃う。逐次にしない。
+6. 揃った結果を **アグリゲート** する
+
+並列で投げると 30〜90 秒で結果が揃う。逐次にしない。
 
 ### Phase 2: 指摘事項の判断
 
@@ -163,7 +176,8 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 - feature-dev:code-reviewer: [completed / skipped (reason)]
 - boy-scout-sweep: [completed / skipped (reason)]
 - dev-workflow:e2e-scenario-impact-check: [completed / skipped (reason: e.g., no frontend changes)]
-- Findings applied: [N items (incl. M boy scout, K e2e impact) / no findings]
+- public-leak-sweep: [completed / skipped (reason: e.g., private repository)]
+- Findings applied: [N items (incl. M boy scout, K e2e impact, L leak) / no findings]
 - Re-verification: [全テスト pass / manual QA done / N/A]
 
 → Merge OK
