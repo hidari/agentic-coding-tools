@@ -159,4 +159,4 @@ allowed-tools:
 | Playwright Test (E2E) の作成 / レビュー              | playwright-test                            |
 | Playwright CLI (codegen / screenshot / shard) | playwright-cli                             |
 
-ライブ接続調査の強みは、開いている Chrome セッションに接続でき手動テストとシームレスに連携できる点 (Playwright は隔離ブラウザを起動するためログインセッション等を引き継げない)。本 skill はその調査結果を、組織標準のレポート形式・機密マスク規則・既知エラー知識に乗せて成果物化することに特化する。
+ライブ接続調査の強みは、開いている Chrome セッションに接続でき手動テストとシームレスに連携できる点 (Playwright は隔離ブラウザを起動するためログインセッション等を引き継げない)。本 skill はその調査結果を、本 skill が定めるレポート形式・機密マスク規則・既知エラー知識に乗せて成果物化することに特化する。

@@ -178,7 +178,6 @@ LINK_BASELINE: dict[str, int] = {
     "ISSUE-12_scripts の検査スクリプトが自分自身のテストを持たない": 2,
     "ISSUE-13_両取り付けの同時撤去を機構で検出できない": 2,
     "ISSUE-14_in-repo Issue の識別子が GitHub の番号空間と衝突する": 7,
-    "ISSUE-23_露出スイープで判定を保留した 5 箇所が残っている": 2,
     "ISSUE-24_Issue 間の相対リンクの書式が 3 通り混在している": 2,
     "ISSUE-4_VM の pwsh probe が偽陽性で exec と health が実機で動かない": 2,
     "ISSUE-8_run-python-tests.py の件数ガードが実質 1 件で機能していない": 1,

@@ -97,7 +97,7 @@ git commit -F .cache/commit-<slug>.txt && git log -1 --format=%B
 
 **C.1 本文を書く**
 
-`<repo>/.cache/pr-<slug>.md` に Write ツールで書く。入れるものは変更の要約と背景、検証結果、`Closes` リンク (書式は `dev-workflow:in-repo-issue` が canonical)、末尾に harness が指示するセッション URL。
+`<repo>/.cache/pr-<slug>.md` に Write ツールで書く。入れるものは変更の要約と背景、検証結果、`Closes` 行 (書式は `dev-workflow:in-repo-issue` が canonical)、末尾に harness が指示するセッション URL。
 
 **フッタはコミットと非対称である。** PR 本文は URL の裸置きで `Claude-Session:` キーを付けない。
 
@@ -153,7 +153,7 @@ in-repo Issue の識別子規約に違反する。書くべき形の canonical �
 
 ## 関連
 
-- `dev-workflow:in-repo-issue` (sibling skill): PR タイトル書式と `Closes` リンク書式の canonical。in-repo Issue は同 skill が Write と Edit でファイルを直接扱うので Bash コマンド文字列を通らない (GitHub Issues を使うリポジトリで `gh issue create` を打つ場合は本 skill の対象)
+- `dev-workflow:in-repo-issue` (sibling skill): PR タイトル書式と `Closes` 行の書式の canonical。in-repo Issue は同 skill が Write と Edit でファイルを直接扱うので Bash コマンド文字列を通らない (GitHub Issues を使うリポジトリで `gh issue create` を打つ場合は本 skill の対象)
 - `dev-workflow:pre-merge-quality-gate` (sibling skill): `gh pr create` と `gh pr merge` の直前に通すゲート。本 skill は何をどう書いて渡すかだけを持ち、いつ実行してよいかは持たない
 - `dev-workflow:git-branch-switcher` (sibling skill): 作業前のブランチ選択
 

@@ -38,12 +38,17 @@ Phase 1 が消費する agent の内訳:
 | `simplify` | Skill | 4 | **この SKILL.md の外**。下記参照 |
 | `feature-dev:code-reviewer` | Agent | 1 | 56 行 |
 | boy-scout-sweep (`general-purpose`) | Agent | 1 | 59 行 |
-| `dev-workflow:e2e-scenario-impact-check` | Skill | 0 または 1 | **gate 側に数が無い**。e2e skill の SKILL.md 61 行 |
+| `dev-workflow:e2e-scenario-impact-check` | Skill | 0 または 1 | **gate 側に数が無い**。e2e skill の Phase 2 |
 | 合計 | | **6 または 7** | どこにも書かれていない |
 
-e2e は「フロント変更がある場合、`Agent` tool で `general-purpose` を起動する」(同 skill 61 行)。
-早期 skip の条件は同 45 行と 57 行。**このリポジトリには `frontend/` も `e2e/` も無い**ので、
-自リポで gate を回す限りこのレーンは常に skip し、実効は 6 側になる。
+e2e は「フロント変更がある場合、`Agent` tool で `general-purpose` を起動する」(同 skill の
+Phase 2)。早期 skip の条件は同 skill の Phase 1 が持つ。
+
+**2026-09-16 に条件が変わった。** ISSUE-23 の B1 でディレクトリ名による判定を落とし、「画面を
+構成するコードの変更が無いことを能動的に確かめる」1 本へ統合した。判断の付かないファイルは
+Phase 2 へ渡す設計なので、UI を持たないこのリポジトリでも agent が 1 本立ちうる。**実効が常に
+6 側になるとは言えなくなった。**前の版は「このリポジトリには特定のディレクトリが無いのでこの
+レーンは常に skip する」と書いており、それは判定条件がディレクトリ名だった時点の事実である。
 
 ### `simplify` の 4 の出所について
 
@@ -59,8 +64,8 @@ single message」とある (実測)。
 ## 何が問題か
 
 「launch するレーンの数」と「消費する agent の数」が別物なのに、節は前者だけを書いて後者を
-書いていない。読み手は gate SKILL.md の 49 / 54 / 56 / 59 の 4 箇所と、e2e skill の SKILL.md
-61 行を突き合わせないと実態に届かない。**とくに e2e が起こす 1 本は gate 側に数として存在せず、
+書いていない。読み手は gate SKILL.md の 49 / 54 / 56 / 59 の 4 箇所と、e2e skill の Phase 2 を
+突き合わせないと実態に届かない。**とくに e2e が起こす 1 本は gate 側に数として存在せず、
 ファイルを越えないと確定しない。**
 
 この形は「宣言が実態より狭い」欠陥にあたる。広い側と同じだけ危険で、狭い側は
