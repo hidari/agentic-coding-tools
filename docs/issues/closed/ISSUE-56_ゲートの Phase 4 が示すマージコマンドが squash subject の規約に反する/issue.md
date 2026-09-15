@@ -1,5 +1,5 @@
 ---
-status: in_progress
+status: closed
 ---
 
 # fix: ゲートの Phase 4 が示すマージコマンドが squash subject の規約に反する
@@ -94,7 +94,7 @@ CLAUDE.md の「検証」節。
 
 ### `--delete-branch` は落とせない
 
-当初案 (a) はこの具体形ごと落として `in-repo-issue` へ委ねる形だったが、参照先が
+当初案はこの具体形ごと落として `in-repo-issue` へ委ねる形だったが、参照先が
 `--delete-branch` を持っていない。`git-branch-switcher` も持たず、リポジトリ全体でゲートの
 1 行にしか無い (実測)。委ねると情報が消える。
 
@@ -103,10 +103,14 @@ CLAUDE.md の「検証」節。
 配布元の現在の設定は無効。
 
 ```json
-{"allow_merge_commit":true,"allow_rebase_merge":true,"allow_squash_merge":true,
+{"allow_merge_commit":false,"allow_rebase_merge":false,"allow_squash_merge":true,
  "delete_branch_on_merge":false,"squash_merge_commit_message":"COMMIT_MESSAGES",
  "squash_merge_commit_title":"COMMIT_OR_PR_TITLE"}
 ```
+
+方式の 2 つが false なのは下の「マージ方式の裁定」によるもので、この節を書いた時点
+(2026-09-13) は 3 方式とも true だった。`delete_branch_on_merge` は動かしていないので、
+この節の主張 (リモート設定では代替できない) は裁定の前後で変わらない。
 
 ### subject へ数字記法が入る経路
 
@@ -114,16 +118,16 @@ CLAUDE.md の「検証」節。
 |---|---|---|
 | `gh pr merge --squash` (`--subject` 無し) | 入る (PR #46 で実測) | `--subject` を渡す |
 | `gh pr merge --squash --subject` | 入らない (PR #47 と PR #48 で実測) | 適用済み |
-| `gh pr merge --merge` | **未実測** | リポジトリ設定で方式を無効化 |
-| `gh pr merge --rebase` | 入らない。rebase は新しいコミットメッセージを作らず元のコミットをそのまま乗せる (GitHub のドキュメントが明記)。commit-msg hook が既に見た経路 | 構造的に安全 |
+| `gh pr merge --merge` | **未実測のまま** | 下の裁定で方式ごと無効化 (適用済み) |
+| `gh pr merge --rebase` | 入らない。rebase は新しいコミットメッセージを作らず元のコミットをそのまま乗せる (GitHub のドキュメントが明記)。commit-msg hook が既に見た経路 | 構造的に安全。それでも下の裁定で方式ごと無効化 (適用済み) |
 | GitHub web UI でのマージ | `--subject` を経由しないので既定生成 | リポジトリ設定 / 運用 |
 
 `--merge` を未実測としたのは、GitHub の API ドキュメントが `commit_title` の既定値を書いておらず、
 「About pull request merges」も merge commit の既定メッセージを書いていないため (両方とも実際に
 読んで確認した)。慣行として知られる形はあるが、実測していないので断定しない。
 
-配布元では 3 方式が全て有効だが、履歴に merge commit は 0 件で squash 一本で運用されてきた。
-設定で方式を絞れば経路自体を消せる。これはリポジトリ設定の変更なので別途判断する。
+履歴に merge commit は 0 件で squash 一本で運用されてきた。設定で方式を絞れば経路自体を
+消せる。リポジトリ設定の変更はユーザーの判断に属するので、下の「マージ方式の裁定」で決めた。
 
 ### 直した手順でのマージ実測
 
@@ -152,6 +156,40 @@ CI の gitleaks が報告する `N commits scanned` とはたまたま同じ数�
 フラグで同じ欠陥が起きたとき漏れる。同型の失敗はこのリポジトリの漏洩ガードで既に踏んでいる
 (「検査の網は書いた分しか広がらない」)。
 
+### マージ方式の裁定 (2026-09-16)
+
+squash のみ有効にする。ユーザーの裁定。merge と rebase を設定で閉じた (値は上の JSON)。
+
+確認は PATCH のレスポンスではなく独立した GET で読み直し、対照として squash が true である
+ことを並べている。これが無いと「狙った 2 つだけが閉じた」と「全部閉じた」を区別できない。
+
+rebase も落とした。表が「構造的に安全」としたのは GitHub の実装に依存した安全性で、方式を
+1 つへ絞ればその依存ごと外れる。
+
+**過去に rebase merge が使われたかは履歴から確定できない。** main の 60 コミットのうち 56 が
+subject に PR 番号を持つが (merged PR は 52 件で、差は ruleset 導入前に直 push したクローズ
+コミット)、残る 4 件は初期コミットを含めて PR 番号を持たない。rebase merge も元の subject を
+そのまま乗せるので PR 番号が付かず、この 4 件と区別する手段が無い。merge commit の側は親の数で
+判定できるので 0 件と確定している (対照の総コミット数は 60)。
+
+つまり「落として失う実績が無い」とは言い切れない。根拠は運用の記録 (上の「squash 一本で運用
+されてきた」) の側にある。
+
+実効性は live で確認していない。確認には実際に `--merge` を叩く必要があり、設定が効いていな
+ければ main の履歴へ merge commit が入る。履歴は直せない (この制約は `in-repo-issue` の
+「squash merge の subject は既定に任せず明示する」節が持つ)。別ブランチを base にした使い捨て
+PR なら安全に試せるが CI run が 1 回増える (`ci.yml` の `on.pull_request` に branches フィルタ
+が無い)。根拠は設定 API の読み直しだけで、これは「設定が反映された」ことしか言っていない。
+
+設定値は匿名では読めない。認証なしの GET が返す 84 キーに方式のフィールドは 1 つも無く、対照
+として `visibility` と `default_branch` は現れる (プローブが壊れていないことの確認)。つまり
+ここへ書くことは新しい露出にあたるが、方式の変更にも push 権限が要るので外部から悪用できる
+価値が無く、伏せると裁定の根拠が読めない。
+
+配布物の skill には影響しない。`in-repo-issue` と `commit-and-pr-message` が `--squash` を
+literal で持つのは in-repo Issue の記法規約を守るためで、今回動かしたのは配布元 1 リポジトリの
+設定だけ。
+
 ## タスク
 
 - [x] ゲートの Phase 4 をどう直すか決める → `gh pr create` と対称にする。マージも
@@ -162,8 +200,8 @@ CI の gitleaks が報告する `N commits scanned` とはたまたま同じ数�
 - [x] Phase 3 の `make` 前提を、入口を決め打ちしない形へ直す
 - [x] 直したあと、ゲートの手順どおりに 1 回マージして subject が検査を通ることを実測する
       → PR #48 のマージで実測。変異側と並べて両側の pin を取った (「直した手順でのマージ実測」節)
-- [ ] マージ方式を squash 一本へ絞るかを決める。`--merge` の未実測を残したまま経路を開けておくか、
-      設定で閉じるか
+- [x] マージ方式を squash 一本へ絞るかを決める → squash のみ有効にし、merge と rebase を設定で
+      閉じた。根拠と live 確認を行わなかった理由は「マージ方式の裁定 (2026-09-16)」節が持つ
 
 ## 関連
 
