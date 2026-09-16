@@ -80,6 +80,7 @@ ISSUE-34 のタスクへ含めた。
 - `e2e-scenario-impact-check` はパス literal が消費側の実配置と一致するかを見ないまま
   「能動的に判定した健全な skip」と断言する。走査した 34 ディレクトリのうち
   literal に一致する配置を持つのは 1 件だけだった
+  (2026-09-16 に ISSUE-23 の B1 で解消。パス literal を落とし、判定の根拠を出力へ足した)
 - `chrome-devtools-debugger` は公式 plugin が無い環境でも収集レイヤー不在のまま
   「問題なし」のレポートを生成しうる
 
@@ -100,7 +101,8 @@ pin の更新は消費側で対応済み。鮮度の検査は ISSUE-32 の層 3 
 
 - [ ] 型 3 の未着手分 (ssh config テンプレート、profile テンプレートと schema の乖離) を
       個別に切り出す
-- [ ] 型 5 の 3 件を切り出す。`retrospective-codify` の glob は最も影響が広い
+- [ ] 型 5 の残り 2 件を切り出す。`retrospective-codify` の glob は最も影響が広い
+      (`e2e-scenario-impact-check` の 1 件は ISSUE-23 の B1 で解消済み)
 - [ ] 棚卸しの件数を数え直す。この表は見つけた分だけなので過小評価に外れている
 
 ## 関連
