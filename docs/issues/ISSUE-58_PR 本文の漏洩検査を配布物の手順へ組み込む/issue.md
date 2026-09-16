@@ -1,5 +1,5 @@
 ---
-status: open
+status: in_progress
 ---
 
 # PR 本文の漏洩検査を配布物の手順へ組み込む
