@@ -5,15 +5,39 @@
 Goal: `dev-workflow:commit-and-pr-message` の手順が、公開される本文を渡す前に層 1 と層 2 の漏洩検査を
 同梱の入口 1 本で通す状態にする。
 
-Architecture: 層 2 のスクリプトと層 1 のルールの canonical を skill 配下へ移し、root の
-`.gitleaks.toml` はそれを `[extend]` するだけにする。新しい入口 `check-outgoing-text.py` が両層を
-走らせ、canary で自己検査し、終了コード 0/1/2/3 に畳む。SKILL.md は全ての面で 4 手の手順を持つ。
+Architecture: 層 2 のスクリプトと層 1 のルールの canonical を skill 配下へ移す。層 1 は custom ルール
+だけの config と既定ルールだけの config の 2 本に分け、root の `.gitleaks.toml` は消す。新しい入口
+`check-outgoing-text.py` は入力ごとに canary の行を先頭に置いて `gitleaks stdin` へ流し、層 2 を
+subprocess で呼び、終了コード 0/1/2/3 に畳む。SKILL.md は全ての面で 4 手の手順を持つ。
 
-Tech Stack: Python 3.11 以上の標準ライブラリ (tomllib を使う)、unittest、gitleaks 8.30.1、
-pre-commit、GitHub Actions。
+Tech Stack: 入口は Python 3.9 以上で読める標準ライブラリだけ (tomllib を使わない)。リポジトリ側の
+検査は 3.11 以上 (tomllib)。unittest、gitleaks 8.30.1、pre-commit、GitHub Actions。
 
 Spec: `docs/issues/ISSUE-58_PR 本文の漏洩検査を配布物の手順へ組み込む/ISSUE-58-spec.md`
-(実行者は plan と spec の両方を読むこと)
+(実行者は plan と spec の両方を読むこと。2026-09-18 に簡素化の決定を反映して書き直した)
+
+## 実行方式 (ユーザー裁定)
+
+- Task ごとに Workflow を 1 本回す。中身は implementer 1 体 → レビュー 2 観点 (spec との対応 /
+  品質と素材) の並列 → 指摘があれば修正 1 回
+- Fable は Task 3 の implementer 1 体だけ。他は既定のモデル
+- 次の Step はコントローラ (親) だけが行う。Step の頭に「コントローラ」と書いてある
+  - Task の着手前の基準の確認 (HEAD、`python3 scripts/run-python-tests.py`)
+  - `--update-manifest` による manifest の再生成
+  - `pre-commit run --all-files` と commit-msg stage の実行
+  - git status と implementer の報告の突合、コミット
+  - clone を使う全履歴の走査、live smoke
+- implementer とレビュアーが守ること
+  - 単体テストは対象のモジュールだけを直接回す。env は `env -u LEAK_GUARD_DENYLIST PYTHONDONTWRITEBYTECODE=1` を
+    前置する。subagent は起動元の環境変数を継承するので、外さないと実物の禁止語リストで層 2 が走る
+  - 禁止語リストを開かない。環境変数の値を表示しない
+  - 変異注入は作業ツリーの使い捨ての写しで行い、本体へは入れない。写しは
+    `rsync -a --exclude .git --exclude .cache ./ .cache/mut-t<N>/` で作り、写しの中でテストを回し、
+    確認したら `rm -r .cache/mut-t<N>` で消す (コマンド文字列に `.cache/` を書く)。変異ごとに
+    「赤になるべきテスト ID」を先に書き、`-v` の出力で実際に赤になった ID と突き合わせる
+  - レビュアーは本体を変更しない。実験は `.cache/review-t<N>-<観点>/` の写しで行う
+  - gitleaks の有無を作るときは、PATH を空の一時ディレクトリ 1 つにする。開発機の PATH には
+    gitleaks が 2 つある (spec の前提 15)
 
 ## Global Constraints
 
@@ -24,26 +48,27 @@ Spec: `docs/issues/ISSUE-58_PR 本文の漏洩検査を配布物の手順へ組�
   メールアドレス・UUID・トークンは、ソース上で連続しないよう変数や連結で実行時に組み立てる
   (先例は `scripts/check-leak-guard-rules.py` の `NAME` と `_UUID_PARTS`)。ソースに連続した形で
   書くと、そのファイル自身が層 1 に捕まる
+- トークン形の値の本体を、名前に key / token / secret を含む変数へ単独で置かない。既定ルールの
+  generic-api-key がそのファイル自身を検出する (実測)
 - 入口と層 2 の出力に、禁止語・入力パス・一致した文字列・gitleaks の生の出力を出さない
-- `LEAK_GUARD_DENYLIST` が指すファイルを開かない・表示しない。環境変数の値も表示しない
-- gitleaks の版は 8.30.1 (CI の pin と開発機を揃える)
+- gitleaks の版は 8.30.1。開発機の実体は Homebrew 側 (mise の shim はそちらへ委ねる)
 - 書き捨ては `<repo>/.cache/` に置く。コミット本文は `.cache/commit-<slug>.txt` に Write で書き
   `git commit -F` で渡す。末尾に `Claude-Session: <URL>` を置く
-- テストを増減・改名したら `python3 scripts/run-python-tests.py --update-manifest`、漏洩ケースを
-  増減したら `python3 scripts/check-leak-guard-rules.py --update-manifest` で再生成してコミットする
-- 変異注入は 1 箇所ずつ入れ、復元は Edit で行う (`git checkout -- <file>` を使わない)
 - 配布物 (`plugins/`) の中の散文は、配布先で読まれても偽にならない形で書く。「このリポジトリ」
   「`scripts/...` を実行する」のような配布元の前提を断定しない
+- SKILL.md の散文では skill のディレクトリを指す変数の名前に触れない (spec の前提 8)
 
-## 基準値 (実測、2026-09-17、変更前の `ac85917` 系)
+## 基準値
 
-| 項目 | 値 |
-|---|---|
-| `python3 scripts/run-python-tests.py` | 9 ファイル / 665 件 |
-| うち `scripts/test_check_leak_guard_denylist.py` | 78 件 (Attachment 10 件 + それ以外 68 件) |
-| `gitleaks git --redact --no-banner -c .gitleaks.toml` (作業ツリーで) | 65 commits scanned / no leaks |
-| 同じコマンドを clone で `.gitleaksignore` を消して実行 | 10 件 (user-path 1 / vm-uuid 9) |
+| 項目 | 値 | 測った時点 |
+|---|---|---|
+| `python3 scripts/run-python-tests.py` | 9 ファイル / 665 件 | 2026-09-18、`56bdc9d` |
+| うち `scripts/test_check_leak_guard_denylist.py` | 78 件 (Attachment 10 件 + それ以外 68 件) | 同上 |
+| `pre-commit run --all-files` | 14 Passed + 1 Skipped、leak-guard-denylist は `scanned=166 findings=0` | 同上 |
+| 全履歴の走査 (clone で `.gitleaksignore` を消す、当時の root config) | 10 件 (user-path 1 / vm-uuid 9) | 同上 |
+| 同じ走査を custom だけの config (名前の除外あり) / 既定だけの config で | 10 件 (内訳同じ) / 0 件 | 同上 |
 
+commit 数は基準値にしない。期待値は「走査時点の `git rev-list --count HEAD` と一致」で取る。
 git モードでは `-i` を渡しても走査対象リポジトリの root の `.gitleaksignore` が読まれる (実測)。
 `.gitleaksignore` を効かせない対照は、clone からファイルを消して取ること。
 
@@ -55,173 +80,239 @@ git モードでは `-i` を渡しても走査対象リポジトリの root の 
 |---|---|---|---|
 | `CPM/scripts/check-leak-guard-denylist.py` | `scripts/` から移動 | 層 2 | 1 |
 | `CPM/scripts/test_check_leak_guard_denylist.py` | `scripts/` から移動し分割 | 層 2 の単体テスト | 1 |
-| `scripts/test_leak_guard_denylist_attachment.py` | 新規 (分割先) | 層 2 と入口の取り付けの pin | 1, 3 |
-| `CPM/scripts/leak-guard.gitleaks.toml` | root から中身を移動 | 層 1 のルール | 2 |
-| `.gitleaks.toml` | 変更 | `[extend] path` だけ | 2 |
-| `scripts/check-leak-guard-rules.py` | 変更 | 層 1 のルールを実際の経路で対照検査 | 2 |
-| `CPM/scripts/check-outgoing-text.py` | 新規 | 入口 | 3 |
+| `scripts/test_leak_guard_attachment.py` | 新規 (分割先) | 層 1・層 2・入口の取り付けの pin | 1, 2, 3 |
+| `scripts/hook_config_lines.py` | 新規 | pre-commit 設定を行で読む補助 (2 本の配線テストで共有する。ISSUE-55 の F2) | 1 |
+| `CPM/scripts/leak-guard.gitleaks.toml` | root から custom ルールを移す | 層 1 の custom ルール | 2 |
+| `CPM/scripts/leak-guard-default.gitleaks.toml` | 新規 | 層 1 の既定ルール | 2 |
+| `.gitleaks.toml` | 削除 | — | 2 |
+| `scripts/check-leak-guard-rules.py` | 変更 | 層 1 の 2 本の config を対照で検査 | 2, 3 |
+| `scripts/ci/install-gitleaks.sh` | 新規 (実行ビット付き) | gitleaks の版と sha256 の canonical | 2 |
+| `.github/workflows/ci.yml` | 変更 | install-gitleaks.sh、2 本の全履歴走査 | 2, 3 |
+| `CPM/scripts/check-outgoing-text.py` | 新規 (実行ビット付き) | 入口 | 3 |
 | `CPM/scripts/test_check_outgoing_text.py` | 新規 | 入口の単体テストと SKILL.md の表の pin | 3, 4 |
-| `scripts/ci/install-gitleaks.sh` | 新規 | gitleaks の版と sha256 の canonical | 3 |
-| `.github/workflows/ci.yml` | 変更 | 両 job から install-gitleaks.sh を呼ぶ | 3 |
-| `CPM/SKILL.md` | 変更 | 4 手の手順と終了コードの表 | 4 |
-| `.claude/skills/release/SKILL.md` | 変更 | 検査を CPM の手順へ委ねる | 1, 4 |
-| `.pre-commit-config.yaml` / `CLAUDE.md` / README / manifest 2 本 | 変更 | 追従 | 1, 2, 4 |
+| `CPM/SKILL.md` | 変更 | 4 手の手順と表 | 4 |
+| `plugins/dev-workflow/SKILL.md` | 変更 | component 表と前提の段落 | 4 |
+| `.claude/skills/release/SKILL.md` | 変更 | 入口をリポジトリ内のパスで呼ぶ | 1, 4 |
+| `.pre-commit-config.yaml` / `CLAUDE.md` / README / manifest 2 本 | 変更 | 追従 | 1〜4 |
+| ISSUE-55 / ISSUE-61 / ISSUE-32 / 新規 Issue | 変更・起票 | 記録 | 5 |
 
 ```mermaid
 flowchart LR
-    T1["Task 1<br/>層 2 を移す"] --> T3["Task 3<br/>入口"]
-    T2["Task 2<br/>層 1 を移す"] --> T3
+    T1["Task 1<br/>層 2 を移す"] --> T2["Task 2<br/>層 1 を 2 本の config へ"]
+    T2 --> T3["Task 3<br/>入口"]
     T3 --> T4["Task 4<br/>SKILL.md と周辺"]
-    T4 --> T5["Task 5<br/>Issue の記録と全体検証"]
+    T4 --> T5["Task 5<br/>記録・全体検証・クローズ"]
 ```
 
-Task 1 と Task 2 は互いに独立だが、同じ `.pre-commit-config.yaml` と `CLAUDE.md` を触るので順に行う。
+Task 1 と Task 2 は内容では独立だが、同じ `.pre-commit-config.yaml`・`CLAUDE.md`・配線テストを
+触るので順に行う。Task 3 は Task 2 の 2 本の config と、Task 1 の層 2 を sibling として使う。
 
 ### Task 1: 層 2 を skill 配下へ移す (振る舞いは変えない)
 
 Files:
 - Move: `scripts/check-leak-guard-denylist.py` → `CPM/scripts/check-leak-guard-denylist.py` (`git mv`)
 - Move: `scripts/test_check_leak_guard_denylist.py` → `CPM/scripts/test_check_leak_guard_denylist.py` (`git mv`)
-- Create: `scripts/test_leak_guard_denylist_attachment.py`
-- Modify: `.pre-commit-config.yaml` (層 2 の hook 2 本の `entry`)、`CLAUDE.md` (確認手順の canonical のパス)、
-  `.claude/skills/release/SKILL.md` (手順 3 と 4 のコマンドのパス。Task 4 で委譲へ置き換える)、
-  `scripts/python-tests-manifest.txt` (再生成)
+- Create: `scripts/test_leak_guard_attachment.py`、`scripts/hook_config_lines.py`
+- Modify: `scripts/test_issue_id_attachment.py` (補助を共有モジュールから使う)、`.pre-commit-config.yaml`
+  (層 2 の hook 2 本の `entry`)、`CLAUDE.md` (確認手順の canonical のパス)、`.claude/skills/release/SKILL.md`
+  (手順 3 と 4 のコマンドのパス。Task 4 で置き換える)、`scripts/python-tests-manifest.txt` (再生成)
 
 Interfaces:
 - Consumes: なし
 - Produces: `CPM/scripts/check-leak-guard-denylist.py` (CLI と定数 `ENV_VAR` / `STATUS_SKIPPED` /
-  `STATUS_CHECKED` / `EXIT_OK` / `EXIT_VIOLATION` / `EXIT_UNABLE` は不変)。Task 3 がこのパスを
-  sibling として呼ぶ
+  `STATUS_CHECKED` / `EXIT_OK` / `EXIT_VIOLATION` / `EXIT_UNABLE` は不変)。
+  `scripts/hook_config_lines.py` (`live_lines(path)`、`invocations(lines, checker, flag)`、
+  `hook_block(lines, checker, flag)`、`hook_keys(block)`。checker を引数に取る以外は
+  `scripts/test_issue_id_attachment.py` の現行の補助と同じ振る舞い)
 
-- [ ] Step 1: 移動前の基準を取る。`python3 scripts/run-python-tests.py` が 665 件で緑であること
-- [ ] Step 2: 分割先の配線テストを先に書く。`scripts/test_leak_guard_denylist_attachment.py` に、
-  現行の `Attachment` クラスを移し、`CHECKER` を移動先のパス
-  `"plugins/dev-workflow/skills/commit-and-pr-message/scripts/check-leak-guard-denylist.py"` にする。
-  `live_lines` などの補助と `TRACKED_HOOK_KEYS` / `COMMIT_MSG_HOOK_KEYS` も一緒に移す。
-  `test_ci_does_not_run_this_check` の docstring へ、スクリプト側から外す「CI へ取り付けない理由」
-  (PUBLIC リポジトリの Actions ログから座標の交差で語を復元できる) を書く
-- [ ] Step 3: 実行して赤を確かめる。`cd scripts && python3 -m unittest test_leak_guard_denylist_attachment` で
-  `test_checker_path_exists` と pre-commit の呼び出しの pin が失敗すること
-- [ ] Step 4: `git mv` で 2 ファイルを移す。移したテストから `Attachment` クラスと、それだけが使う
-  定数を消す。`CHECKER` はテストファイルの隣を指す形 (`Path(__file__).resolve().parent /
-  "check-leak-guard-denylist.py"`) にし、`load()` と `run_cli()` をそれに合わせる。
-  `ROOT` と `PRE_COMMIT_CONFIG` は不要になるので消す
-- [ ] Step 5: `.pre-commit-config.yaml` の `leak-guard-denylist` と `leak-guard-denylist-commit-msg` の
-  `entry` を移動先へ。hook のコメントのうち「CI へ取り付けない」理由が
-  スクリプトの docstring を名指ししていたら、配線テストを名指しする形へ直す
-- [ ] Step 6: 移した 2 ファイルの散文を配布先で偽にならない形へ直す。次で当たる行を 1 行ずつ見る
-  (`tgrep -n 'このリポジトリ|本リポジトリ|scripts/|PUBLIC|ISSUE-|CI |pre-commit|commit-msg hook' CPM/scripts/`)。
-  基準は「配布先に同じものが無くても真であるか」。直す方向は次のとおり
+- [ ] Step 1 (コントローラ): HEAD と `python3 scripts/run-python-tests.py` が基準値どおりであること
+- [ ] Step 2: 共有の補助を作る。`scripts/test_issue_id_attachment.py` の補助 4 本を `scripts/hook_config_lines.py` へ
+  移し、checker を引数にする。`test_issue_id_attachment.py` はそこから import する形へ直し、単体で緑のまま
+  であることを確かめる (ISSUE-55 の F2)
+- [ ] Step 3: 分割先の配線テストを先に書く。`scripts/test_leak_guard_attachment.py` へ現行の `Attachment`
+  クラスを移し、補助は共有モジュールから使う。`CHECKER` は移動先のパス
+  `"plugins/dev-workflow/skills/commit-and-pr-message/scripts/check-leak-guard-denylist.py"`。
+  `TRACKED_HOOK_KEYS` / `COMMIT_MSG_HOOK_KEYS` も移す。`test_ci_does_not_run_this_check` の docstring へ、
+  スクリプト側から外す「CI へ取り付けない理由」(PUBLIC リポジトリの Actions ログから座標の交差で
+  語を復元できる) を書く
+- [ ] Step 4: 実行して赤を確かめる。`test_checker_path_exists` と pre-commit の呼び出しの pin が失敗すること
+- [ ] Step 5: `git mv` で 2 ファイルを移す。移したテストから `Attachment` クラスと、それだけが使う定数を消す。
+  `CHECKER` はテストファイルの隣を指す形 (`Path(__file__).resolve().parent / "check-leak-guard-denylist.py"`)
+  にし、`load()` と `run_cli()` をそれに合わせる。`ROOT` と `PRE_COMMIT_CONFIG` は不要になるので消す
+- [ ] Step 6: `.pre-commit-config.yaml` の `leak-guard-denylist` と `leak-guard-denylist-commit-msg` の `entry` を
+  移動先へ。hook のコメントのうち「CI へ取り付けない」理由がスクリプトの docstring を名指ししていたら、
+  配線テストを名指しする形へ直す
+- [ ] Step 7: 移した 2 ファイルを全文読み、配布先で偽になる散文を直す。基準は「配布先に同じものが無くても
+  真であるか」。検索は補助にとどめる
+  (`tgrep -n 'このリポジトリ|本リポジトリ|scripts/|PUBLIC|ISSUE-|CI |pre-commit|commit-msg hook|spec|CLAUDE\.md|前セッション|run-python-tests|gitleaks\.toml|開発機|Attachment' CPM/scripts/`)。
+  直す方向は次のとおり
   - 配布元の実測や経緯は「配布元で測った」と分かる書き方にするか、一般化する
   - 取り付けの判断 (pre-commit へ載せる・CI へ載せない) は「利用する側の判断」とし、配布元の
-    判断の理由は配線テストへ移す (Step 2)
-  - セットアップの確認コマンドはパスを含めず「このスクリプトを `--check` で実行する」にする
+    判断の理由は配線テストへ移す (Step 3)
+  - セットアップの確認手順は、パスを含めず「無害な 1 行のファイルを `--check-text` へ通して
+    `status=checked` を見る」にする。`--check` は git リポジトリの外では変数が届いていても rc 2 になる
+    (実測) ので確認手順にしない
+  - 層 1 を名指す箇所は、ルールファイルの名前ではなく「形の決まったルール」と書く (Task 2 でファイルが変わる)
   - `#N` 記法の禁止の出所は、同じ bundle の `in-repo-issue` の `issue-id.py` と書く
   - `run_check_text` の「spec の実装順序 5 (未実装)」は Task 4 で直すので、ここでは触らない
-- [ ] Step 7: `CLAUDE.md` の「確認手順の canonical は `scripts/check-leak-guard-denylist.py` の docstring」を
-  移動先のパスへ。release skill の手順 3 と 4 の `python3 scripts/check-leak-guard-denylist.py` を
-  移動先のパスへ (Task 4 で置き換えるまでの橋渡し)
-- [ ] Step 8: `tgrep -n 'check-leak-guard-denylist' --glob '!docs/issues/closed/**' .` と、dot 始まりの
-  `.pre-commit-config.yaml` `.github/workflows/ci.yml` `.claude/skills/release/SKILL.md` を個別に引き、
-  旧パス `scripts/check-leak-guard-denylist.py` が残っていないこと (closed の Issue は履歴として除く)
-- [ ] Step 9: `python3 scripts/run-python-tests.py` が「消えた / 未記録」の 78 件ずつで赤になることを
-  確かめてから `--update-manifest`。再実行で 9 → 10 ファイル / 665 件、manifest と一致
-- [ ] Step 10: 変異注入。`.pre-commit-config.yaml` の `leak-guard-denylist` hook の `entry` 行を
-  コメントアウトし、配線テストが赤になること。Edit で戻す
-- [ ] Step 11: `pre-commit run --all-files` が全 hook 緑、`leak-guard-denylist` の出力が
-  `status=checked` であること。`pre-commit run --hook-stage commit-msg --commit-msg-filename <.cache のファイル>`
-  で commit-msg の 2 本も緑
-- [ ] Step 12: コミット。件名 `refactor(dev-workflow): 禁止語の検査を commit-and-pr-message へ移す (ISSUE-58)`
+- [ ] Step 8: 移したテストが literal で持つ不可視文字 (U+200B / U+00AD / U+FEFF / U+2060 / U+2028 / U+2029 など) を
+  `\u....` のエスケープへ書き換える。書き換え前後で同じテストが同じ結果になること。
+  `apm audit --file <path> --no-policy` を移した 2 ファイルへ当て、warning が 0 件であること
+- [ ] Step 9: `CLAUDE.md` の「確認手順の canonical は `scripts/check-leak-guard-denylist.py` の docstring」を
+  移動先のパスへ。release skill の手順 3 と 4 の `python3 scripts/check-leak-guard-denylist.py` を移動先の
+  パスへ (Task 4 で置き換えるまでの橋渡し)
+- [ ] Step 10: 旧パスが残っていないこと。旧パスは新パスの末尾に含まれるので、直前がパスの一部でない形で探す。
+  `tgrep -n '(^|[^/A-Za-z_-])scripts/check-leak-guard-denylist\.py' --glob '!docs/issues/**' .` が 0 件で、
+  dot 始まりの `.pre-commit-config.yaml` `.github/workflows/ci.yml` `.claude/skills/release/SKILL.md` を
+  個別に渡しても 0 件。陽性の対照として、新しいパスが `.pre-commit-config.yaml` で 2 件当たること。
+  `docs/issues/` はスナップショットなので対象外
+- [ ] Step 11: 単体テスト (移した層 2 のテスト、2 本の配線テスト) を直接回して緑
+- [ ] Step 12: 変異注入 (写しで行う)
+  - `leak-guard-denylist` hook の `entry` 行をコメントアウト → `test_leak_guard_attachment` の pre-commit の pin が赤
+  - `leak-guard-denylist-commit-msg` hook の `entry` 行をコメントアウト → 同じテストの commit-msg の pin が赤
+  - 共有補助の `invocations` を部分文字列の照合へ戻す → 2 本の配線テストの、flag を区別する pin が赤
+- [ ] Step 13 (コントローラ): `python3 scripts/run-python-tests.py` が、移動分の「消えた / 未記録」で赤になる
+  ことを確かめてから `--update-manifest`。再実行で 10 ファイル / 665 件、manifest と一致
+- [ ] Step 14 (コントローラ): `pre-commit run --all-files` が全 hook 緑、`leak-guard-denylist` の出力が
+  `status=checked`。`pre-commit run --hook-stage commit-msg --commit-msg-filename <.cache のファイル>` で
+  commit-msg の hook も緑
+- [ ] Step 15 (コントローラ): コミット。件名 `refactor(dev-workflow): 禁止語の検査を commit-and-pr-message へ移す (ISSUE-58)`
 
-### Task 2: 層 1 のルールを skill 配下へ移し、root を extend にする
+### Task 2: 層 1 を custom と既定の 2 本の config へ分け、root の config を消す
 
 Files:
-- Create: `CPM/scripts/leak-guard.gitleaks.toml`
-- Modify: `.gitleaks.toml`、`scripts/check-leak-guard-rules.py`、`scripts/leak-guard-cases-manifest.txt` (再生成)、
-  `.pre-commit-config.yaml` (`leak-guard-rules` の `files:` とファイル冒頭のコメント)、`CLAUDE.md` (漏洩ルールの canonical)
+- Create: `CPM/scripts/leak-guard.gitleaks.toml`、`CPM/scripts/leak-guard-default.gitleaks.toml`、
+  `scripts/ci/install-gitleaks.sh` (実行ビット付き)
+- Delete: `.gitleaks.toml` (`git rm`)
+- Modify: `scripts/check-leak-guard-rules.py`、`scripts/leak-guard-cases-manifest.txt` (再生成)、
+  `scripts/test_leak_guard_attachment.py`、`.pre-commit-config.yaml`、`.github/workflows/ci.yml`、`CLAUDE.md`
 
 Interfaces:
 - Consumes: なし
-- Produces: `CPM/scripts/leak-guard.gitleaks.toml`。`[extend] useDefault = true` と custom ルール
-  `user-path` / `vm-uuid` / `email-address` を持ち、自身は `[extend] path` を持たない。Task 3 が
-  sibling として `-c` へ渡し、tomllib で `[[rules]]` の id を読む
+- Produces:
+  - `CPM/scripts/leak-guard.gitleaks.toml`: custom ルール `user-path` / `vm-uuid` / `email-address`。
+    `[extend]` を持たない。名前が `gitleaks.toml` で終わるファイルを外す path の allowlist を持つ
+  - `CPM/scripts/leak-guard-default.gitleaks.toml`: `title` と `[extend] useDefault = true` だけ
+  - Task 3 はどちらも sibling として `-c` へ渡す
 
 - [ ] Step 1: 対照ケースを先に足す (`scripts/check-leak-guard-rules.py`)
-  - `SHOULD_ALLOW` に `mail-anthropic-noreply` のケースを足す。値は帰属行が持つ Anthropic の noreply
-    アドレスそのもの。許可側なので literal で書いてよい (Step 3 の許可と同じコミットに入れること。
-    許可より先にコミットすると、そのファイル自身が層 1 に捕まる)
-  - `SHOULD_DETECT` に `("email-address", "mail-github-noreply", "12345+" + NAME + "@users." + "noreply.github.com")`
+  - `SHOULD_ALLOW` に `mail-anthropic-noreply` を足す。値は帰属行が持つ Anthropic の noreply アドレスそのもの。
+    許可側なので literal で書いてよい (Step 3 の許可と同じコミットに入れること。許可より先にコミットすると、
+    そのファイル自身が層 1 に捕まる)
+  - `SHOULD_DETECT` (email-address) に次を足す。どれも連結で組み立てる
+    - GitHub noreply 形。ID には 0 を、login には GitHub の login に使えない文字 (`_`) を含めた名前を使う
+      (実在するアカウントの ID と login を組み合わせない)
+    - Anthropic の noreply アドレスの前に文字を付けた形と、後ろにドメインを続けた形 (許可の `^` と `$` の pin)。
+      後ろのドメインは予約ドメインの免除に掛からない形にする
+    - 前提 10 の形: ローカル部が `true` で始まるもの、`false` を含むもの
+  - `SHOULD_DETECT` (user-path) に、前提 10 の形 (名前に `false` を含むもの、`null` で終わるもの) と、
+    前提 12 の印を持つ行 (合成パスの後ろに印、HTML コメントの中に印) を足す。email-address にも印の行を 1 本足す
   - 既定ルールの検出ケースを別の並び `DEFAULT_DETECT` に置く:
     `("github-pat", "default-github-pat", "ghp" + "_" + "aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC5fD7")`。
-    36 文字を多様な英数字にするのは、既定ルールにエントロピーの閾値があり単調な並びは当たらない
-    ため (この並びで検出を実測)。入口の canary も同じ値を使う。`SHOULD_DETECT` へ入れないのは、
-    そちらの名指すルールが custom ルール集合との一致を要求されているため
-  - `case_keys()` に `detect-default::<rule>::<case>` を足し、`main()` の判定で `DEFAULT_DETECT` も
-    ルール別に見る
-- [ ] Step 2: `python3 scripts/check-leak-guard-rules.py` を実行し、`mail-anthropic-noreply` の誤検出で
-  赤になることを確かめる (他の新ケースは現行ルールで既に期待どおり)
-- [ ] Step 3: `CPM/scripts/leak-guard.gitleaks.toml` を作る。中身は root の `.gitleaks.toml` から移す。
-  変えるのは次の 4 点
+    36 文字を多様な英数字にするのは、既定ルールにエントロピーの閾値があり単調な並びは当たらないため
+    (この並びで検出を実測)。値に `true` / `false` / `null` を含めない (既定の全体除外に掛かる)
+  - `case_keys()` に `detect-default::<rule>::<case>` を足す
+- [ ] Step 2: `python3 scripts/check-leak-guard-rules.py` を実行し、赤の内訳を記録する。期待は
+  `mail-anthropic-noreply` の誤検出、前提 10 の形の取りこぼし、印の行の取りこぼし。他の新ケースは現行の
+  ルールで期待どおり
+- [ ] Step 3: `CPM/scripts/leak-guard.gitleaks.toml` を作る。root の `.gitleaks.toml` から custom ルールを移し、全文を
+  読んで次を直す
+  - `[extend] useDefault = true` を持たない。理由 (前提 10) をコメントに書く
+  - `[allowlist]` に `paths = ['''(^|/)[^/]*gitleaks\.toml$''']` を置く。このファイル自身と過去の root の
+    config が実例を literal で持つため (前提 14。外すと全履歴で 24 件)。「gitleaks が `.gitleaks.toml` という
+    名前を外す」という旧い説明はこの allowlist の説明へ置き換える
+  - `email-address` の allowlist の末尾に `'''(?i)^noreply@anthropic\.com$'''` を足す。allowlist の regexes は
+    1 本へ束ねて評価され `(?i)` が前方へ漏れるので、既存と同じく付ける
   - `title` を配布物として中立な名前へ
-  - `email-address` の allowlist の末尾に `'''(?i)^noreply@anthropic\.com$'''` を足す。
-    allowlist の regexes は 1 本へ束ねて評価され `(?i)` が前方へ漏れるので、既存と同じく付ける
-  - 「gitleaks が `.gitleaks.toml` という名前のファイルを走査対象から外す」という説明を、
-    「既定 config (`useDefault`) の allowlist が `*gitleaks.toml` という名前のファイルを外す。
-    このファイルが実例を literal で書けるのはこの名前だから」へ直す (spec の前提 2)
-  - 配布元固有の記述 (winvm の一時ファイル、fixture の出所、`scripts/check-leak-guard-rules.py` を
-    名指す箇所) を、配布先で偽にならない書き方へ直す。値そのもの (fixture の UUID など) は残す
-- [ ] Step 4: root の `.gitleaks.toml` を `title` と `[extend] path = "plugins/dev-workflow/skills/commit-and-pr-message/scripts/leak-guard.gitleaks.toml"`
-  だけにする。コメントに次を書く: パスは cwd 基準で解決される (pre-commit と CI は cwd が root)。
-  extend は 2 段で止める (3 段にすると既定のルールと除外がエラー無しで落ちる、実測)。
-  `.gitleaksignore` はこのリポジトリの履歴の記録なのでここに残す
-- [ ] Step 5: `scripts/check-leak-guard-rules.py` を直す
-  - `RULES = ROOT / "plugins/dev-workflow/skills/commit-and-pr-message/scripts/leak-guard.gitleaks.toml"` を
-    置き、`config_rule_ids()` は `RULES` を読む
-  - `detections()` は `-c .gitleaks.toml` (相対) を `cwd=ROOT` で渡す。pre-commit と CI が使う
-    経路 (extend) ごと対照で見るため
-  - root の `.gitleaks.toml` が `title` と `extend.path` 以外を持たないこと、`extend.path` が
-    `RULES` の root からの相対パスと一致することを tomllib で確かめ、外れたら 2 を返す
-  - 失敗時に `proc.stderr` を印字するとき、`str(ROOT)` と一時ディレクトリの絶対パスを
-    プレースホルダへ置き換える (config を読めないと stderr に絶対パスが出る、実測)
-  - モジュール docstring と `RULE_IDS` のコメントが名指す canonical を `RULES` へ
-- [ ] Step 6: `python3 scripts/check-leak-guard-rules.py` が緑。`--update-manifest` で manifest を
-  再生成し、再実行で一致
-- [ ] Step 7: 変異注入 (1 つずつ、Edit で戻す)
-  - root の `.gitleaks.toml` から `[extend]` を消す → 検出側の取りこぼしで赤
-  - root と `RULES` の間に中間ファイルを 1 段挟む (3 段) → `default-github-pat` の取りこぼしで赤
-  - `RULES` の noreply の許可を消す → `mail-anthropic-noreply` の誤検出で赤
-  - root に custom ルールを 1 本足す → 2 (root が extend だけでない)
-- [ ] Step 8: `.pre-commit-config.yaml` の `leak-guard-rules` の `files:` に `RULES` のパスを足す。
-  冒頭コメントの「`.gitleaks.toml` の custom ルール」を extend の形に合わせる。`CLAUDE.md` の
-  「形の決まった漏洩の検査ルール」の canonical (表と本文の 2 箇所) を `RULES` のパスへ
-- [ ] Step 9: 基準値との比較。作業ツリーで `gitleaks git --redact --no-banner -c .gitleaks.toml` が
-  no leaks (commit 数は基準 + 本ブランチの分)。コミット後に clone して `.gitleaksignore` を消した
-  同じコマンドが 10 件 (user-path 1 / vm-uuid 9) で基準と一致
-- [ ] Step 10: `pre-commit run --all-files` 全緑。コミット。
-  件名 `refactor(security): 漏洩ルールを commit-and-pr-message へ移し root は extend にする (ISSUE-58)`
+  - 配布先で偽になる記述 (「pre-commit と CI の双方が本設定を使用する」、履歴へ入った経緯、特定の plugin や
+    Issue や CLAUDE.md の名指し、「現在の追跡ツリーには 1 件も無い」、`scripts/check-leak-guard-rules.py` の
+    名指し) を、配布先でも真である書き方へ直す。値そのもの (fixture の UUID など) は残す。パスで免除しない理由と
+    Public を許可する理由のうち配布元に固有の部分は、`scripts/check-leak-guard-rules.py` の `SHOULD_ALLOW` 側の
+    コメントへ移す
+- [ ] Step 4: `CPM/scripts/leak-guard-default.gitleaks.toml` を作る。`title` と `[extend] useDefault = true` だけ。
+  custom ルールと分けている理由 (前提 10) をコメントに書く
+- [ ] Step 5: `git rm .gitleaks.toml`
+- [ ] Step 6: `scripts/check-leak-guard-rules.py` を直す
+  - `CUSTOM_RULES` と `DEFAULT_RULES` を置き、`CONFIG` を消す
+  - 全ケースを 2 本の config でそれぞれ 1 回ずつ `gitleaks dir` へ通し、検出を合わせる。どちらの呼び出しにも
+    `--ignore-gitleaks-allow` を付ける。custom の検出ケースは custom の config の検出で、`DEFAULT_DETECT` は
+    既定の config の検出で判定する。許可ケースは、どちらの config のどのルールにも掛からないことで判定する
+  - ルール集合の一致は custom の config を読む。既定の config が `rules` を持たないことも確かめ、持っていれば 2
+    (custom ルールが既定の config へ移ると前提 10 の見逃しが戻る)
+  - パスを印字する経路 (gitleaks の stderr、設定ファイルや manifest が無いときの文言、読めないときの例外の文字列) を
+    1 つの関数に通し、`str(ROOT)` と一時ディレクトリの絶対パスをプレースホルダへ置き換える
+  - モジュール docstring と `RULE_IDS` のコメントが名指す canonical を新しい置き場へ
+- [ ] Step 7: `python3 scripts/check-leak-guard-rules.py` が緑。`--update-manifest` で manifest を再生成し、再実行で一致
+- [ ] Step 8: `scripts/ci/install-gitleaks.sh` を作る。版 (`8.30.1` と「開発機と揃える」の注記)、sha256、ダウンロードと
+  展開 (`download-and-verify.sh` を呼ぶ)、展開先 `$RUNNER_TEMP`、`$GITHUB_PATH` への追記はこのスクリプトだけが持つ。
+  `chmod +x` し、`git add` 後の `git ls-files -s` で `100755` であることを確かめる (Write が作るファイルは 0644)
+- [ ] Step 9: `ci.yml` の leak-guard job を直す。「Install gitleaks」をスクリプトの呼び出しへ置き換え、全履歴の走査を
+  config ごとの 2 step にする。どちらも `gitleaks git --redact --no-banner --ignore-gitleaks-allow -c <config>`。
+  コメントの「`-c` で custom ルールを渡す」を 2 本の形に合わせる
+- [ ] Step 10: `.pre-commit-config.yaml` を直す
+  - `gitleaks` hook を config ごとの 2 本にする。entry は
+    `gitleaks git --staged --redact --no-banner --ignore-gitleaks-allow -c <config>`
+  - `leak-guard-rules` の `files:` の `\.gitleaks\.toml` を 2 本の config のパスへ置き換える
+  - 冒頭コメントのうち、ルール集合を再掲している部分と `.gitleaks.toml` を名指す部分を、2 本の config を
+    名指す形へ直す。hook の `name` にもルール集合を書かない (ISSUE-55 の F25)
+- [ ] Step 11: 配線テストに層 1 の pin を足す (`scripts/test_leak_guard_attachment.py`)
+  - pre-commit の gitleaks の呼び出しが 2 本の config をそれぞれ `--staged` と `--ignore-gitleaks-allow` 付きで呼ぶ
+  - CI が 2 本の config をそれぞれ `--ignore-gitleaks-allow` 付きで全履歴走査する
+  - 2 本の config のパスが実在する
+- [ ] Step 12: `CLAUDE.md` を直す
+  - 「形の決まった漏洩の検査ルール」の canonical (表と本文の 2 箇所) を 2 本の config へ
+  - 「検証」節の gitleaks の hook についての記述を 2 本の形に合わせる (全文を読んで、hook を 1 本と断定している
+    文が残らないようにする)
+  - 「依存を増やさない」の対象を、置き場所ではなく「pre-commit か CI から呼ばれる Python」へ書き直す。
+    例外は `uv run --script` で依存を宣言するスタンドアロンスクリプトに限る
+- [ ] Step 13: 単体テスト (配線テスト) を直接回して緑
+- [ ] Step 14: 変異注入 (写しで行う)
+  - custom の config から noreply の許可を消す → `mail-anthropic-noreply` の誤検出で `check-leak-guard-rules.py` が 1
+  - noreply の許可から `^` を消す / `$` を消す → それぞれ前置・後置のケースの取りこぼしで 1
+  - 既定の config から `useDefault` を消す → `default-github-pat` の取りこぼしで 1
+  - `check-leak-guard-rules.py` の gitleaks 呼び出しから `--ignore-gitleaks-allow` を消す → 印の行の取りこぼしで 1
+  - custom ルールを 1 本、既定の config へ移す → ルール集合の検査で 2
+  - pre-commit の gitleaks hook の片方から `--ignore-gitleaks-allow` を消す → 配線テストが赤
+- [ ] Step 15 (コントローラ): stage した差分を 2 本の config で `gitleaks git --staged --redact --no-banner --ignore-gitleaks-allow -c <config>`
+  へ通し、どちらも no leaks で、走査量が 0 でないこと。作業ツリーでの `gitleaks git` は未コミットの変更を
+  見ないので、この時点の根拠にしない
+- [ ] Step 16 (コントローラ): `pre-commit run --all-files` 全緑。コミット。
+  件名 `refactor(security): 漏洩ルールを custom と既定の 2 本の config に分けて commit-and-pr-message へ移す (ISSUE-58)`
+- [ ] Step 17 (コントローラ): コミット後に fresh clone を作り、`.gitleaksignore` を消した全履歴走査を 2 本の config で行う。
+  custom は 10 件 (user-path 1 / vm-uuid 9)、既定は 0 件。`.gitleaksignore` を残した走査はどちらも no leaks。
+  走査したコミット数が `git rev-list --count HEAD` と一致すること
 
 ### Task 3: 入口 `check-outgoing-text.py`
 
 Files:
-- Create: `CPM/scripts/check-outgoing-text.py`、`CPM/scripts/test_check_outgoing_text.py`、`scripts/ci/install-gitleaks.sh`
-- Modify: `.github/workflows/ci.yml`、`scripts/test_leak_guard_denylist_attachment.py` (負の pin の対象に入口を足す)、
-  `scripts/python-tests-manifest.txt` (再生成)
+- Create: `CPM/scripts/check-outgoing-text.py` (実行ビット付き)、`CPM/scripts/test_check_outgoing_text.py`
+- Modify: `.github/workflows/ci.yml` (python-tests job で install-gitleaks.sh を呼ぶ)、
+  `scripts/test_leak_guard_attachment.py` (CI が入口を呼ばないことの pin)、`scripts/check-leak-guard-rules.py`
+  (入口の canary を借りる)、`.pre-commit-config.yaml` (`leak-guard-rules` の `files:` に入口を足す)、
+  `scripts/python-tests-manifest.txt` と `scripts/leak-guard-cases-manifest.txt` (再生成)
 
 Interfaces:
 - Consumes: Task 1 の `check-leak-guard-denylist.py` (sibling、subprocess で `--check-text <path>`)、
-  Task 2 の `leak-guard.gitleaks.toml` (sibling)
-- Produces (Task 4 のテストが import する):
+  Task 2 の 2 本の config (sibling)
+- Produces (Task 4 のテストと `check-leak-guard-rules.py` が使う):
 
 ```python
+from __future__ import annotations  # 3.9 で注釈を評価させない
+
 EXIT_OK, EXIT_FINDING, EXIT_UNABLE, EXIT_SKIPPED = 0, 1, 2, 3
+RESULT_BY_EXIT = {EXIT_OK: "ok", EXIT_FINDING: "finding", EXIT_UNABLE: "unable", EXIT_SKIPPED: "skipped"}
 STATE_CHECKED, STATE_SKIPPED, STATE_UNABLE = "checked", "skipped", "unable"
-HERE: Path              # このファイルのディレクトリ
-DENYLIST_SCRIPT: Path   # HERE / "check-leak-guard-denylist.py"
-RULES_FILE: Path        # HERE / "leak-guard.gitleaks.toml"
+HERE: Path                      # このファイルのディレクトリ
+DENYLIST_SCRIPT: Path           # HERE / "check-leak-guard-denylist.py"
+CUSTOM_RULES: Path              # HERE / "leak-guard.gitleaks.toml"
+DEFAULT_RULES: Path             # HERE / "leak-guard-default.gitleaks.toml"
+
+def custom_canary() -> dict[str, str]    # custom ルール ID -> canary の行 (実行時に組み立てる)
+def default_canary() -> dict[str, str]   # 既定ルール ID -> canary の行
 
 class Hit(NamedTuple):
     file_no: int   # 引数の順番 (1 始まり)
-    line: int
+    line: int      # 入力の行番号 (canary の行を除いた番号)
     layer: int     # 1 or 2
     label: str     # 層 1 はルール ID、層 2 は "denylist line <n>"
 
@@ -230,28 +321,28 @@ class Layer(NamedTuple):
     reason: str    # checked のときは ""
     hits: list[Hit]
 
+def decide(layer1: Layer, layer2: Layer) -> int          # 純粋関数。優先順は spec の表
+def parse_report(stdout: bytes) -> list[tuple[int, str]]  # 純粋関数。(StartLine, RuleID) を返す。読めなければ ReportError
 def main(argv: list[str] | None = None, *, env: Mapping[str, str] | None = None,
-         rules: Path = RULES_FILE, denylist_script: Path = DENYLIST_SCRIPT) -> int
+         custom_rules: Path = CUSTOM_RULES, default_rules: Path = DEFAULT_RULES,
+         denylist_script: Path = DENYLIST_SCRIPT) -> int
 ```
 
-`gitleaks` の解決は `shutil.which("gitleaks", path=env.get("PATH"))`。テストは `PATH` で有無を作る。
-
-振る舞いの canonical は spec の「入口の振る舞い」節で、実装後はこのファイルの docstring が持つ。
-要点だけ次に置く。
+振る舞いの canonical は spec の「入口の振る舞い」節で、実装後はこのファイルの docstring が持つ。要点だけ次に置く。
 
 | 項目 | 決め |
 |---|---|
-| 入力の検査 | 通常ファイルでない・読めない・0 byte → 両層 unable (reason `input-unreadable` / `input-empty`)。gitleaks も層 2 も起動しない |
-| 層 1 の一時ディレクトリ | `tempfile.TemporaryDirectory()`。入力は `001.txt` から連番、canary は `000.txt`。名前の形はテストで pin |
-| canary | custom ルールごとに 1 行 (`CANARY_BY_RULE: dict[str, str]`) と既定ルール 1 行 (`github-pat`)。値はソース上で連続しないよう組み立てる。ユーザーパスは裸の 1 行 (`/Users/<合成名>/x`) |
-| custom ルール集合 | `rules` を tomllib で読んだ `[[rules]]` の id 集合が `CANARY_BY_RULE` のキーと一致しなければ unable (`canary-rule-mismatch`) |
-| gitleaks の argv | `dir <tmp> -c <rules> --gitleaks-ignore-path <tmp> --report-format json --report-path - --redact --no-banner --no-color --exit-code 0` |
-| 層 1 の前段 | `rules` を tomllib で読めなければ unable (`rules-unreadable`)。一時ディレクトリへ書けなければ unable (`copy-failed`) |
-| gitleaks の rc | `--exit-code 0` なので 0 以外は unable (`gitleaks-failed`)。stdout と stderr は印字しない |
-| レポート | stdout を JSON として読む (`report-unreadable`)。`File` の basename が `000.txt` / 入力の連番のどれでもなければ unable (`unknown-report-file`)。canary の (行, `RuleID`) 集合が期待と完全一致しなければ unable (`canary-not-detected`) |
-| 層 2 | 入力ごとに `[sys.executable, denylist_script, "--check-text", path]`。stdout に `status=skipped` → skipped (`env-unset`)。rc 0 かつ `status=checked` → checked。rc 1 かつ `status=checked` → 検出 (stderr の `line N: denylist line M` を座標へ)。それ以外は unable (`denylist-unable` / `denylist-no-status`)。rc 1 なのに座標が 1 件も読めなければ unable。層の状態は入力間で最悪を採る |
-| 想定外の例外 | `main` の最上位で受け、`error=<型名>` だけを出して EXIT_UNABLE |
-| 終了コード | 検出 > unable > skipped > checked の順に 1 / 2 / 3 / 0 |
+| env | `main` は受けた env を gitleaks の解決と層 2 の subprocess の両方へ渡す。`None` なら `os.environ` |
+| 入力の前段 | 通常ファイルでない (symlink は辿った先で見る)・読めない → `input-unreadable`、0 byte → `input-empty`、UTF-8 として読めない・NUL を含む → `input-undecodable`。どれかに当たれば両層をその理由の unable にし、gitleaks も層 2 も起動しない |
+| gitleaks の解決 | `shutil.which("gitleaks", path=env.get("PATH"))`。`None` なら層 1 は skipped (`gitleaks-not-found`)。見つかった絶対パスで起動する。起動に失敗したら unable (`gitleaks-failed`) |
+| gitleaks の呼び出し | 入力ごと・config ごとに `[<絶対パス>, "stdin", "-c", <config>, "-i", <HERE>, "--ignore-gitleaks-allow", "--report-format", "json", "--report-path", "-", "--redact", "--no-banner", "--no-color", "--exit-code", "0"]`。stdin はルール ID の昇順に並べた canary の行と入力のバイト列 |
+| gitleaks の rc | 0 以外は unable (`gitleaks-failed`)。stdout と stderr は印字しない |
+| レポート | `parse_report` が読めなければ unable (`report-unreadable`)。先頭の canary の行の範囲の (行, ルール ID) 集合が期待と完全一致しなければ unable (`canary-not-detected`)。範囲より後ろの検出は行番号から canary の行数を引いて座標にする |
+| 層 2 | 入力ごとに `[sys.executable, denylist_script, "--check-text", path]`。stdout に `status=skipped` → skipped (`env-unset`)。rc 0 かつ `status=checked` → checked。rc 1 かつ `status=checked` で stderr の `line N: denylist line M` を 1 件以上読めた → 検出。それ以外は unable (`denylist-unable`) |
+| 層の状態 | 入力間で最悪 (unable > skipped > checked) を採る。理由は最初に最悪になった入力のもの |
+| 想定外の例外 | `main` の最上位で受け、`error=<型名>` と `result=unable` と要約だけを出して EXIT_UNABLE |
+| 終了コード | `decide` が検出 > unable > skipped > checked の順に 1 / 2 / 3 / 0 を返す |
+| docstring | 状態と理由の語彙、終了コードの優先順と result の語、canary の目的と、揃わないときに考えられる原因 (中身による読み飛ばし、ルールの欠落、版の違い)、stdin 経由にした理由、各フラグを渡す理由 (実測)、stderr を流さない理由 (実測)、検証した gitleaks の版、既知の限界 (spec の該当行のうち入口に関わるもの) |
 
 出力の形 (stdout。stderr には何も出さない):
 
@@ -264,138 +355,243 @@ result=<ok|finding|unable|skipped>
 <日本語の要約 1 行>
 ```
 
-- [ ] Step 1: `scripts/ci/install-gitleaks.sh` を作り、`ci.yml` の leak-guard job の「Install gitleaks」を
-  これの呼び出しへ置き換え、python-tests job の runner の前に同じ呼び出しを足す。版
-  (`8.30.1` と「開発機と揃える」の注記) と sha256 はこのスクリプトだけが持つ。展開先は
-  `$RUNNER_TEMP`、`$GITHUB_PATH` への追記もこのスクリプトが行う。`download-and-verify.sh` を呼ぶ
-- [ ] Step 2: テストを先に書く (`CPM/scripts/test_check_outgoing_text.py`)。禁止語は架空語、
-  禁止語リストはテスト内の一時ファイル。合成値は組み立てる。判定表:
+想定外の例外のときは `error=<型名>`、`result=unable`、要約の 3 行だけを出す。
 
-  | テスト | 入力と環境 | 期待 |
-  |---|---|---|
-  | clean | 清浄な本文 1 本、リスト設定済み | rc 0、両層 checked |
-  | layer1_hit | 合成ユーザーパスの行 | rc 1、`file 1 line <n>: layer1 user-path` |
-  | layer2_hit | 架空語の行 | rc 1、`layer2 denylist line 1` |
-  | two_files | タイトルと本文の 2 本、2 本目だけ検出 | 座標が `file 2` |
-  | gitleaks_absent | `PATH` から gitleaks のあるディレクトリを除く | rc 3、`layer1 status=skipped reason=gitleaks-not-found` |
-  | env_unset | リスト未設定 | rc 3、`layer2 status=skipped reason=env-unset` |
-  | defaults_dropped | `rules` から `[extend]` を除いた写し | rc 2、`canary-not-detected` |
-  | rule_regex_broken | `user-path` の regex を当たらない形へ置換した写し | rc 2、`canary-not-detected` |
-  | rule_missing | `vm-uuid` のブロックを除いた写し | rc 2、`canary-rule-mismatch` |
-  | rules_unreadable | 存在しない `rules` | rc 2、出力にパス断片が無い |
-  | no_args / missing_file / empty_file | 引数なし / 無いパス / 0 byte | rc 2 |
-  | denylist_no_status | 何も出さず rc 0 で終わる stub を `denylist_script` に渡す | rc 2、`denylist-no-status` |
-  | hit_beats_unable | 層 1 で検出、層 2 は stub で unable | rc 1 |
-  | unable_in_one_file | 2 本のうち 1 本が非 UTF-8 (層 2 が unable) | rc 2 |
-  | excluded_name | 入力のファイル名が `x.gitleaks.toml` と `y.bin`、中身に合成ユーザーパス | rc 1 |
-  | anthropic_noreply | 帰属行の Anthropic noreply | rc 0 |
-  | github_noreply | GitHub noreply 形の帰属行 | rc 1 |
-  | redaction | 上の各ケースの出力全体 | 架空語・合成値・入力パス・`rules` のパス・一時ディレクトリのパスを含まない |
-  | temp_names | 層 1 に渡す一時ファイルの名前 | `000.txt` と `001.txt` 以降 (名前を返す関数を pin) |
+- [ ] Step 1: ci.yml の python-tests job の runner の前に `scripts/ci/install-gitleaks.sh` の呼び出しを足す
+- [ ] Step 2: テストを先に書く (`CPM/scripts/test_check_outgoing_text.py`)。禁止語は架空語、禁止語リストはテスト内の
+  一時ファイル。合成値は組み立てる。env は `os.environ` から `LEAK_GUARD_DENYLIST` と `GIT_*` を除いた dict を
+  基点にする補助を置き、全ケースがそこから作る。「P」はプロセス境界 (`sys.executable` で起動し、stdout と
+  stderr の両方を捕捉)、「M」は `main(...)` 呼び出し (stdout を捕捉)、「U」は純粋関数。
+  全ての P と M のケースで、rc に加えて両層の `status=` と `reason=` を assert する。P のケースでは stderr が
+  空であることも assert する
 
-  写しの config は `rules` の本文への文字列置換で作り、置換が 1 回起きたことを assert する
-  (起きていないとテストが対象を壊していない dead pin になる)。process 境界で見るケース
-  (redaction、gitleaks_absent、env_unset、clean、layer1_hit) は `sys.executable` でスクリプトを
-  起動する。残りは `main(argv, env=..., rules=..., denylist_script=...)` を呼び、stdout を捕捉する
-- [ ] Step 3: `cd CPM/scripts && python3 -m unittest test_check_outgoing_text` で、入口が無いことによる
-  失敗を確かめる
-- [ ] Step 4: `check-outgoing-text.py` を実装する (上の表と出力の形)。docstring に、状態と理由の語彙、
-  終了コードの優先順、canary の目的、`--report-path -` と `--gitleaks-ignore-path` を渡す理由 (実測)、
-  stderr を流さない理由 (実測) を書く
-- [ ] Step 5: テストを通す。`python3 scripts/run-python-tests.py --update-manifest` のあと
-  `python3 scripts/run-python-tests.py` が緑
-- [ ] Step 6: `scripts/test_leak_guard_denylist_attachment.py` の CI への負の pin を、入口のパスにも
-  掛ける (workflow が入口を literal で呼ぶと、層 2 が公開ログへ取り付く)
-- [ ] Step 7: 変異注入 (1 つずつ、Edit で戻す)。どれも赤になることを確かめる
-  - canary の照合を外し、レポートを読めたら checked にする → `defaults_dropped` / `rule_regex_broken`
-  - 一時ファイルを入力の basename で写す → `excluded_name` / `temp_names`
-  - 優先順の 1 と 2 を入れ替える → `hit_beats_unable`
-  - gitleaks の stderr を出力へ流す → `rules_unreadable` の redaction
-  - 層 2 を rc だけで判定する → `denylist_no_status` / `env_unset`
-  - 0 byte を通す → `empty_file`
-- [ ] Step 8: live smoke (`.cache/` の合成ファイル、環境変数は起動元のまま)。
-  清浄 → 0、合成ユーザーパス → 1、`env -u LEAK_GUARD_DENYLIST` → 3、`PATH` から gitleaks を外す → 3。
+  | テスト | 形 | 入力と環境 | 期待 |
+  |---|---|---|---|
+  | clean | P | 清浄な本文 1 本、リスト設定済み | 0、両層 checked |
+  | layer1_custom_hit | P | 合成ユーザーパスの行 | 1、`file 1 line <n>: layer1 user-path` |
+  | layer1_default_hit | M | 既定ルールに当たる行 (値は組み立てる) | 1、`layer1 github-pat` |
+  | layer2_hit | M | 架空語の行 | 1、`layer2 denylist line 1` |
+  | two_files | M | 2 本の入力の 2 本目に層 1 と層 2 の両方の検出 | 座標がどちらも `file 2` |
+  | allow_marker | M | 合成パスの後ろに印を持つ行、HTML コメントの中に印を持つ行 | 1、両方の行の座標 |
+  | allowlist_bypass_values | M | spec の前提 10 の形の値 (組み立てる) | 1、全ての行の座標 |
+  | magic_prefixed | M | 先頭が `%PDF-`・`MZ`・`{\rtf` の UTF-8 入力に合成パス | 1 |
+  | content_skipped | M | canary の行を足したあとも 128 バイト目に `DICM` が来る入力 (custom の canary の長さから作る) | 2、`canary-not-detected` |
+  | symlink_input | M | 合成パスを持つファイルを指す symlink | 1 |
+  | undecodable | M | UTF-16 / 不正な UTF-8 / NUL を含む入力 (それぞれ) | 2、両層 `input-undecodable`。層 2 には呼ばれたら `status=checked` を出す stub を渡し、呼ばれていないことを理由で見る |
+  | empty_and_missing | M | 0 byte / 無いパス | 2、両層 `input-empty` / `input-unreadable` |
+  | gitleaks_absent | P | PATH を空の一時ディレクトリ 1 つにする (テスト内でその PATH の `which` が None であることを assert) | 3、`layer1 status=skipped reason=gitleaks-not-found` |
+  | env_unset | P | リスト未設定 | 3、`layer2 status=skipped reason=env-unset` |
+  | env_not_inherited | M | `os.environ` には架空語リストを指す変数を置き、`main` には変数を除いた env を渡す | 3、層 2 が skipped |
+  | custom_regex_broken | M | custom の config の `user-path` の regex を当たらない形へ置換した写し | 2、`canary-not-detected` |
+  | custom_rule_missing | M | custom の config から `vm-uuid` のブロックを除いた写し | 2、`canary-not-detected` |
+  | default_dropped | M | 既定の config から `useDefault` を除いた写し | 2、`canary-not-detected` |
+  | gitleaks_config_failed | P | 入口・層 2・2 本の config を一時ディレクトリへ写し、写した custom の config を「目印を含む存在しない絶対パスを extend する config」で置き換える | 2、`gitleaks-failed`。stdout に一時ディレクトリのパスと目印が無い |
+  | denylist_stubs | M | 何も出さず rc 0 / 何も出さず rc 1 / `status=checked` を出して rc 1 で座標なし、の stub (それぞれ) | 2、`denylist-unable` |
+  | no_args | P | 引数なし | 2 |
+  | unexpected_error | M | 内部で例外を起こす引数 (例: config に Path 以外) | 2、`error=<型名>`、traceback なし |
+  | decide_table | U | 両層の (状態, 検出の有無) の全組 | 検出 > unable > skipped > checked |
+  | parse_report_rejects | U | JSON でない / 配列でない / `StartLine` か `RuleID` が無い | `ReportError` |
+  | canary_values | U | `custom_canary()` と `default_canary()` の値 | `true` / `false` / `null` を含まない (大小無視) |
+  | output_grammar | P と M の全ケース | 出力の全行 | 決めた形のどれかに一致し、架空語・合成値・入力パス・config のパス・一時ディレクトリのパスを含まない |
+  | no_ignore_file | U | `HERE` | `.gitleaksignore` を持たない |
+  | py39_syntax | U | 入口のソース | `ast.parse(..., feature_version=(3, 9))` が通る |
+
+  写しの config は元の本文への文字列置換で作り、置換が 1 回起きたことを assert する (起きていないと
+  テストが対象を壊していない dead pin になる)
+- [ ] Step 3: 入口が無いことによる失敗を確かめる
+- [ ] Step 4: `check-outgoing-text.py` を実装する (上の表と出力の形)。`chmod +x` する
+- [ ] Step 5: テストを直接回して緑
+- [ ] Step 6: `scripts/check-leak-guard-rules.py` が入口を importlib で読み、次を借りる。入口を読めなければ 2
+  - ルール集合の一致に `custom_canary()` のキーを加える (custom の config の id・`RULE_IDS`・`SHOULD_DETECT` の
+    ルール・canary のキーの 4 集合)
+  - `DEFAULT_DETECT` の値を `default_canary()` から取る (2 箇所に literal を持たない)
+- [ ] Step 7: `.pre-commit-config.yaml` の `leak-guard-rules` の `files:` に入口のパスを足す。
+  `scripts/test_leak_guard_attachment.py` の「CI が層 2 を呼ばない」pin を入口のパスにも掛ける
+  (workflow が入口を呼ぶと、層 2 が公開ログへ取り付く)
+- [ ] Step 8: 変異注入 (写しで行う)。どれも赤になることを、赤になるべきテスト ID と突き合わせて確かめる
+  - canary の照合を外し、レポートを読めたら checked にする → `custom_regex_broken` / `custom_rule_missing` / `default_dropped` / `content_skipped`
+  - canary の行を入力の後ろに置く (行番号の補正は合わせる) → `magic_prefixed`
+  - `--ignore-gitleaks-allow` を外す → `allow_marker`
+  - `decide` の優先順の 1 と 2 を入れ替える → `decide_table`
+  - gitleaks の stderr を stdout へ流す → `gitleaks_config_failed`
+  - 層 2 を rc だけで判定する → `denylist_stubs`
+  - 0 byte を通す → `empty_and_missing`。UTF-8 と NUL の確認を外す → `undecodable`
+  - 層 2 の subprocess へ env を渡さない → `env_not_inherited`
+  - ci.yml の python-tests job に入口を呼ぶ step を足す → 配線テストの負の pin
+- [ ] Step 9 (コントローラ): `python3 scripts/run-python-tests.py --update-manifest` と
+  `python3 scripts/check-leak-guard-rules.py --update-manifest` のあと、それぞれ再実行で緑
+- [ ] Step 10 (コントローラ): live smoke。入口はリポジトリ内のパスで呼び、入力は `.cache/` の合成ファイル、
+  環境変数は起動元のまま。清浄 → 0、合成ユーザーパス → 1、`env -u LEAK_GUARD_DENYLIST` → 3、
+  PATH から gitleaks を含むエントリを全て外す → 3、`/usr/bin/python3` で清浄 → 0 (SyntaxError の 1 にならない)。
   出力に語もパスも出ないことを目で確かめる
-- [ ] Step 9: `pre-commit run --all-files` 全緑。コミット。
+- [ ] Step 11 (コントローラ): `pre-commit run --all-files` 全緑。コミット。
   件名 `feat(dev-workflow): 公開する本文へ両層の漏洩検査を通す入口を足す (ISSUE-58)`
 
 ### Task 4: SKILL.md の手順と周辺の追従
 
 Files:
 - Modify: `CPM/SKILL.md`、`CPM/scripts/test_check_outgoing_text.py` (表の pin)、`CPM/scripts/check-leak-guard-denylist.py`
-  (`run_check_text` の docstring)、`.claude/skills/release/SKILL.md`、`README.md` (再生成)、
-  `scripts/python-tests-manifest.txt` (再生成)
+  (`run_check_text` の docstring)、`.claude/skills/release/SKILL.md`、`plugins/dev-workflow/SKILL.md`、
+  `README.md` (再生成が要る場合)、`scripts/python-tests-manifest.txt` (再生成)
 
 Interfaces:
-- Consumes: Task 3 の `EXIT_OK` / `EXIT_FINDING` / `EXIT_UNABLE` / `EXIT_SKIPPED`
+- Consumes: Task 3 の `RESULT_BY_EXIT` と `EXIT_*`
 - Produces: SKILL.md の節 `### 送る前の検査` (pin テストがこの見出しで節を引く)
 
-- [ ] Step 1: pin テストを先に書く。SKILL.md の「送る前の検査」節にある表の 1 列目の整数集合が
-  `{EXIT_OK, EXIT_FINDING, EXIT_UNABLE, EXIT_SKIPPED}` と一致すること。節が見つからない・
-  表が空のときも赤 (0 件で緑にしない)。表の読み取りは見出しで節を切り、`| <整数> |` で始まる行だけ
-  を取る
+- [ ] Step 1: pin テストを先に書く
+  - SKILL.md の「送る前の検査」節にある表から `| <整数> / <語> |` で始まる行を取り、(整数, 語) の組の集合が
+    `RESULT_BY_EXIT` の項目の集合と一致すること。節が見つからない・表が空のときも赤 (0 件で緑にしない)
+  - `EXIT_OK` / `EXIT_FINDING` / `EXIT_UNABLE` / `EXIT_SKIPPED` の値を literal の 0 / 1 / 2 / 3 で pin する
 - [ ] Step 2: テストが節の不在で赤になることを確かめる
-- [ ] Step 3: SKILL.md を直す
+- [ ] Step 3: `CPM/SKILL.md` を直す
+  - frontmatter の description と「いつ使うか」「使わない」を、言語と Tirith の有無を問わず「公開される本文を
+    git / gh に渡すとき」に広げる。「渡す前に同梱の入口で漏洩検査を通す」を足す。Tirith に由来する条件は
+    「なぜファイル経由なのか」節に閉じ込める
   - ワークフローの冒頭を 4 手 (書く / 送る前の検査 / 渡す / 載ったことを確認) にする
-  - 「送る前の検査」節: 入口の呼び出し (`python3 "${CLAUDE_SKILL_DIR}/scripts/check-outgoing-text.py" <本文> [<1 行のファイル>]`)、
-    終了コードごとの行動の表 (0/1/2/3 と「それ以外」)、書き直しの規則 (spec の「書き直し」)、
-    「検査が見るのは形とリストに載った語だけなので渡す前に自分で読む」
-  - インラインの 1 行 (`--title` / `--subject` / Issue タイトル / リリースタイトル) は
-    `.cache/<面>-<slug>.title` にも書いて入口へ一緒に渡し、渡すときはその中身を写す
+  - 「送る前の検査」節: 入口の呼び出し (コードブロック 1 箇所だけで skill のディレクトリの変数を使う)、
+    (終了コード, result) ごとの行動の表と「上記以外」の行、2 と 3 のあとで環境を調べない・ツールを入れないこと、
+    書き直しの規則 (spec の「書き直し」)、「検査が見るのは形とリストに載った語だけなので渡す前に自分で読む」、
+    「入口のコマンド行と出力を公開する本文へ貼らない。記録するなら rc と `result=` の行だけ」
+  - インラインの 1 行 (`--title` / `--subject` / Issue タイトル / リリースタイトル) は `.cache/<面>-<slug>.title` にも
+    書いて入口へ一緒に渡し、渡すときはその中身を写す
   - Phase A / C と C.3 の表に、2 手目が入口であることを反映する (面ごとに同じ説明を繰り返さない)
-  - 落とし穴の表に「検査で 3 が出たが急ぐので渡す」「rc 1 の語をリストで確かめる」を足す
-  - frontmatter の description に「渡す前に同梱の入口で漏洩検査を通す」を足す
-- [ ] Step 4: `run_check_text` の docstring の「spec の実装順序 5 が扱う (未実装)」を、「公開される本文を
-  送る前にこの入口を通す手順は、同じ skill の SKILL.md が `check-outgoing-text.py` 経由で持つ」へ
-- [ ] Step 5: release skill の手順 3 と 4 から検査コマンドを外し、「`dev-workflow:commit-and-pr-message` の
-  送る前の検査を通す」へ置き換える。「この面は gitleaks の走査面の外で、見る機会がこの手順にしか
-  無い」という理由は残す。「載っていない語は通る」の段落は CPM へ移したので、release 側は参照に
-  する。落とし穴の表の該当行も合わせる
-- [ ] Step 6: `python3 scripts/gen-readme.py` で README を再生成。
-  `python3 scripts/run-python-tests.py --update-manifest` と再実行で緑
-- [ ] Step 7: 変異注入。SKILL.md の表から 3 の行を消す → pin テストが赤。Edit で戻す
-- [ ] Step 8: `pre-commit run --all-files` 全緑 (`claude plugin validate` / package-shape / readme-drift を含む)。
-  コミット本文と件名を入口に通してからコミットする (この Task から dogfooding)。
-  件名 `feat(dev-workflow): 公開する本文を送る前に漏洩検査を通す手順を書く (ISSUE-58)`
+  - 既知の限界を書く (1 行のファイルとインラインの値の一致は検査しない、手順を踏まない主体と画面上の編集は通らない)
+  - 落とし穴の表に「検査で 3 が出たが急ぐので渡す」「rc 1 の語をリストで確かめる」「skip の理由を見て環境を直しに行く」を足す
+  - 散文で skill のディレクトリの変数の名前に触れていないこと
+- [ ] Step 4: `run_check_text` の docstring の「spec の実装順序 5 が扱う (未実装)」を、「公開される本文を送る前にこの
+  検査を通す手順は、同じ skill の SKILL.md が `check-outgoing-text.py` 経由で持つ」へ
+- [ ] Step 5: release skill の手順 3 と 4 を直す
+  - 検査は入口をリポジトリ内のパスで呼ぶ形にする
+    (`python3 plugins/dev-workflow/skills/commit-and-pr-message/scripts/check-outgoing-text.py .cache/tag-v<X.Y.Z>.txt`。
+    手順 4 はノートとタイトルのファイルを一緒に渡す)
+  - 終了コードごとの行動は、リポジトリ内の `plugins/dev-workflow/skills/commit-and-pr-message/SKILL.md` の
+    「送る前の検査」節を名指す。消費側で読み込まれる skill は pin が上がるまで旧版で入口を持たないので、
+    読み込んだ skill へ委ねるだけにはしない (この理由を書く)
+  - 「この面は gitleaks の走査面の外で、見る機会がこの手順にしか無い」という理由は残す
+  - 「載っていない語は通る」の段落は CPM へ移したので参照にする。落とし穴の表の該当行も合わせる
+- [ ] Step 6: `plugins/dev-workflow/SKILL.md` の component 表の `commit-and-pr-message` の役割と、前提の段落
+  (「作法そのものは環境に依存しない」) を、検査を含む手順に合わせる (python3 と gitleaks が無ければ手順が止まって
+  確認を求める)。`python3 scripts/gen-readme.py --check` が drift を報告したら `python3 scripts/gen-readme.py` で再生成する
+- [ ] Step 7: pin テストを直接回して緑
+- [ ] Step 8: 変異注入 (写しで行う)。SKILL.md の表から `3 / skipped` の行を消す → pin テストが赤。
+  `EXIT_UNABLE` と `EXIT_SKIPPED` の値を入れ替える → literal の pin が赤
+- [ ] Step 9 (コントローラ): `python3 scripts/run-python-tests.py --update-manifest` と再実行で緑
+- [ ] Step 10 (コントローラ): `pre-commit run --all-files` 全緑 (`claude plugin validate` / package-shape / readme-drift を含む)。
+  コミット本文と件名をリポジトリ内のパスで入口に通してからコミットする (この Task から dogfooding。記録は rc と
+  `result=` の行だけ)。件名 `feat(dev-workflow): 公開する本文を送る前に漏洩検査を通す手順を書く (ISSUE-58)`
 
-### Task 5: Issue の記録と全体検証
+### Task 5: 記録・全体検証・クローズ
 
 Files:
-- Modify: `docs/issues/ISSUE-58_PR 本文の漏洩検査を配布物の手順へ組み込む/issue.md`、
+- Modify: `docs/issues/ISSUE-58_PR 本文の漏洩検査を配布物の手順へ組み込む/issue.md` (クローズで `closed/` へ移る)、
+  `docs/issues/ISSUE-55_層 2 のマージ前レビューで消化しなかった 35 件が残っている/issue.md`、
   `docs/issues/ISSUE-61_配布物が配布先で成立しているかを見る検査層が無い/issue.md`、
   `docs/issues/ISSUE-32_in-repo Issue の検査を配布先で走る状態にする/issue.md`
+- Create: Linux のホームディレクトリ形のパスを user-path に含めるかを扱う Issue
 
-- [ ] Step 1: ISSUE-58 の本文に決定の要約 (spec を名指し) を足し、タスク 4 つの実施結果を書いて `[x]` にする
-- [ ] Step 2: ISSUE-61 と ISSUE-32 の関連節の ISSUE-58 の行に、今回の結論 (同梱の入口 + canonical の
-  移動。hook と CI の取り付けは範囲外) を 1 行足す。ISSUE-32 の「配布対象から外す検査の宣言」に
-  関わる記述があれば、層 2 のスクリプトが配布物に入ったことを反映する
-- [ ] Step 3: 全体検証 (すべて実測を記録する)
+- [ ] Step 1: 新しい Issue を起票する (`dev-workflow:in-repo-issue` の Phase A。A.0 の重複検索を先に通す)。
+  内容は、Linux のホームディレクトリ形のパスが user-path に当たらないこと、Skill ツールで読み込んだ手順の
+  コマンド行がホームディレクトリの絶対パスを含むこと、広げる場合に要る許可 (CI runner など) と対照、
+  全履歴走査への影響を測ること
+- [ ] Step 2: ISSUE-55 を更新する。F2 と F25 を `[x]` にし、解決の内容を添える。層 2 の本体とテストが
+  `commit-and-pr-message/scripts/` へ移り、Issue 内の「本体:NNN / テスト:NNN」が移動前の座標であることを追記する
+- [ ] Step 3: ISSUE-61 に、計画レビューで見つかった 2 件を記録する (plugin の内側の skill 名を見ないインストール先の
+  検査、in-repo-issue の SKILL.md の散文が変数の置換で壊れること)。ISSUE-61 と ISSUE-32 の関連節の ISSUE-58 の行に、
+  今回の結論 (同梱の入口 + canonical の移動。hook と CI の取り付けは範囲外) を 1 行足す。ISSUE-32 の
+  「配布対象から外す検査の宣言」に関わる記述があれば、層 2 のスクリプトが配布物に入ったことを反映する
+- [ ] Step 4 (コントローラ): 全体検証。すべて実測を記録する
   - `pre-commit run --all-files` 全緑。`leak-guard-denylist` が `status=checked`
   - `pre-commit run --hook-stage commit-msg --commit-msg-filename <file>` が緑
   - `python3 scripts/run-python-tests.py` が manifest と一致 (ファイル数と件数を記録)
   - `python3 scripts/check-leak-guard-rules.py` が緑 (ケース数を記録)
-  - `gitleaks git --redact --no-banner -c .gitleaks.toml` が no leaks
-  - clone で `.gitleaksignore` を消した全履歴走査が 10 件 (user-path 1 / vm-uuid 9)
-  - 追跡ファイルに旧パス (`scripts/check-leak-guard-denylist.py`) と、root の `.gitleaks.toml` を
-    ルールの canonical と呼ぶ記述が残っていない (closed の Issue を除く)
-- [ ] Step 4: コミット (本文と件名を入口に通す)。件名 `docs(issues): ISSUE-58 の実装結果を記録する (ISSUE-58)`
-- [ ] Step 5: `dev-workflow:pre-merge-quality-gate` を通す。PR 本文とタイトルを入口に通してから
-  `gh pr create` する (live smoke)。クローズは feature PR へ同梱する (`in-repo-issue` の
-  「クローズ経路」節)
+  - fresh clone の全履歴走査が Task 2 Step 17 と同じ結果
+  - 旧パスと旧い config の名指しが残っていない。`(^|[^/A-Za-z_-])scripts/check-leak-guard-denylist\.py` と
+    `\.gitleaks\.toml` を、`docs/issues/` を除く追跡ファイルと dot 始まりのファイル (個別に渡す) で引き、
+    後者は当たった行を全件読んで「root の config を指しているか」を判定する。陽性の対照として、新しい
+    config のパスが `.pre-commit-config.yaml` と `ci.yml` で当たること
+  - 配布物へ `apm audit --file <path> --no-policy` を当て、warning が 0 件
+- [ ] Step 5: ISSUE-58 の本文に決定の要約 (spec を名指し) と実施結果を書き、タスク 4 つを `[x]` にする。
+  同じコミットでクローズする (`dev-workflow:in-repo-issue` の「クローズ経路: feature PR 同梱を優先」節。
+  status の書き換え、`git mv` で `closed/` へ、相対リンクの補正、新パスの明示 stage)。最後の箱を `[x]` にした
+  状態を active のままコミットすると不変条件の検査が赤になる。D.5 もここで行う (親は無いので Phase E は何もしない)
+- [ ] Step 6 (コントローラ): コミット (本文と件名を入口に通す)。件名 `docs(issues): ISSUE-58 の実装結果を記録してクローズする (ISSUE-58)`
+- [ ] Step 7 (コントローラ): `dev-workflow:pre-merge-quality-gate` を通す。PR 本文とタイトルをリポジトリ内のパスで入口に
+  通してから `gh pr create` する (live smoke)。PR 本文の検証節に残すのは rc と `result=` の行だけ
+- [ ] Step 8 (コントローラ): マージと次のリリースのあとで、配布経路の確認 (pin を上げた消費側で Skill ツールから
+  読み込み、置換後のパスで入口が rc 0 か 3 を返すこと) を dotfiles へ依頼する
 
 ## 変異注入の一覧
 
 | Task | 壊すもの | 赤になる検査 |
 |---|---|---|
-| 1 | pre-commit の層 2 hook の entry | 配線テスト |
-| 2 | root の `[extend]` / 3 段 extend / noreply の許可 / root に custom ルール | `check-leak-guard-rules.py` |
-| 3 | canary の照合 / 固定名での写し / 優先順 / stderr の遮断 / 層 2 の状態行 / 0 byte | 入口の単体テスト |
-| 3 | workflow が入口を literal で呼ぶ | 配線テストの負の pin |
-| 4 | SKILL.md の表の 1 行 | 表の pin テスト |
+| 1 | 層 2 の hook 2 本の entry / 共有補助の flag の照合 | 配線テスト |
+| 2 | noreply の許可とその `^` `$` / 既定の config の `useDefault` / 対照検査の `--ignore-gitleaks-allow` / custom ルールの置き場 | `check-leak-guard-rules.py` |
+| 2 | pre-commit の gitleaks hook の `--ignore-gitleaks-allow` | 配線テスト |
+| 3 | canary の照合 / canary の位置 / `--ignore-gitleaks-allow` / 優先順 / stderr の遮断 / 層 2 の状態行 / 入力の前段 / env の受け渡し | 入口の単体テスト |
+| 3 | workflow が入口を呼ぶ | 配線テストの負の pin |
+| 4 | SKILL.md の表の 1 行 / 定数の値 | 表の pin テスト |
+
+## 計画レビューの裁定 (2026-09-18)
+
+2026-09-17 の計画レビュー (4 観点、60 件) を読み、ユーザーの裁定 (前提 10 の直し方、中身による読み飛ばし、
+範囲に足すもの、簡素化の方向) と合わせて次のとおり扱った。「解消」は簡素化で対象の仕組みごと無くなったもの。
+
+| 指摘 | 扱い | 行き先 |
+|---|---|---|
+| A-1 / C-1 / D-5 (stderr の pin が gitleaks に届かない) | 採用 | Task 3 の `gitleaks_config_failed` と、P のケースの stderr が空の assert |
+| A-2 (全 `[x]` の active でコミットできない) | 採用 | Task 5 Step 5 |
+| A-3 / B-2 (release skill を旧版の skill へ委ねると検査が消える) | 採用 | Task 4 Step 5 |
+| A-4 / D-8 (spec と plan の食い違い) | 採用 | spec を直した |
+| A-5 / C-2 / D-6 (構造検査が変異を先に止める) | 解消 | extend と構造検査を廃止 |
+| A-6 / B-18 / C-13 (旧パスの検索が成立しない) | 採用 | Task 1 Step 10、Task 5 Step 4 |
+| A-7 / B-17 / C-8 / D-4 (PATH の gitleaks が 2 つ) | 採用 | 実行方式、Task 3 の `gitleaks_absent` と解決の決め |
+| A-8 (README の生成器が内側の skill を読まない) | 採用 | Task 4 Step 6 |
+| A-9 (実行ビット) | 採用 | Task 2 Step 8、Task 3 Step 4 |
+| A-10 (既知の限界の行き先) | 採用 | Task 2 Step 3、Task 3 の docstring、Task 4 Step 3 |
+| A-11 / C-4 / C-5 (判定表が狙った分岐を通らない) | 採用 (形を変えて) | 全ケースで両層の状態と理由を assert。組み合わせは `decide_table`、レポートは `parse_report_rejects`。一時ファイル名と未知のファイル名は stdin 化で解消 |
+| A-12 / B-5 (env の継承) | 採用 | Task 3 の env の補助と `env_not_inherited` |
+| A-13 / B-7 (散文の検索式が足りない) | 採用 | Task 1 Step 7 (全文を読む) |
+| A-14 (依存節の対象) | 採用 (ユーザー裁定) | Task 2 Step 12 |
+| A-15 (ISSUE-55 の F2 / F25) | 採用 (ユーザー裁定) | Task 1 Step 2、Task 2 Step 10、Task 5 Step 2 |
+| A-16 (節の名指しを見る検査の範囲) | 不採用 | spec の「見送ったもの」 |
+| A-17 / B-12 / C-9 (版の確認の pin) | 解消 (一部採用) | 入口が tomllib を使わないので版の確認自体が不要。3.9 の構文 pin (`py39_syntax`) と 3.9 での live smoke を残す。rc と `result=` の組で引く表 (Task 4) |
+| A-18 (コントローラの Step) | 採用 | 実行方式と各 Step の「コントローラ」 |
+| A-19 (既定ルールの値の重複) | 採用 | Task 3 Step 6、Global Constraints |
+| A-20 (commit 数の基準) | 採用 | 基準値 |
+| A-21 (他の経路の絶対パス) | 採用 | Task 2 Step 6 |
+| B-1 (`gitleaks:allow` で検出が消える) | 採用 (ユーザー裁定でリポジトリ側も) | Task 2 Step 9・10・11、Task 3 |
+| B-3 (dogfooding の呼び方) | 採用 | Task 3 Step 10、Task 4 Step 10、Task 5 Step 7・8 |
+| B-4 (適用範囲が Tirith と日本語に限られる) | 採用 | Task 4 Step 3 |
+| B-6 (skip のあとで環境を直しに行く) | 採用 | Task 4 Step 3 |
+| B-8 (ルールファイルの配布元前提) | 採用 | Task 2 Step 3 |
+| B-9 (既定の path 除外の射程) | 採用 | spec の前提 2 を直した。入口の面は stdin 化で解消 |
+| B-10 (配布先の gitleaks の版) | 不採用 | canary の不一致で止まる。検証した版は docstring に書く |
+| B-11 (不可視文字と apm audit) | 採用 | Task 1 Step 8、Task 5 Step 4 |
+| B-13 (インストール先の検査が内側の skill 名を見ない) | 別記録 | Task 5 Step 3 (ISSUE-61) |
+| B-14 (`--check` による確認手順) | 採用 | Task 1 Step 7 |
+| B-15 / D-7 (変数の置換が散文を壊す) | 採用 | Global Constraints、Task 4 Step 3。in-repo-issue 側は Task 5 Step 3 (ISSUE-61) |
+| B-16 (入口の出力を本文へ貼る) | 採用 | Task 4 Step 3、Task 5 Step 7 |
+| C-3 (noreply の許可のアンカー) | 採用 | Task 2 Step 1・14 |
+| C-6 (symlink と UTF-16) | 採用 | Task 3 の `symlink_input` と `undecodable` |
+| C-7 (表の pin が値と行動の対応を固定しない) | 採用 (一部) | Task 4 Step 1。SKILL.md が名指すスクリプトの実在の pin は不採用 |
+| C-10 (変異注入の確かめ方) | 採用 (形を変えて) | 実行方式 (写しで行い、赤になるべき ID と突き合わせる)。Task 1 と Task 3 の変異を足した |
+| C-11 (作業ツリーの `gitleaks git` は未コミットを見ない) | 採用 | Task 2 Step 15・17 |
+| C-12 (合成の GitHub noreply が実在の ID と login の組) | 採用 | Task 2 Step 1 |
+| D-1 (中身による読み飛ばし) | 採用 (ユーザー裁定) | 入力ごとの canary と入力の前段、Task 3 の `magic_prefixed` / `content_skipped` / `undecodable` |
+| D-2 (既定の全体除外が custom に効く) | 採用 (ユーザー裁定) | config の分割 (Task 2)、Task 2 Step 1 と Task 3 の `allowlist_bypass_values` |
+| D-3 (Linux のホームディレクトリ形のパス) | 別 Issue (ユーザー裁定) | Task 5 Step 1。本文へ貼らない規則は Task 4 Step 3 |
+
+レビュー後にユーザーから「やりすぎな検証が無いか」の確認を求められ、次を落とした。理由は spec の「見送ったもの」が持つ。
+
+- 入口での gitleaks の版の確認
+- 偽の gitleaks によるレポートの壊れ方のテスト
+- 終了コードの組み合わせをプロセス境界で全て並べるテスト
+- 設定ファイル自身を名前で外す allowlist の pin
+- 節の名指しを見る検査の範囲の拡大
 
 ## 完了条件
 
-- spec の「決定」「入口の振る舞い」「手順」「このリポジトリ側の追従」「テスト」の各行に、対応する
-  Task の Step がある
+- spec の「決定」「前提」「配置と canonical」「入口の振る舞い」「手順」「このリポジトリ側の追従」「テスト」
+  「既知の限界」の各行に、対応する Task の Step がある
 - Task 5 の全体検証が全て記録どおり
-- PR の本文とタイトルが入口を rc 0 で通った記録がある
+- PR の本文とタイトルが入口を rc 0 で通り、その rc と `result=` の行が PR 本文の検証節にある
