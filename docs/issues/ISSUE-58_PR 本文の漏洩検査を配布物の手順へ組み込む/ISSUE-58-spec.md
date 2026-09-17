@@ -1,6 +1,6 @@
 # ISSUE-58 spec: 公開される本文へ漏洩検査を通す手順を配布物に入れる
 
-2026-09-17 のブレインストーミングとレビュー、2026-09-18 の計画レビューと簡素化で決めた設計の
+2026-09-17 のブレインストーミングとレビュー、2026-09-18 の計画レビュー・簡素化・反証で決めた設計の
 スナップショット。実装後の振る舞いの canonical は各スクリプトの docstring とテストで、この文書は
 追従させない。
 
@@ -14,10 +14,12 @@
 | 届け方 | canonical を skill 側へ移し、入口を 1 本作る (案 A) | 入口を作らず手順に 2 コマンドを書く / root を canonical にして写しを同期する |
 | noreply 形のアドレス | Anthropic の noreply アドレスだけを値で許可する | GitHub の noreply 形も許可する / どちらも許可しない |
 | 層 1 の config の形 (09-18) | custom ルールだけの config と、既定ルールだけの config の 2 本を平らに置き、それぞれを 1 回ずつ走らせる。root の `.gitleaks.toml` は置かない | 1 本に既定と custom を同居させる (前提 10) / root から extend する (前提 3・4) |
-| 入口から gitleaks を呼ぶ形 (09-18) | 入力ごとに `gitleaks stdin` へ流し、先頭に canary の行を置く | 一時ディレクトリへ固定名で写し、`gitleaks dir` を 1 回だけ呼ぶ |
+| 入口から gitleaks を呼ぶ形 (09-18) | 入力ごとに `gitleaks stdin` へ流し、canary の行を足す (置き場は下の行) | 一時ディレクトリへ固定名で写し、`gitleaks dir` を 1 回だけ呼ぶ |
 | 中身による読み飛ばし (09-18) | 入力ごとの canary で検出する。UTF-8 として読めない入力と NUL を含む入力は前段で止める | UTF-8 の検査だけ / 既知の限界に書くだけ |
 | 範囲に足すもの (09-18) | このリポジトリの gitleaks 呼び出しにも `gitleaks:allow` の無視を足す。CLAUDE.md の依存節の対象を書き直す。ISSUE-55 の F2 と F25 を片付ける | — |
 | 範囲から外すもの (09-18) | Linux のホームディレクトリ形のパスを user-path に含める件は別 Issue にする | — |
+| 層ごとの適用範囲 (09-18 反証) | 層 1 は送り先を問わず当てる。層 2 は、送り先が PRIVATE と判定できたときだけ外す。判定できなければ当てる | 全リポジトリで両層を当てる / リポジトリごとの宣言で外す |
+| canary の置き場 (09-18 反証) | 入力の前と後ろの両方に置く | 先頭だけに置く |
 
 層 1 を当てるのは前提 1 による。ISSUE-15 の spec は PR 本文に「手順の中で層 2 を呼ぶ」と
 決めていたが、層 2 だけではユーザー名を含む絶対パスが素通りする。
@@ -28,7 +30,16 @@ GitHub の noreply 形を許可しないのは、ユーザー名を含むから�
 
 config を 2 本に分けるのは、前提 10 の見逃しを塞ぐためである。既存の pre-commit と CI にも同じ
 見逃しがあるので、ここで config の構成を組み替えるときに一緒に直す。extend をやめると、解決が
-cwd と段数に依存する問題 (前提 3・4) も、それを見張る構造検査も要らなくなる。
+cwd と段数に依存する問題 (前提 3・4) も、それを見張る構造検査も要らなくなる。1 本の config のまま
+`secretGroup` で secret を定数部分へ寄せても前提 10 は塞がるが、その形では `--redact` を付けても
+名前が `Match` に残る (反証で測った)。
+
+層 2 の禁止語リストは、private から PUBLIC への流入を止めるために作ったものである。skill は全ての
+リポジトリで読み込まれるので、そのまま当てると private のリポジトリで自分のプロジェクト名を書いても
+止まる。層 1 が見る形 (パスとメールアドレス) は、公開範囲を問わず書かない規約なので、全てに当てる。
+
+後ろの canary は、gitleaks が入力を最後まで読んだことと、行番号が入力と揃っていることを実行時に
+確かめる。版の確認を見送れるのは、これがあるからである。
 
 入口を stdin 経由にすると、ファイル名・拡張子・symlink・一時領域のパスがどれも gitleaks に
 渡らない。それぞれに要っていた対策 (固定名での写し、未知のファイル名の照合、パスによる既定の除外
@@ -72,16 +83,24 @@ cwd と段数に依存する問題 (前提 3・4) も、それを見張る構造
 11. gitleaks は中身の先頭バイトで「バイナリ」と判定した入力を、rc 0 のまま読み飛ばす。PDF・MZ・
     RTF の magic で始まるもの、128 バイト目に DICM があるもの、UTF-16 が該当し、`dir` でも
     `stdin` でも同じ。先頭に 1 行足すと先頭の magic による読み飛ばしは消える。足したあとも条件が
-    成り立つ形 (128 バイト目の DICM) では、足した行ごと検出されなくなる。NUL を含む UTF-8 は走査される
+    成り立つ形 (128 バイト目の DICM) では、足した行ごと検出されなくなる。NUL を含む UTF-8 は走査される。
+    ここに挙げた magic は網羅ではない (反証で別の形も見つかった)
 12. 行に `gitleaks:allow` を含むと、その行の検出が消える (HTML コメントの中に書いた形も同じ)。
     `--ignore-gitleaks-allow` を付けると戻る。`dir` でも `stdin` でも同じ
 13. `gitleaks stdin` のレポートは `File` が空で、`StartLine` は流したバイト列の行番号になる。
-    `-c` と `-i` を明示すると、cwd に置いた壊れた `.gitleaks.toml` は効かない
+    `-c` を明示すると、cwd に置いた壊れた `.gitleaks.toml` は効かない。一方で cwd の
+    `.gitleaksignore` は、`-i` に何を渡しても読まれる (反証で再現)。stdin の fingerprint は
+    `:<ルール>:<行>` の形なので、その行位置の検出が入力を問わず消える
 14. custom ルールだけの config には既定の除外が無いので、ルールファイル自身 (実例を literal で持つ) を
     名前で外す allowlist が要る。全履歴の走査 (`.gitleaksignore` を消した clone) で、外すと基準と同じ
     10 件、外さないと 24 件 (うち 14 件が過去の `.gitleaks.toml`)。既定ルールだけの config は 0 件
 15. 開発機の PATH には gitleaks が 2 つある (mise の shim と Homebrew)。shim は mise で有効化されて
     いないと Homebrew 側へ委ね、PATH に shim しか無いと起動に失敗する (rc 1)
+16. 開発機の Bash ツールから `"$(cat <ファイル>)"` の形で値を渡すと、Tirith の hook は止めず、値は
+    ファイルの中身から末尾の改行を落としたものになる。句点をコマンド文字列へ直接書くと止められる
+17. origin/main のコミットメッセージ 62 件を custom ルールへ通すと、`Co-authored-by:` の trailer に
+    GitHub の noreply 形が 8 件、1 件の squash メッセージの本文にユーザーパスが 2 件当たる。後者の
+    1 件は開発機のユーザー名で、全履歴の走査が既に記録している語と同じである
 
 ## 配置と canonical
 
@@ -93,7 +112,7 @@ pre-commit がそこを直接呼んでいる。
 |---|---|---|
 | `check-outgoing-text.py` | 新規 | 入口。渡されたファイルへ層 1 と層 2 を当てて結果を束ねる |
 | `check-leak-guard-denylist.py` | `scripts/` から移動 | 層 2 の canonical。追跡ファイルを見る入口も残す |
-| `leak-guard.gitleaks.toml` | root の `.gitleaks.toml` から custom ルールを移す | 層 1 の custom ルールの canonical。`[extend]` を持たず、実例を持つ設定ファイルを名前で外す allowlist を持つ |
+| `leak-guard.gitleaks.toml` | root の `.gitleaks.toml` から custom ルールを移す | 層 1 の custom ルールの canonical。`[extend]` を持たない。実例を持つ設定ファイルを外す allowlist を持ち、外すのは実在する 3 つの名前 (過去の root の config と 2 本の config) だけ |
 | `leak-guard-default.gitleaks.toml` | 新規 | 既定ルールだけを有効にする (`[extend] useDefault = true` だけを持つ) |
 | 単体テスト | 新規 / 移動 | 本体の隣に置く |
 
@@ -124,11 +143,17 @@ pre-commit のコメントへ移す。
 
 ## 入口の振る舞い
 
-標準ライブラリだけで書き、3.9 でも読み込める構文に保つ (tomllib を使わない)。ルールファイルの
-中身と canary の対応はリポジトリ側の対照検査が見るので、入口は実行時に config を読まない。
+標準ライブラリだけで書く。入口と、入口が起動する層 2 は 3.9 で動く形に保つ (annotations の future
+import を持ち、tomllib を使わない)。ルールファイルの中身と canary の対応はリポジトリ側の対照検査が
+見るので、入口は実行時に config を読まない。
 
-引数は 1 つ以上のファイル。層ごとに状態を checked / skipped / unable の 3 つで持ち、層の状態は
-入力間で最も悪いもの (unable > skipped > checked) を採る。検出は状態とは別に数える。
+引数は 1 つ以上のファイル。先頭に `--target-private` を置くと層 2 を当てない。付けるのは、送り先が
+PRIVATE と判定できたときの手順だけである。argparse は使わない (usage を stderr へ出し、`--help` で
+rc 0 を返すため)。ファイルが 1 つも無ければ、両層を unable にする。
+
+層ごとに状態を checked / skipped / unable の 3 つで持ち、層の状態は入力間で最も悪いもの
+(unable > skipped > checked) を採る。`--target-private` のときの層 2 だけは not-applicable とし、
+層 2 を起動しない。検出は状態とは別に数える。
 
 入力の前段 (両層の前に確かめる): 通常ファイルでない (symlink は辿った先で見る)・読めない・
 0 byte・UTF-8 として読めない・NUL を含む、のどれかに当たる入力があれば、両層とも unable にして
@@ -139,20 +164,25 @@ gitleaks も層 2 も起動しない。0 byte を通すと、書き忘れたフ�
 | 状態 | 条件 |
 |---|---|
 | skipped | 渡された env の PATH で `gitleaks` が見つからない |
-| unable | 起動の rc が 0 でない / stdout を JSON として読めない / canary の検出集合が期待と一致しない |
+| unable | 起動の rc が 0 でない / stdout を JSON として読めない / 期待する canary の検出が 1 つでも欠ける / レポートの行番号が流した範囲の外にある |
 | checked | 全ての入力と config の組で、上のどれにも当たらない |
 
-- 見つかった絶対パスで起動する。名前で引き直すと、解決と起動が別の実体を指しうる (前提 15)
-- 入力ごと・config ごとに 1 回、`stdin` で呼ぶ。流すのは canary の行と入力のバイト列を
-  つなげたもの。付けるフラグは `-c <config>`、`-i <同梱ディレクトリ>` (cwd の免除ファイルを効かせ
-  ない。同梱ディレクトリには免除ファイルを置かない)、`--ignore-gitleaks-allow`、
-  `--report-format json`、`--report-path -`、`--redact`、`--no-banner`、`--no-color`、
-  `--exit-code 0` (config の失敗と検出を rc で分ける。前提 5)
+- 渡された env の PATH だけで探し、見つかった絶対パスで起動する。名前で引き直すと、解決と起動が
+  別の実体を指しうる (前提 15)。env に PATH が無ければ見つからない扱いにする
+- 入力ごと・config ごとに 1 回、`stdin` で呼ぶ。cwd は実行ごとに作る空の一時ディレクトリにする
+  (呼び出し元の免除ファイルを効かせない。前提 13)。付けるフラグは `-c <config>`、
+  `--ignore-gitleaks-allow`、`--report-format json`、`--report-path -`、`--redact`、`--no-banner`、
+  `--no-color`、`--exit-code 0` (config の失敗と検出を rc で分ける。前提 5)
+- 流すのは、前の canary の行、入力のバイト列、後ろの canary の行をつなげたもの。入力が改行で
+  終わらなければ、後ろの canary の前に改行を足す
 - canary は custom の config にはルールごとに 1 行、既定の config には既定ルール 1 本に当たる行を
-  置く。値は実行時に組み立てる。先頭の canary 行の範囲の検出集合が期待と完全に一致しなければ
-  unable。何も検出されない場合も同じで、原因 (中身による読み飛ばし、ルールの欠落、gitleaks の版の
-  違い) は docstring に書く
-- canary の範囲より後ろの検出を、入力の行番号へ戻して座標にする
+  置く。値は実行時に組み立てる。どの行も `gitleaks:allow` の印を持つ (フラグが落ちると canary が
+  消える)。custom の canary の少なくとも 2 本は `false` を含む (custom の config に既定の全体除外が
+  戻ると canary が消える)。既定の canary は true / false / null を含まない
+- 前と後ろの canary の行ごとに、期待する検出が全て揃わなければ unable。canary の行の余分な検出は
+  無視する (上流が既定ルールを足しただけでは止まらないように)。原因 (中身による読み飛ばし、
+  ルールの欠落、gitleaks の版の違い) は docstring に書く
+- 前と後ろの canary の間の検出を、入力の行番号へ戻して座標にする
 - stdout と stderr は捕捉し、どちらも出力へ流さない (前提 5)
 
 層 2:
@@ -163,7 +193,8 @@ gitleaks も層 2 も起動しない。0 byte を通すと、書き忘れたフ�
 | checked | rc 0 で stdout が `status=checked` を持つ。rc 1 で `status=checked` を持ち、座標を 1 件以上読めたときは検出あり |
 | unable | それ以外 |
 
-層 2 は入力ごとに `sys.executable` で起動し、env をそのまま渡す。
+層 2 は入力ごとに `sys.executable` で起動し、env をそのまま渡す。stdout は ASCII の目印だけで
+判定し、UTF-8 として読めないバイトは置換して読む (ja-JP の Windows は非対話出力を CP932 で書く)。
 
 入口自身の想定外の失敗は例外の型名だけを出して unable にする。未捕捉の例外は Python の既定で
 rc 1 になり、「検出あり」に化けるうえ traceback にパスが載るので、入口の最上位で必ず受ける。
@@ -179,18 +210,22 @@ rc 1 になり、「検出あり」に化けるうえ traceback にパスが載�
 | 1 | どれかの層に検出がある | 1 | finding |
 | 2 | どれかの層が unable | 2 | unable |
 | 3 | どれかの層が skipped | 3 | skipped |
-| 4 | 両層とも checked で検出 0 件 | 0 | ok |
+| 4 | 両層とも checked (層 2 は not-applicable でもよい) で検出 0 件 | 0 | ok |
 
 ## 手順 (SKILL.md)
 
 全ての面で同じ 4 手にする。適用範囲は言語と Tirith の有無を問わず「公開される本文を git / gh へ
 渡すとき」に広げ、Tirith に由来する理由は「なぜファイル経由なのか」節に閉じ込める。
 
-1. 本文を Write で書く。インラインで渡す 1 行 (PR タイトル、merge の subject、Issue タイトル、
+1. 本文を Write で書く。1 行で渡す値 (PR タイトル、merge の subject、Issue タイトル、
    リリースタイトル) もファイルへ書く
-2. 入口へ通す (本文と 1 行のファイルを同時に渡す)
-3. file 系フラグで渡す。1 行はファイルの中身をそのまま写す
+2. 送り先の公開範囲を判定し、入口へ通す (本文と 1 行のファイルを同時に渡す)。`gh` で判定した結果が
+   PRIVATE のときだけ `--target-private` を付ける。それ以外 (PUBLIC、INTERNAL、判定の失敗) では
+   付けない。判定は入口の結果を見る前に行い、結果を見たあとで判定し直さない
+3. file 系フラグで渡す。1 行の値は `"$(cat <ファイル>)"` の形で渡す (前提 16)
 4. 載ったことを確認する
+
+2 のあとでファイルを変えたら、理由を問わず 2 からやり直す。
 
 | 終了コードと result | 行動 |
 |---|---|
@@ -220,28 +255,34 @@ SKILL.md の散文では skill のディレクトリを指す変数の名前に�
 呼び出し 1 箇所だけに置く (前提 8)。SKILL.md の表の組と入口の定数の組が一致することはテストで
 pin する。
 
+Tirith の発火条件の節にある再測の手順は削る。手元の tirith 0.4.1 では、この手順は hook が止める例に
+allow を返し、hook の判定を再現していない (反証で測った)。条件は tirith と hook の版と設定に依存する、
+とだけ書く。
+
 ## このリポジトリ側の追従
 
 | 対象 | 変更 |
 |---|---|
 | `.gitleaks.toml` | 削除 |
 | `.pre-commit-config.yaml` | gitleaks の hook を config ごとの 2 本にし、どちらにも `--ignore-gitleaks-allow` を付ける。層 2 の hook 2 本の entry を新しいパスへ。`leak-guard-rules` の `files:` に 2 本の config と入口を足す。冒頭コメントのルール集合の再掲を消す (ISSUE-55 の F25) |
-| `leak-guard.gitleaks.toml` | `email-address` の allowlist に Anthropic の noreply アドレスを値で足す。設定ファイル自身を名前で外す allowlist を足す。除外の出所を正しく書き直す |
-| `scripts/check-leak-guard-rules.py` | custom のケースは custom の config、既定のケースは既定の config で見る。ルール集合の一致に入口の canary のキーを加え、既定のケースの値は入口の canary を借りる。既定の config が custom ルールを持たないことを確かめる。前提 10 と前提 12 のケース、noreply の許可と、その前後に文字を付けた検出側のケースを足す。印字するパスはプレースホルダへ置き換える |
+| `leak-guard.gitleaks.toml` | `email-address` の allowlist に Anthropic の noreply アドレスを値で足す。実在する 3 つの名前だけを外す allowlist を足す。除外の出所を正しく書き直す |
+| `scripts/check-leak-guard-rules.py` | 検出ケースは custom の config で、許可ケースは両方の config で見る。ルール集合の一致は、custom の config の id・`SHOULD_DETECT` のルール・入口の custom の canary のキーの 3 集合で見る (`RULE_IDS` は消す)。既定の config がルールを持たないことを確かめる。前提 10 のケース、noreply の許可と、その前後に文字を付けた検出側のケースを足す。印字するパスはプレースホルダへ置き換える |
 | CI | gitleaks の導入を `scripts/ci/install-gitleaks.sh` (版と sha256 の canonical) へ切り出し、leak-guard job と python-tests job の両方から呼ぶ。全履歴の走査を config ごとに 2 回、どちらにも `--ignore-gitleaks-allow` を付ける |
 | release skill | 手順 3 と 4 は、入口をリポジトリ内のパスで呼ぶ形に置き換える。終了コードごとの行動はリポジトリ内の `commit-and-pr-message` の節を名指す。「この面を見る機会はここにしか無い」という理由は残す。消費側で読み込まれる skill は pin が上がるまで旧版なので、委ねるだけにはしない |
 | CLAUDE.md | canonical 表と本文の、漏洩ルールと層 2 の確認手順のパスを新しい置き場へ。「依存を増やさない」の対象を、置き場所ではなく「pre-commit か CI から呼ばれる Python」へ書き直す (例外は `uv run --script` で依存を宣言するものに限る) |
-| `commit-and-pr-message` の SKILL.md | 4 手の手順と表、適用範囲、落とし穴 |
+| `commit-and-pr-message` の SKILL.md | 4 手の手順と表、適用範囲、落とし穴。1 行はファイル経由で渡せない、という記述と句点の注意を直す。再測の手順を削る |
 | `plugins/dev-workflow/SKILL.md` | component 表の役割と前提の段落を、検査を含む手順に合わせる。README を再生成する |
 | `plugin.json` | version は据え置く (作成以来上げていない慣習に合わせる) |
 | manifest 2 本 | Python テストと漏洩ケースを再生成する |
-| `run_check_text` の docstring | 「spec の実装順序 5 (未実装)」を今回の実装へ向け直す |
-| ISSUE-55 | F2 と F25 の箱を更新し、層 2 の本体とテストが移ったことを追記する |
+| `run_check_text` | docstring の「spec の実装順序 5 (未実装)」の段落を消す。ファイルを `read_bytes().decode("utf-8")` で読み、単独の CR を行の境界に数えないようにする (gitleaks と行番号を揃える) |
+| `issue-scoped-artifacts` の SKILL.md | 旧いルール名を名指している行を直す |
+| ISSUE-55 | F2・F25 に加え、今回の変更で対象の文が消える F34・F35・F36 と、F2 と同じ指摘の F38 を、現物と照合して閉じる。層 2 の本体とテストが移ったことと、R2 の共有モジュールの対象から層 2 のテストが外れたことを追記する |
 | ISSUE-61 | 計画レビューで見つかった、配布先で成立しない形の 2 件を記録する (plugin の内側の skill 名を見ないインストール先の検査、in-repo-issue の散文が変数の置換で壊れること) |
 | 新規 Issue | Linux のホームディレクトリ形のパスを user-path に含めるか |
+| Issue (記録先は重複検索で決める) | 前提 17 のコミットメッセージの漏洩。SHA と値は書かず、再現の手順と分類ごとの件数だけを書く |
 
-既定ルールの検出ケースは `SHOULD_DETECT` へは入れず別の並びに置く。`SHOULD_DETECT` が名指す
-ルールは custom ルール集合との一致を要求されているためである。
+既定の config が既定ルールを持つことは、実行のたびの canary と入口のテストが見るので、対照検査には
+既定ルールの検出ケースを置かない。
 
 ## テスト
 
@@ -257,22 +298,26 @@ pin する。合成したユーザーパスとメールアドレスは、テス�
 | 両層とも検出 0 件 | 0、両層 checked |
 | 層 1 の custom ルールだけ検出 / 既定ルールだけ検出 / 層 2 だけ検出 | 1、座標の層とルールが合う |
 | 2 本の入力の 2 本目に両層の検出 | 座標がどちらも file 2 |
-| 前提 10 の値 / 前提 12 の印を持つ行 / 先頭が magic の UTF-8 入力 / symlink の入力 | 1 |
+| 前提 12 の印を持つ行 (custom と既定の両方) / 先頭が magic の UTF-8 入力 / symlink の入力 | 1 |
+| 1 行目が検出される入力 / 改行で終わらず最終行が検出される入力 | 1、座標の行番号が合う |
+| 呼び出し元の cwd に、入力の検出行と canary の行を指す stdin 形の fingerprint を持つ免除ファイルがある (プロセス境界) | 1、座標が残る |
 | 足した行ごと読み飛ばされる入力 | 2、canary の不一致 |
 | UTF-8 として読めない / NUL を含む / 0 byte / 無いパス | 2、両層とも入力の理由で、gitleaks と層 2 を起動していない |
 | `gitleaks` が PATH に無い | 3、層 1 が skipped |
 | 禁止語リストの変数が未設定 | 3、層 2 が skipped |
-| custom の regex を壊した写し / custom ルールを 1 本消した写し / 既定の config から `useDefault` を消した写し | 2、canary の不一致 |
+| `--target-private` (清浄 / 層 1 の検出 / リストが未設定) | 0 / 1 / 0。層 2 は not-applicable で起動していない |
+| custom の regex を壊した写し / custom ルールを 1 本消した写し / custom の config に `useDefault` を足した写し / 既定の config から `useDefault` を消した写し | 2、canary の不一致 |
 | gitleaks が config を読めない (プロセス境界) | 2、stderr は空、出力に一時ディレクトリのパスと目印が無い |
 | 層 2 が状態行を出さない / rc 1 で状態行を出さない / rc 1 で座標を読めない | 2 |
-| 引数が無い (プロセス境界) | 2 |
+| 引数が無い (プロセス境界) | 2、stderr は空 |
 | 実行元の env に変数があっても、渡した env に無ければ層 2 は skipped | 3 |
 | 想定外の例外 | 2、例外の型名だけを出す |
-| 終了コードと result の決定 (純粋関数) | 検出 > unable > skipped > checked の全組 |
+| 終了コードと result の決定 (純粋関数) | 検出 > unable > skipped > checked の全組。not-applicable は checked と同じ扱い |
 | レポートの読み取り (純粋関数) | JSON でない / 必要なキーが無い → unable |
+| canary の照合と座標への変換 (純粋関数) | 前か後ろの canary が欠ける / 範囲外の行がある → unable。canary の行の余分な検出は無視 |
 | 出力の全行 | 決めた形のどれかに一致し、架空語・合成値・入力パス・config のパスを含まない |
-| 同梱ディレクトリ | 免除ファイルを持たない |
-| 入口のソース | 3.9 の構文として読める |
+| canary の値 | どの行も印を持つ。custom の 2 本以上が `false` を含む。既定は true / false / null を含まない |
+| 入口と層 2 のソース | 3.9 の構文として読め、annotations の future import を持ち、tomllib を import しない |
 
 このほかに次を置く。
 
@@ -280,9 +325,12 @@ pin する。合成したユーザーパスとメールアドレスは、テス�
 - 配線テスト (`scripts/`): pre-commit の新しいパス、gitleaks の hook が 2 本の config を
   `--ignore-gitleaks-allow` 付きで呼ぶこと、CI が 2 本の config で全履歴を走査すること、CI が層 2 と
   入口を呼ばないこと
-- 変異注入 (作業ツリーの使い捨ての写しで行う): canary の照合を外す / canary の行を足さない /
-  `--ignore-gitleaks-allow` を外す / 優先順を入れ替える / gitleaks の stderr を出力へ流す /
-  層 2 を rc だけで判定する / 0 byte や読めない入力を通す / env を層 2 へ渡さない
+- 層 2 のテスト: 単独の CR を含む入力で、層 2 の行番号が gitleaks の数え方と一致する
+- 変異注入 (作業ツリーの使い捨ての写しで行う): canary の照合を外す / 前の canary を足さない /
+  後ろの canary の照合を外す / 継ぎ目の改行を落とす / `--ignore-gitleaks-allow` を外す (両方、既定の
+  config の側だけ) / gitleaks の cwd を呼び出し元へ戻す / `--target-private` で層 1 も外す /
+  優先順を入れ替える / gitleaks の stderr を出力へ流す / 層 2 を rc だけで判定する / 0 byte の入力を
+  通す / UTF-8 の確認を外す / NUL の確認を外す / env を層 2 へ渡さない / future import を消す
 - live smoke: この変更の PR 自身の本文とタイトルを、リポジトリ内のパスで入口へ通してから作る。
   3.9 の Python でも入口が起動して rc 0 か 3 を返すことを 1 度見る
 
@@ -291,12 +339,16 @@ python-tests job に gitleaks を入れるのは、実物で回すテストを s
 
 ## 既知の限界
 
-- 1 行のファイルとインラインで渡す値が一致することは手順が保証するだけで、検査しない
-- GitHub の画面上での編集と、手順を踏まない主体が送る本文は通らない
+- 1 行の値を `"$(cat <ファイル>)"` 以外の形で渡すと、検査した中身と一致する保証が無い
+- GitHub の画面上での編集と、手順を踏まない主体が送る本文は通らない。GitHub が squash merge で足す
+  `Co-authored-by:` の trailer も検査の外にある (前提 17)
 - リストに無い語と、組み合わせで対象を特定する書き方は通る
-- 起動元に環境変数が届かない環境では層 2 が skip する。この場合は手順が止まって確認を求める
-- canary の完全一致は gitleaks の版に依存する。既定ルールが変わる版では canary が合わなくなり、
-  止まり続ける。検証した版は docstring に書く
+- 送り先の公開範囲は手順が判定する。PRIVATE と誤って判定すると、層 2 が外れる
+- 起動元に環境変数が届かない環境では、送り先が PRIVATE でない限り層 2 が skip する。この場合は
+  手順が止まって確認を求める
+- canary が揃うことは gitleaks の版に依存する。読み方や行番号の振り方が変わる版では止まり続ける。
+  検証した版は docstring に書く
+- 設定ファイル自身 (allowlist が名前で外す 3 つ) は層 1 の走査の外にある。層 2 はこれらも見る
 - このリポジトリの commit-msg hook は層 2 だけを見る。コミット本文に層 1 が当たるのは
   エージェントの手順を通したときだけ
 - Linux のホームディレクトリ形のパスは user-path に当たらない (別 Issue)
@@ -309,6 +361,12 @@ python-tests job に gitleaks を入れるのは、実物で回すテストを s
 - 設定ファイル自身を名前で外す allowlist を対照で pin する案。外れると pre-commit と CI が止まる向き
   (fail-closed) で、目に見える
 - 他の skill の節を名指す参照を検査する範囲を `.claude/skills/` へ広げる案
+- 設定ファイル自身を、allowlist を外した custom ルールで走査し、検出を placeholder に限る案。この穴は
+  root の config の時代から既定の除外にあり、層 2 はこれらのファイルも見ている
+- 入口が入力の digest を出し、手順 3 の前に照合する案。「2 のあとでファイルを変えたらやり直す」の
+  規則で足りる
+- canary の検出を多重集合で比べる案。継ぎ目の改行をテストで pin し、canary の行の余分な検出は
+  無視するので、比べ方を変えても検出力が変わらない
 
 ## 範囲外
 
