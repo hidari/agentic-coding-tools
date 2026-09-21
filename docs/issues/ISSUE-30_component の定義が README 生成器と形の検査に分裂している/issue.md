@@ -73,3 +73,6 @@ SKILL.md だけを対象にしているため、command の `description` 欠落
 - ISSUE-12: `scripts/` の検査スクリプトが自分自身のテストを持たない。`check-package-shape.py`
   の import 安全化を前段として共有する。あちらはテストの不在、こちらは定義の所在を扱う
 - ISSUE-27: `count_components()` を新設した PR。分裂はそこで生まれた
+- ISSUE-64: README の「component 数」列を消す案を持つ。消せば `count_components()` の使い道が
+  なくなり、この Issue が扱う分裂の生成器側が消える。変わるのはこの Issue の内容で、どちらを先に
+  やるかは ISSUE-64 の側で決める
