@@ -5,10 +5,7 @@ argument-hint: "[--target=local|staging]"
 
 # /monkey-qa
 
-product-agnostic な AI 探索型モンキーテストの dispatcher。実体は `agents/monkey-explorer-agent.md` を
-profile.sections[] ごとに `Agent(subagent_type="web-monkey-qa:monkey-explorer-agent")` で fan-out し、
-各 explorer が書く findings フラグメントを集約する薄いオーケストレータ。探索ループ・検知器・denylist
-照合の実装は一切ここに置かない (DRY、詳細は agent 側の system prompt が唯一の source of truth)。
+product-agnostic な AI 探索型モンキーテストの dispatcher。実体は `agents/monkey-explorer-agent.md` を profile.sections[] ごとに `Agent(subagent_type="web-monkey-qa:monkey-explorer-agent")` で fan-out し、各explorer が書く findings フラグメントを集約する薄いオーケストレータ。探索ループ・検知器・denylist 照合の実装は一切ここに置かない (DRY、詳細は agent 側の system prompt が唯一の source of truth)。
 
 ## 入力
 
