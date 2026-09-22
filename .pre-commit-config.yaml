@@ -4,8 +4,9 @@
 #   brew install pre-commit gitleaks
 #   pre-commit install
 #
-# - gitleaks で staged 差分の secret とユーザー名パス (/Users/<name>) の漏洩を弾く。
-#   既定ルールだけでは /Users/<name> は検査されないため .gitleaks.toml の custom ルールが要る。
+# - gitleaks で staged 差分の形の決まった漏洩を弾く。ルールの canonical は
+#   commit-and-pr-message の scripts/ にある 2 本の config (custom ルールと既定ルール) で、
+#   hook も config ごとに 2 本ある (下の該当 hook のコメントを参照)。
 # - claude plugin validate --strict で plugin.json の妥当性を機械検証する。
 #   フィールド名を散文へ再掲しないための canonical な検証手段。
 # - issue-id.py が Issue 識別子の記法を検査する。追跡ファイルとコミットメッセージで
@@ -36,22 +37,36 @@ repos:
 
   - repo: local
     hooks:
+      # 層 1。custom ルールと既定ルールは config を分けてあるので (理由は各 config の冒頭
+      # コメント)、config ごとに hook を 1 本ずつ置く。
+      #
+      # --ignore-gitleaks-allow を付けるのは、行に gitleaks:allow と書くだけでその行の検出が
+      # 消えるため (実測)。pass_filenames: false が要るのは、gitleaks git が位置引数を
+      # リポジトリのパスとして読み、ファイル名が 1 本だけ渡ると rc 0 の no leaks found に
+      # なるため (実測)。何を pin しているかの canonical は scripts/test_leak_guard_attachment.py。
       - id: gitleaks
-        name: gitleaks (secret / user-path leak guard)
+        name: gitleaks (custom の config)
         language: system
-        entry: gitleaks git --staged --redact --no-banner -c .gitleaks.toml
+        entry: gitleaks git --staged --redact --no-banner --ignore-gitleaks-allow -c plugins/dev-workflow/skills/commit-and-pr-message/scripts/leak-guard.gitleaks.toml
+        pass_filenames: false
+        always_run: true
+
+      - id: gitleaks-default
+        name: gitleaks (既定の config)
+        language: system
+        entry: gitleaks git --staged --redact --no-banner --ignore-gitleaks-allow -c plugins/dev-workflow/skills/commit-and-pr-message/scripts/leak-guard-default.gitleaks.toml
         pass_filenames: false
         always_run: true
 
       # ルールの regex は読むだけでは取りこぼしも誤検出も判定できず、両方とも実際に
-      # 埋め込んだ実績がある。ルール本体と対照ケースと manifest の 3 ファイルで 1 つの
-      # 契約なので、発火条件も 3 つとも見る。1 つでも外すと、その面を壊す変更が無検査で通る。
+      # 埋め込んだ実績がある。ルール本体 (2 本の config) と対照ケースと manifest で 1 つの
+      # 契約なので、発火条件も全部見る。1 つでも外すと、その面を壊す変更が無検査で通る。
       - id: leak-guard-rules
         name: 漏洩ガードのルールを対照で検証する
         language: system
         entry: scripts/check-leak-guard-rules.py
         pass_filenames: false
-        files: ^(\.gitleaks\.toml|scripts/(check-leak-guard-rules\.py|leak-guard-cases-manifest\.txt))$
+        files: ^(plugins/dev-workflow/skills/commit-and-pr-message/scripts/leak-guard(-default)?\.gitleaks\.toml|scripts/(check-leak-guard-rules\.py|leak-guard-cases-manifest\.txt))$
 
       # 層 2 (固有名詞)。禁止語リストは PUBLIC なこのリポジトリへ置けないので環境変数で
       # 外から指す。設定していない第三者の環境では skip して緑になる (clone した人が

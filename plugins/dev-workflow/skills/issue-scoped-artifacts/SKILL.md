@@ -83,7 +83,7 @@ Issue を起票するのは spec を書き出す直前である。ブレイン�
 実行可能スクリプトを配って呼び出す方式は次の 3 点で塞がっているため採らない。
 
 - plugin の実体パスをシェルから解決する手段が無い (`CLAUDE_PLUGIN_ROOT` はシェルに export されない)
-- 絶対パス直書きは gitleaks の macos-user-path ルールに抵触する
+- 絶対パス直書きはユーザー名を含むパスになる (`/Users/<name>` や `C:\Users\<name>` の形は、同じ bundle の `commit-and-pr-message` が同梱する gitleaks の custom ルール `user-path` が検出する)
 - pre-commit の外部 repo 参照は private リポジトリの clone 認証で詰まる
 
 ## 既存プロジェクトの移行手順

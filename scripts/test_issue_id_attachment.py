@@ -11,7 +11,7 @@ ISSUE-13)。こちらは検証対象 (issue-id.py) と実行者 (run-python-test
 issue-id.py の両取り付けを同時に外しても runner は走り続け、ここが赤くなる (実測)。
 
 設定を行で読む補助と、その読み方の限界 (YAML として解釈しない) は
-scripts/hook_config_lines.py が持つ。禁止語の検査の取り付けを pin する
+scripts/hook_config_lines.py が持つ。漏洩検査の取り付けを pin する
 scripts/test_leak_guard_attachment.py と共有している。
 """
 
@@ -38,6 +38,12 @@ CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 # 許可する側を pin して、知らないキーが増えたら赤にする。
 COMMIT_MSG_HOOK_KEYS = frozenset({"id", "name", "language", "entry", "stages", "always_run"})
 
+# hook の language は値まで pin する。キーの許可集合は値を見ないので、`language: pygrep` へ
+# 1 語変えても他の pin は緑のままになる (変異注入で確認)。pygrep は entry を正規表現として
+# 渡されたファイルを照合するだけで、issue-id.py を起動しない (pre-commit 4.6.2 の
+# languages/pygrep.py を読んで確認)
+HOOK_LANGUAGE = "system"
+
 
 def _load_helpers():
     """行で読む補助を読む。素の import はリポジトリ root から回すと解決できない。"""
@@ -54,6 +60,7 @@ live_lines = _helpers.live_lines
 invocations = _helpers.invocations
 hook_block = _helpers.hook_block
 hook_keys = _helpers.hook_keys
+hook_values = _helpers.hook_values
 
 
 class Attachment(unittest.TestCase):
@@ -82,6 +89,18 @@ class Attachment(unittest.TestCase):
             [line for line in block if line.lstrip().startswith("stages:") and "commit-msg" in line],
             "--check-text の hook が commit-msg stage に紐付いていない",
         )
+
+    def test_both_hooks_use_the_system_language(self):
+        # 値まで pin する理由は HOOK_LANGUAGE のコメント
+        for flag in ("--check", "--check-text"):
+            with self.subTest(flag=flag):
+                block = hook_block(live_lines(PRE_COMMIT_CONFIG), CHECKER, flag)
+                self.assertTrue(block, f"{flag} の hook 定義が見つからない")
+                self.assertEqual(
+                    hook_values(block, "language"),
+                    [HOOK_LANGUAGE],
+                    f"{flag} の hook の language が {HOOK_LANGUAGE} でない",
+                )
 
     def test_commit_msg_hook_type_is_installed_by_default(self):
         # stage の宣言だけでは `pre-commit install` が commit-msg の hook を置かず、

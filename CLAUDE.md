@@ -20,8 +20,11 @@ Claude Code のための skill と plugin を集めた PUBLIC リポジトリ。
 - private リポジトリの内部事情 (未公開の設計、社内固有の運用) を書かない。一般化できる
   知見だけを、出所を伴わない形で書く
 
-形の決まったカテゴリは `gitleaks` が検査する。ルールの canonical は `.gitleaks.toml`。
+形の決まったカテゴリは `gitleaks` が検査する。ルールの canonical は
+`plugins/dev-workflow/skills/commit-and-pr-message/scripts/` にある 2 本の config で、
+custom ルールの `leak-guard.gitleaks.toml` と既定ルールの `leak-guard-default.gitleaks.toml`。
 既定ルールだけではユーザー名を含むパスは捕捉されないため custom ルールを置いてある。
+2 本に分けている理由は各 config の冒頭コメントが持つ。
 
 固有名詞は形が決まらないので禁止語リストが要る。リストを PUBLIC なここへ置けないため外から
 指す形にしてあり、確認手順の canonical は
@@ -40,23 +43,28 @@ regex を読むだけでは分からない。実際、大小無視を先頭に�
 一時ファイルの置き場に使っている) と REST API の `/api/users/<id>` を誤検出しており、
 許可されるべき側の対照を並べていなければ気づかずに入れていた。
 
-`gitleaks` の緑を根拠にする前に、走査件数が 0 でないことも見ること。`0 commits scanned` の
-緑は「漏洩なし」ではなく「何も見ていない」。
+`gitleaks` の緑を根拠にする前に、走査量が 0 でないことも見ること。全履歴の走査の
+`0 commits scanned` や、staged 差分の走査の `scanned ~0 bytes` の緑は「漏洩なし」ではなく
+「何も見ていない」。
 
 `.gitleaksignore` は「既に push 済みの履歴に入っていて、内容としては修正済み」のものだけを
 記録する場所である。現在のツリーに残っている漏洩をここへ足して黙らせない。
 
 ## [MUST] 依存を増やさない
 
-対象は **CI と pre-commit が回す Python** (`scripts/` 配下と、検証対象の `winvm.py`)。
+対象は **pre-commit か CI から呼ばれる Python** で、置き場所では決めない。`scripts/` 配下に
+限らず、skill が配るスクリプトでも pre-commit か CI が呼ぶものは対象になる。CI のテストが
+import する検証対象 (例: `winvm.py`) も含む。
 
 - 標準ライブラリのみで書く。CI は runner の `python3` をそのまま使い、`setup-python` も
   `pip install` も置かない
 - テストは `unittest`。pytest を入れない (理由は `scripts/run-python-tests.py` の docstring)
 
-skill が配るスタンドアロンスクリプトはこの制約の外にある。`uv run --script` で PEP 723 の
-依存宣言を持つものは実行時に uv が解決するので、リポジトリの検証系に依存が増えない
-(例: `skills/tooling/markdown-to-pdf/scripts/render.py`)。
+対象に入らないスクリプト (skill が配るスタンドアロンスクリプトなど) は上の箇条の外にあるが、
+依存を持つなら `uv run --script` で PEP 723 の依存を宣言する形に限る。
+実行時に uv が解決するので、リポジトリの検証系に依存が増えない
+(例: `skills/tooling/markdown-to-pdf/scripts/render.py`)。PEP 723 で宣言していても、
+pre-commit か CI から呼ぶなら上の対象に入る。
 
 どちらの側でも、依存を足すときは pin すべきものが 1 つ増えることと引き換えに何を得るのかを
 PR で説明する。
@@ -82,7 +90,7 @@ PR で説明する。
 | パッケージの形と命名 | `scripts/check-package-shape.py` の docstring |
 | `plugin.json` のフィールド | `claude plugin validate --strict` |
 | README の内容 | 各 SKILL.md の frontmatter |
-| 形の決まった漏洩の検査ルール | `.gitleaks.toml` |
+| 形の決まった漏洩の検査ルール | `plugins/dev-workflow/skills/commit-and-pr-message/scripts/` の `leak-guard.gitleaks.toml` と `leak-guard-default.gitleaks.toml` |
 | in-repo Issue の識別子と記法 | `plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py` の docstring |
 
 新しい規約を作るときは、まず検査に落とせないかを考える。落とせないものだけを散文で書く。
@@ -109,10 +117,12 @@ CI (`.github/workflows/ci.yml`) が回す job より、ローカルの pre-commi
 逆向きの穴もある。ローカルは CI の上位集合ではない。片方にしか無い穴と、両方に共通する穴が
 それぞれある。
 
-- **漏洩検査 (経路の非対称)**: pre-commit の hook は `gitleaks git --staged` なので、
-  `--all-files` を付けても走査対象は staged 差分だけ。index が clean だと
-  `0 commits scanned` で緑になる。全履歴を走査するのは CI だけ。なお漏洩ルール自身が
-  正しいかは `scripts/check-leak-guard-rules.py` が検出側と許可側の対照で見る
+- **漏洩検査 (経路の非対称)**: pre-commit の gitleaks の hook は config ごとに 2 本あり、
+  どちらも `gitleaks git --staged` なので、`--all-files` を付けても走査対象は staged 差分
+  だけ。index が clean だと `scanned ~0 bytes` で緑になる (`--staged` は staged の有無に
+  かかわらず `0 commits scanned` と出すので、見るのは bytes の方。実測)。全履歴を
+  走査するのは CI だけ。なお漏洩ルール自身が正しいかは `scripts/check-leak-guard-rules.py`
+  が検出側と許可側の対照で見る
 - **Issue 識別子の記法 (stage の非対称)**: 追跡ファイルを見る `--check` は pre-commit と
   CI の両方に居るが、コミットメッセージを見る `--check-text` は commit-msg stage にしか
   居ない。上の `pre-commit run --all-files` は pre-commit stage しか回さないので、

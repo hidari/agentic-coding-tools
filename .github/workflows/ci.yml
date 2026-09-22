@@ -17,16 +17,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      # 版と sha256 の canonical はスクリプトが持つ
       - name: Install gitleaks
-        run: |
-          gitleaks_version="8.30.1" # 開発機と揃える
-          # sha256 は展開前に内容を pin する堰。
-          # 再計算方法: curl で同じ URL を取得し sha256sum gitleaks_8.30.1_linux_x64.tar.gz を実行する。
-          expected_sha256="551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
-          archive="$RUNNER_TEMP/gitleaks.tar.gz"
-          "$GITHUB_WORKSPACE/scripts/ci/download-and-verify.sh" "https://github.com/gitleaks/gitleaks/releases/download/v${gitleaks_version}/gitleaks_${gitleaks_version}_linux_x64.tar.gz" "$expected_sha256" "$archive"
-          tar -xz -C "$RUNNER_TEMP" -f "$archive" gitleaks
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+        run: scripts/ci/install-gitleaks.sh
 
       # ルール自身が正しいかを先に見る。ここが壊れていると、次の全履歴走査は
       # 「壊れたガードで緑」を出す。pre-commit にも同じ検査を置いてあるが、
@@ -35,9 +28,15 @@ jobs:
         run: python3 scripts/check-leak-guard-rules.py
 
       # 履歴は本リポジトリで新規に作るため、範囲を絞らず全履歴を走査する。
-      # 既定ルールだけでは /Users/<name> は検査されないので -c で custom ルールを渡す。
-      - name: Scan full history for leaks
-        run: gitleaks git --redact --no-banner -c .gitleaks.toml
+      # custom ルールと既定ルールは config を分けてあるので、config ごとに -c で渡して
+      # 1 回ずつ走らせる (分けている理由は各 config の冒頭コメント)。
+      # --ignore-gitleaks-allow は、行に gitleaks:allow と書くだけで検出が消える経路を塞ぐ。
+      # 既知の検出の記録は root の .gitleaksignore が持ち、git モードはそれを読む。
+      - name: Scan full history for leaks (custom rules)
+        run: gitleaks git --redact --no-banner --ignore-gitleaks-allow -c plugins/dev-workflow/skills/commit-and-pr-message/scripts/leak-guard.gitleaks.toml
+
+      - name: Scan full history for leaks (default rules)
+        run: gitleaks git --redact --no-banner --ignore-gitleaks-allow -c plugins/dev-workflow/skills/commit-and-pr-message/scripts/leak-guard-default.gitleaks.toml
 
   package-shape:
     name: パッケージの形と命名規約

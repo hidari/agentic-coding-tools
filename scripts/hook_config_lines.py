@@ -4,8 +4,9 @@
 除いた行を文字列として照合する (照合の規則は _invokes)。YAML 構造としての妥当性までは
 見ない。そこは pre-commit 自身と check-yaml hook が担う。
 
-checker を引数に取るのは、取り付けを pin したい検査が複数あるため。呼ぶ側が自分の
-literal を持ち、この層はどの検査にも依存しない。
+引数 checker は呼び出しの行を特定する文字列 (検査スクリプトのパスや gitleaks の config の
+パス) で、取り付けを pin したい対象が複数あるため引数に取る。呼ぶ側が自分の literal を持ち、
+この層はどの対象にも依存しない。
 
 ファイル名が `test_` で始まらないので run-python-tests.py の収集対象にはならない。
 振る舞いは、この補助を使う各テストが自分の対象を通して検証する。
@@ -73,3 +74,17 @@ def hook_keys(block: list[str]) -> set[str]:
     倒してあるのは、allowlist と突き合わせる用途だから (知らないキーは赤にする)。
     """
     return {m.group(1) for line in block if (m := HOOK_KEY.match(line))}
+
+
+def hook_values(block: list[str], key: str) -> list[str]:
+    """hook 定義ブロックで key が持つ値を、書かれた順に返す。
+
+    キーの許可集合は値を見ないので、値まで pin したいときに使う。`key:` の後ろを前後の
+    空白だけ除いて返し、引用符や行末コメントは解釈しない。YAML として等価な別表記は別の値に
+    なるので、完全一致を要求する用途ではそのずれは赤に倒れる。
+    """
+    return [
+        line[m.end() :].strip()
+        for line in block
+        if (m := HOOK_KEY.match(line)) and m.group(1) == key
+    ]
