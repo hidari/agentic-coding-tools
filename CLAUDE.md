@@ -24,10 +24,11 @@ Claude Code のための skill と plugin を集めた PUBLIC リポジトリ。
 既定ルールだけではユーザー名を含むパスは捕捉されないため custom ルールを置いてある。
 
 固有名詞は形が決まらないので禁止語リストが要る。リストを PUBLIC なここへ置けないため外から
-指す形にしてあり、確認手順の canonical は `scripts/check-leak-guard-denylist.py` の docstring、
-pre-commit への取り付けは `.pre-commit-config.yaml` が持つ (置き場所も環境変数名もここには
-再掲しない)。**設定していない環境では静かに
-skip して緑になる**ので、設定したら docstring の確認手順を一度通すこと。
+指す形にしてあり、確認手順の canonical は
+`plugins/dev-workflow/skills/commit-and-pr-message/scripts/check-leak-guard-denylist.py` の
+docstring、pre-commit への取り付けは `.pre-commit-config.yaml` が持つ (置き場所も環境変数名も
+ここには再掲しない)。**設定していない環境では静かに skip して緑になる**ので、設定したら
+docstring の確認手順を一度通すこと。
 
 **検査の網は書いた分しか広がらない。** 当初は macOS の `/Users/<name>` しか見ていなかった
 ため `C:\Users\<name>` が素通りして履歴へ入った。次に OS 別へ割ったところ、今度はどちらの

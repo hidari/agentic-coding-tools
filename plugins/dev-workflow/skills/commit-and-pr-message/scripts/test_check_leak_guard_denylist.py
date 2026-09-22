@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""check-leak-guard-denylist.py の仕様と、その取り付けの pin。
+"""check-leak-guard-denylist.py の仕様。
+
+取り付け (pre-commit などから呼ばれていること) の pin はここに置かない。どこへ取り付けるかは
+利用する側が決めるので、その pin も取り付ける側の設定と一緒に置く。
 
 禁止語はすべて架空語にする。実際の禁止語をここへ書くと、このテストファイル自身が
-露出になる (ISSUE-15-spec.md の「テスト」節)。同型の問題を層 1 の
-scripts/check-leak-guard-rules.py が NAME 変数で解いている。
+露出になる。
 
 この検査は「緑のまま何も見ていない」形が最も危険なので、テストの重心は検出側ではなく
 「検査不能を緑にしないこと」に置く。禁止語リストが空・BOM 付き・NFD・fold の片側適用
 ミスのいずれでも、素朴な実装は「走査したファイル全件 / 違反なし」という最も健全に
-見える要約で緑を返す (前セッションの失敗モード列挙で 5 角度すべてが独立に指摘した形)。
+見える要約で緑を返す (配布元で失敗モードを 5 つの角度から列挙したとき、すべてが独立に
+指摘した形)。
 
 fixture は tempfile + git init で作る。実ツリーに依存すると、現ツリーがたまたま合格して
 いることに寄りかかった dead pin になる。GIT_* を環境から落とす理由は GIT_ENV のコメント。
@@ -17,6 +20,7 @@ fixture は tempfile + git init で作る。実ツリーに依存すると、現
 from __future__ import annotations
 
 import contextlib
+import errno
 import importlib.util
 import io
 import os
@@ -29,26 +33,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-ROOT = Path(__file__).resolve().parent.parent
-CHECKER = "scripts/check-leak-guard-denylist.py"
-PRE_COMMIT_CONFIG = ROOT / ".pre-commit-config.yaml"
-
-# 各 hook が持ってよいキー。絞り込みの手段は列挙し切れないので、許可する側を pin して
-# 知らないキーが増えたら赤にする。commit-msg stage では渡るファイルが message ファイル
-# 1 本しかないため、ファイル名やファイル型で絞る指定はどれも集合を空にして skip になる。
-# pre-commit stage 側は走査対象を追跡ファイル全体で固定するので同じく絞らない。
-TRACKED_HOOK_KEYS = frozenset(
-    {"id", "name", "language", "entry", "pass_filenames", "always_run", "verbose"}
-)
-COMMIT_MSG_HOOK_KEYS = frozenset(
-    {"id", "name", "language", "entry", "stages", "always_run", "verbose"}
-)
+# 検査スクリプトはこのテストの隣にある。配布先でも同じ位置関係で読めるよう、
+# リポジトリの root からではなくファイルの隣を指す
+CHECKER = Path(__file__).resolve().parent / "check-leak-guard-denylist.py"
 
 # fixture が tempdir で `git add` を走らせるので、GIT_INDEX_FILE を継承すると書き込み先が
 # その指し先になり、呼び出し元リポジトリの index を fixture の内容で上書きする
-# (scripts/test_check_issue_closure.py が実測を記録している)。テストの終了コードには
-# 現れず、上書きしたまま緑を返す。個別の変数名を並べないのは git が変数を増やしたとき
-# 列挙だけが古びるため。
+# (配布元で実測)。テストの終了コードには現れず、上書きしたまま緑を返す。個別の変数名を
+# 並べないのは git が変数を増やしたとき列挙だけが古びるため。
 GIT_ENV = {
     **{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
     "GIT_CONFIG_GLOBAL": os.devnull,
@@ -63,7 +55,7 @@ GIT_ENV = {
 # プロセス内でも呼び、その先の checker._git は env= 無しで git を起こすので os.environ を
 # 読む。git は commit -a / commit -- <paths> のとき hook へ GIT_INDEX_FILE を渡すため、
 # 隔離が無いと fixture の tempdir ではなく呼び出し元の index を読む (実測: この形で
-# TrackedSurface の 7 件が errors になる)。先例と理由は scripts/test_check_related_refs.py
+# TrackedSurface の 7 件が errors になる)
 _GIT_ENV_PATCH = mock.patch.dict(os.environ, GIT_ENV, clear=True)
 
 
@@ -82,7 +74,7 @@ def git_vars(env) -> dict[str, str]:
 
 def load():
     """ハイフン名のスクリプトは import 文では読めないため importlib で読む。"""
-    spec = importlib.util.spec_from_file_location("check_leak_guard_denylist", ROOT / CHECKER)
+    spec = importlib.util.spec_from_file_location("check_leak_guard_denylist", CHECKER)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -105,10 +97,10 @@ FICTIONAL = (WORD, WORD_JA, WORD_SHARP_S, WORD_FW, WORD_KANA, WORD_KANA_HW, "quu
 
 # 見えない文字。fold がこれらを吸収すること (本文側) と、エントリが実質空になる形を
 # 検査不能へ倒すこと (リスト側) の両方で使う
-ZWSP = "​"
-SHY = "­"
-BOM = "﻿"
-NBSP = " "
+ZWSP = "\u200b"
+SHY = "\u00ad"
+BOM = "\ufeff"
+NBSP = "\u00a0"
 
 
 def git(root: Path, *args: str) -> subprocess.CompletedProcess:
@@ -153,7 +145,7 @@ def run_cli(*args: str, env: dict[str, str] | None = None, cwd: Path | None = No
     if env:
         base.update(env)
     proc = subprocess.run(
-        [sys.executable, str(ROOT / CHECKER), *args],
+        [sys.executable, str(CHECKER), *args],
         capture_output=True,
         text=True,
         env=base,
@@ -172,7 +164,7 @@ class Fold(unittest.TestCase):
 
     両側で違う関数を使う / 片側だけ余分に正規化する形は、エラーも警告も出さずに
     「検出 0 件で緑」になる。かな・漢字には差が出ないので、日本語だけの fixture では
-    絶対に見つからない (前セッションの実測)。
+    絶対に見つからない (実測)。
     """
 
     def test_identity_holds_for_tricky_literals(self):
@@ -190,8 +182,8 @@ class Fold(unittest.TestCase):
         # 件数ではなく fixture 単位で pin するのは、NFKC と casefold の表が Python の
         # バージョンに依存するため
         for word in (
-            WORD, WORD_JA, WORD_SHARP_S, "ǰ", "ΐ", "ﬁ", "ｶ゙",
-            "ͺ", "ϒ", "ϓ", "ϔ", "ϲ",
+            WORD, WORD_JA, WORD_SHARP_S, "ǰ", "ΐ", "\ufb01", "ｶ\u3099",
+            "\u037a", "\u03d2", "\u03d3", "\u03d4", "\u03f2",
         ):
             with self.subTest(word=repr(word)):
                 once = checker.fold(word)
@@ -204,8 +196,8 @@ class Fold(unittest.TestCase):
         # ペーストで入るので、難読化ではなく事故として起きる組み合わせ
         cases = [
             ("ガ", f"ｶ{ZWSP}ﾞ"),
-            ("が", f"か{ZWSP}゙"),
-            ("josé", f"jose{SHY}́"),
+            ("が", f"か{ZWSP}\u3099"),
+            ("josé", f"jose{SHY}\u0301"),
         ]
         for word, line in cases:
             with self.subTest(word=word):
@@ -221,7 +213,7 @@ class Fold(unittest.TestCase):
             (WORD, f"{WORD_FW} project"),
             ("がぎぐ", unicodedata.normalize("NFD", "がぎぐ")),
             (WORD_KANA, WORD_KANA_HW),
-            ("a b", "a　b"),
+            ("a b", "a\u3000b"),
         ]
         for word, line in cases:
             with self.subTest(word=word):
@@ -241,7 +233,7 @@ class Fold(unittest.TestCase):
     def test_absorbs_invisible_format_characters(self):
         # Cf は NFKC が長さ 1 のまま残し、isspace() も False なので strip も落とさない。
         # PDF / Word 由来の SHY、Web ページ由来の ZWSP がこの形で入る
-        for c in (ZWSP, SHY, BOM, "⁠"):
+        for c in (ZWSP, SHY, BOM, "\u2060"):
             with self.subTest(char=hex(ord(c))):
                 self.assertTrue(checker.scan_text(f"zorb{c}latt", entries_of(WORD)))
 
@@ -249,10 +241,10 @@ class Fold(unittest.TestCase):
         # 負の pin。ここが吸収する側へ動いたらこのテストが赤くなり、docstring の
         # 線引きの更新を強制する。ダッシュ異体とラテンのアクセントは NFKC が畳まず、
         # 畳むと 'ー' がかな文字と衝突する。綴りの異体は書き手がリストへ列挙する側
-        self.assertEqual(checker.scan_text("foo–bar", entries_of("foo-bar")), [])
+        self.assertEqual(checker.scan_text("foo\u2013bar", entries_of("foo-bar")), [])
         self.assertEqual(checker.scan_text("josé", entries_of("jose")), [])
         # 対照として NFKC が吸収する側を並べ、境界を両側から挟む
-        self.assertTrue(checker.scan_text("foo－bar", entries_of("foo-bar")))
+        self.assertTrue(checker.scan_text("foo\uff0dbar", entries_of("foo-bar")))
 
     def test_does_not_match_across_lines(self):
         # 行単位の照合なので行を跨いだ語は原理的に当たらない。既知の限界として pin する
@@ -262,8 +254,8 @@ class Fold(unittest.TestCase):
 class EnvironmentIsolation(unittest.TestCase):
     """プロセス内呼び出しが呼び出し元の git 環境を継承しないことを固定する。
 
-    run-python-tests.py の child_env も GIT_* を落とすが、防御を 1 層に頼らない。
-    直接 `python3 -m unittest` で回す開発時や、git hook から継承した環境ではその層が無い。
+    テストの runner が GIT_* を落としていても、防御を 1 層に頼らない。runner を通さずに
+    `python3 -m unittest` で回す開発時や、git hook から継承した環境ではその層が無い。
     """
 
     def test_the_process_environment_carries_the_isolated_git_vars(self):
@@ -285,7 +277,7 @@ class LineNumbering(unittest.TestCase):
     def test_counts_only_newline_as_a_boundary(self):
         # str.splitlines() は \v \f \x1c-\x1e NEL U+2028 U+2029 と単独の \r も行境界に
         # するが、git と grep は \n だけを境界にする (先例 issue-id.py の _split_lines)
-        for sep in ("\x0c", "\x85", " ", " ", "\x0b", "\r"):
+        for sep in ("\x0c", "\x85", "\u2028", "\u2029", "\x0b", "\r"):
             with self.subTest(sep=hex(ord(sep))):
                 text = f"alpha\nbeta{sep}{WORD}\ngamma\n"
                 hits = checker.scan_text(text, entries_of(WORD))
@@ -312,11 +304,14 @@ class DenylistParsing(unittest.TestCase):
     def test_strips_bom_crlf_and_surrounding_space(self):
         # BOM 付き (Windows の Notepad / PowerShell 5 の Out-File の既定) を
         # encoding='utf-8' で読むと 1 行目だけが永久に当たらない。しかも 1 行目が
-        # コメントなら '﻿#' が startswith('#') を外れてエントリへ昇格し、
+        # コメントなら '\ufeff#' が startswith('#') を外れてエントリへ昇格し、
         # 「リスト内の位置」が全部ずれる
         raw = f"{BOM}# comment\r\n{WORD} \r\nquuxcorp{NBSP}\r\n".encode("utf-8")
         entries = checker.parse_entries(raw)
         self.assertEqual([e.lineno for e in entries], [2, 3])
+        # strip の範囲は fold 前の raw で見る。NBSP は fold の NFKC が空白へ畳むので、
+        # 照合の結果だけを見ると strip を ASCII の空白へ狭めても緑のまま通る (実測)
+        self.assertEqual([e.raw for e in entries], [WORD, "quuxcorp"])
         self.assertTrue(checker.scan_text(f"the {WORD}", entries))
         self.assertTrue(checker.scan_text("a quuxcorp b", entries))
 
@@ -336,7 +331,7 @@ class DenylistParsing(unittest.TestCase):
 class DenylistValidation(unittest.TestCase):
     """「ファイルはある」と「比較に使えるエントリが取れる」を別の検査として分ける。
 
-    仕様の 3 分岐はファイルの存在までしか見ていない。存在するのにエントリが 0 件でも
+    当初の 3 分岐はファイルの存在までしか見ていない。存在するのにエントリが 0 件でも
     2 番目の分岐へ入って全ファイルを走査し、比較を 1 度も行わずに緑を返す。
     """
 
@@ -364,26 +359,37 @@ class DenylistValidation(unittest.TestCase):
         path.write_text(f"{WORD}\n{ZWSP}\n", encoding="utf-8")
         with self.assertRaises(checker.Unable) as cm:
             checker.load_entries(path)
-        self.assertIn("2", str(cm.exception))
+        # 数字 1 文字の照合は、別の検査の文言に含まれる数字 (件数など) にも当たりうる
+        # ので、行番号とこの検査に固有の語句の両方で見る
+        message = str(cm.exception)
+        self.assertIn("禁止語リストの 2 行目", message)
+        self.assertIn("fold 後に空になる", message)
 
     def test_non_lf_line_boundaries_are_unable(self):
         # 本文側とリスト側で同じ「\n だけを境界にする」規約の帰結が違う。リスト側では
         # エントリが結合して比較対象から消え、entries 非 0 / self_check 成功 / 検出 0 件
         # という最も健全に見える形で緑になる。self_check の canary は parse 後の raw から
         # 作るのでこの形を原理的に見られず、ここで止めるしかない
-        for label, body in (
-            ("cr-only", f"{WORD}\r{WORD_JA}\r"),
-            ("line-separator", f"{WORD} {WORD_JA}\n"),
-            ("after-comment", f"# note {WORD}\n"),
+        #
+        # どのケースも実効エントリを 1 件以上持たせる。持たない入力は、行境界の検査を
+        # 外しても後段の「実効エントリ 0 件」で同じ Unable になり、何も pin しない
+        # (実測: 実効エントリの無い after-comment では、行境界の検査をコメント行に掛けない
+        # 変異が緑で通った)。同じ理由で、文言は行番号とこの検査に固有の語句の両方で見る
+        for label, body, lineno in (
+            ("cr-only", f"{WORD}\r{WORD_JA}\r", 1),
+            ("line-separator", f"{WORD}\u2028{WORD_JA}\n", 1),
+            ("after-comment", f"{WORD_JA}\n# note\u2028{WORD}\n", 2),
         ):
             with self.subTest(label=label):
                 path = self.dir / f"{label}.txt"
                 path.write_text(body, encoding="utf-8")
                 with self.assertRaises(checker.Unable) as cm:
                     checker.load_entries(path)
-                self.assertIn("1", str(cm.exception))
+                message = str(cm.exception)
+                self.assertIn(f"禁止語リストの {lineno} 行目", message)
+                self.assertIn("以外の行境界文字を含む", message)
                 # 語を出さないこと。座標だけで報告する
-                self.assertNotIn(WORD, str(cm.exception))
+                self.assertNotIn(WORD, message)
 
     def test_lf_and_crlf_lists_still_load(self):
         # 上の負の対照。CRLF の \r は strip が落とすので行境界の検査に掛からない。
@@ -442,7 +448,7 @@ class SelfCheck(unittest.TestCase):
 class EnvBranching(unittest.TestCase):
     """置き場所の指定をどう受け取るか。
 
-    3 分岐の表に無い値 (空文字列・空白だけ・末尾改行) と、指し先が通常ファイルでない
+    当初の 3 分岐の表に無い値 (空文字列・空白だけ・末尾改行) と、指し先が通常ファイルでない
     形が、設計上の skip / 検査 / 停止のどれとも違う経路へ落ちる。
     """
 
@@ -487,13 +493,21 @@ class EnvBranching(unittest.TestCase):
                     checker.resolve_denylist({checker.ENV_VAR: str(path)})
 
     def test_unreadable_file_is_unable(self):
+        # 読み取りの失敗を chmod では作らない。root は権限を無視して読めてしまうので、
+        # 作れない回を skip へ逃がすと、root で回す環境ではこの分岐が一度も検査されないまま
+        # 緑になる。uid に依存しないよう、load_entries の呼び出しの間だけ read_bytes を
+        # EACCES で失敗させる。resolve_denylist の stat はパッチの外で本番と同じ経路を通す
         path = denylist(self.dir / "deny.txt", WORD)
-        path.chmod(0o000)
-        self.addCleanup(path.chmod, 0o644)
-        if os.access(path, os.R_OK):
-            self.skipTest("root で走っているので読み取り拒否を作れない")
-        with self.assertRaises(checker.Unable):
-            checker.load_entries(checker.resolve_denylist({checker.ENV_VAR: str(path)}))
+        resolved = checker.resolve_denylist({checker.ENV_VAR: str(path)})
+        # 例外に実際のパスを持たせる。例外の文字列を文言へ流す実装は、これでパスを
+        # 出力へ載せて下の assertNotIn に捕まる
+        denied = PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(path))
+        with mock.patch.object(Path, "read_bytes", side_effect=denied):
+            with self.assertRaises(checker.Unable) as cm:
+                checker.load_entries(resolved)
+        message = str(cm.exception)
+        self.assertIn(f"errno={errno.EACCES}", message)
+        self.assertNotIn(str(path), message)
 
     def test_regular_file_resolves(self):
         path = denylist(self.dir / "deny.txt", WORD)
@@ -550,8 +564,8 @@ class TrackedSurface(unittest.TestCase):
         self.assertEqual(len(from_sub.findings), len(from_root.findings))
 
     def test_non_ascii_paths_are_not_lost_to_c_quoting(self):
-        # git ls-files の既定出力は非 ASCII パスを C クォートする。このリポジトリは
-        # 追跡ファイルの 4 割強が非 ASCII パスなので、-z を外すとその分が壊れる。
+        # git ls-files の既定出力は非 ASCII パスを C クォートする。配布元では追跡ファイルの
+        # 4 割強が非 ASCII パスで、-z を外すとその分が壊れる (実測)。
         #
         # 対照には非 ASCII の禁止語をパスへ置く。C クォートは非 ASCII バイトだけを
         # エスケープして ASCII 部分をそのまま残すので、ASCII の語だけを対照にすると
@@ -563,8 +577,8 @@ class TrackedSurface(unittest.TestCase):
         self.assertTrue(report.findings[0].is_path)
 
     def test_matches_the_path_itself(self):
-        # ディレクトリ名へ固有名詞が入る経路は実在する (Issue ディレクトリ名は
-        # 日本語タイトルを含む)。内容だけを走査すると素通りする
+        # ディレクトリ名へ固有名詞が入る経路は実在する (同じ bundle の in-repo-issue は
+        # Issue のタイトルをディレクトリ名に含める)。内容だけを走査すると素通りする
         add(self.repo, f"docs/{WORD}/notes.md", "harmless content\n")
         report = self.scan()
         self.assertEqual(len(report.findings), 1)
@@ -573,14 +587,14 @@ class TrackedSurface(unittest.TestCase):
     def test_path_is_folded_before_matching(self):
         # 上の fixture は fold(x) == x の語しか使わないので、scan_path の fold を外しても
         # 当たってしまい何も pin しない (実測: folded = fold(path) を folded = path に
-        # 変えても全件緑)。全角は Issue ディレクトリ名に実際に入る形
+        # 変えても全件緑)。全角はタイトルをディレクトリ名に含める運用で実際に入る形
         add(self.repo, f"docs/{WORD_FW}/notes.md", "harmless content\n")
         report = self.scan()
         self.assertEqual([f.is_path for f in report.findings], [True])
 
     def test_oversize_blobs_are_excluded_without_being_read(self):
         # read_text は「decode できないから安全に飛ばす」ように見えて、例外が上がる前に
-        # ファイル全体を読み切っている。ホストには cgroup 境界が無い
+        # ファイル全体を読み切っている。開発機のホストには cgroup のような境界が無いことが多い
         big = b"x" * (checker.MAX_BLOB_BYTES + 1)
         add(self.repo, "big.bin", big)
         add(self.repo, "small.md", f"has {WORD}\n")
@@ -681,12 +695,13 @@ class TrackedSurface(unittest.TestCase):
 
 
 class CommitMessageSurface(unittest.TestCase):
-    """コミットメッセージ入口の走査面。
+    """テキスト 1 本を走査する入口 (--check-text) の走査面。全文を何も剥がさずに見る。
 
-    渡るのは git の cleanup より前の message ファイル全文で、コメント行も
-    `git commit -v` の diff も含まれる。ここで素朴に `#` 行を落とすと、本リポジトリの
-    日常経路 (`-F`) でちょうど穴が開く: 既定の cleanup は編集経由が strip、-m / -F は
-    whitespace なので、同じ本文でも `#` 行の運命が逆になる。
+    コミットメッセージはその用途の 1 つで、commit-msg hook として取り付けたときに渡るのは
+    git の cleanup より前の message ファイル全文になり、コメント行も `git commit -v` の
+    diff も含まれる。ここで素朴に `#` 行を落とすと、同梱先の commit-and-pr-message の
+    手順が使う経路 (`-F`) でちょうど穴が開く: 既定の cleanup は編集経由が strip、
+    -m / -F は whitespace なので、同じ本文でも `#` 行の運命が逆になる。
     """
 
     def setUp(self):
@@ -696,7 +711,7 @@ class CommitMessageSurface(unittest.TestCase):
         self.deny = denylist(self.dir / "deny.txt", WORD)
 
     def run_message(self, body: str):
-        """メッセージ入口を production の経路で呼ぶ。
+        """--check-text の入口を production の経路で呼ぶ。
 
         checker.scan_text を直接呼ぶと run_check_text の走査面を一切 pin しない。
         コメント行の除去や scissors 切りは入口の側に足されるものなので、そこを
@@ -896,9 +911,9 @@ class Redaction(unittest.TestCase):
         self.assertIn("2 件", out)
 
     def test_output_never_uses_the_github_number_notation(self):
-        # このリポジトリは #N を GitHub の番号空間を指す記法として機械検査で禁じている。
-        # 出力をコミットメッセージや Issue へ貼ると記法検査が違反として弾くので、
-        # 座標にも検査不能の文言にもこの形を使わない
+        # 同じ bundle の in-repo-issue にある issue-id.py は #N を GitHub の番号空間を指す
+        # 記法として機械検査で禁じている。出力をコミットメッセージや Issue へ貼るとその検査が
+        # 違反として弾くので、座標にも検査不能の文言にもこの形を使わない
         deny = denylist(self.dir / "deny.txt", WORD)
         add(self.repo, f"docs/{WORD}/notes.md", f"has {WORD}\n")
         outputs = []
@@ -965,7 +980,7 @@ class Redaction(unittest.TestCase):
 class Reporting(unittest.TestCase):
     """skip と「検査して 0 件」を出力で区別できるようにする。
 
-    pre-commit は rc 0 の hook の stdout も stderr も表示しないので、層 2 が
+    pre-commit から呼ぶと rc 0 の hook の stdout も stderr も表示されないので、層 2 が
     「未設定なので skip」と印字しても運用者には届かない。表示は hook 側の
     verbose: true に頼ることになり、表示されたときに 2 つが別物だと読めることが要る。
     """
@@ -1026,165 +1041,6 @@ class Reporting(unittest.TestCase):
         msg.write_text("harmless\n", encoding="utf-8")
         rc, _ = run_cli("--check-t", str(msg), cwd=self.repo)
         self.assertEqual(rc, 2)
-
-
-class Attachment(unittest.TestCase):
-    """検査機構の取り付けを pin する。機構そのものではなく「呼ばれていること」を見る。
-
-    機構のテストが全部緑でも、pre-commit から呼ばれていなければ一度も走らない。
-    commit-msg stage は特に、配線 1 行で黙って skip になる形を複数持つ。
-    """
-
-    @staticmethod
-    def live_lines(path: Path) -> list[str]:
-        return [
-            line
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if not line.lstrip().startswith("#")
-        ]
-
-    @classmethod
-    def invocations(cls, lines: list[str], flag: str) -> list[str]:
-        # flag は split() で照合する。部分文字列だと --check が --check-text にも
-        # 一致し、片方の hook を消しても両方の pin が緑のままになる
-        return [line for line in lines if CHECKER in line and flag in line.split()]
-
-    @classmethod
-    def hook_block(cls, lines: list[str], flag: str) -> list[str]:
-        hits = [i for i, line in enumerate(lines) if CHECKER in line and flag in line.split()]
-        if not hits:
-            return []
-        start = hits[0]
-        hook_start = re.compile(r"^\s*-\s+id:")
-        while start > 0 and not hook_start.match(lines[start]):
-            start -= 1
-        end = start + 1
-        while end < len(lines) and not hook_start.match(lines[end]):
-            end += 1
-        return lines[start:end]
-
-    @staticmethod
-    def hook_keys(block: list[str]) -> set[str]:
-        """hook 定義ブロックが持つマッピングのキー。
-
-        入れ子のマッピングも同じ形なので拾う。取りこぼす方向ではなく余計に拾う方向へ
-        倒してあるのは、allowlist と突き合わせる用途だから (知らないキーは赤にする)。
-        """
-        key = re.compile(r"^\s*(?:-\s+)?([A-Za-z_][A-Za-z0-9_-]*):")
-        return {m.group(1) for line in block if (m := key.match(line))}
-
-    def test_checker_path_exists(self):
-        # 取り付けを探す文字列が実在しないパスへ drift すると dead pin になる
-        self.assertTrue((ROOT / CHECKER).is_file(), f"{CHECKER} が無い")
-
-    def test_pre_commit_runs_the_tracked_file_check(self):
-        self.assertTrue(
-            self.invocations(self.live_lines(PRE_COMMIT_CONFIG), "--check"),
-            "pre-commit が --check を呼んでいない",
-        )
-
-    def test_pre_commit_runs_the_commit_message_check(self):
-        self.assertTrue(
-            self.invocations(self.live_lines(PRE_COMMIT_CONFIG), "--check-text"),
-            "pre-commit が --check-text を呼んでいない",
-        )
-
-    def test_commit_message_hook_is_bound_to_the_commit_msg_stage(self):
-        block = self.hook_block(self.live_lines(PRE_COMMIT_CONFIG), "--check-text")
-        self.assertTrue(block, "--check-text の hook 定義が見つからない")
-        self.assertTrue(
-            [l for l in block if l.lstrip().startswith("stages:") and "commit-msg" in l],
-            "--check-text の hook が commit-msg stage に紐付いていない",
-        )
-
-    def test_both_hooks_always_run(self):
-        # commit-msg stage では渡るファイルが message ファイル 1 本しかないので、
-        # ファイル名で絞る指定は「絞る」ではなく「常に skip」になる。pre-commit stage 側も
-        # 走査対象を追跡ファイル全体で固定するために絞らない
-        for flag in ("--check", "--check-text"):
-            with self.subTest(flag=flag):
-                block = self.hook_block(self.live_lines(PRE_COMMIT_CONFIG), flag)
-                self.assertTrue(block, f"{flag} の hook 定義が見つからない")
-                self.assertTrue(
-                    [l for l in block if "always_run: true" in l],
-                    f"{flag} の hook に always_run: true が無い",
-                )
-
-    def test_both_hooks_are_verbose(self):
-        # pre-commit は rc 0 の hook の出力を捨てるので、verbose: true が無いと
-        # 「設定し忘れて skip した」と「検査して 0 件だった」が端末上で同じ 1 行になる
-        for flag in ("--check", "--check-text"):
-            with self.subTest(flag=flag):
-                block = self.hook_block(self.live_lines(PRE_COMMIT_CONFIG), flag)
-                self.assertTrue(block, f"{flag} の hook 定義が見つからない")
-                self.assertTrue(
-                    [l for l in block if "verbose: true" in l],
-                    f"{flag} の hook に verbose: true が無い。skip 通知が誰の目にも入らない",
-                )
-
-    def test_tracked_file_hook_runs_on_the_pre_commit_stage(self):
-        # `stages: [manual]` を 1 行足すと、この hook は commit 時にも
-        # `pre-commit run --all-files` にも現れないまま追跡ファイル面が消える。
-        # Skipped の表示すら出ないので、出力を見比べても異常に見えない (実測)
-        # この hook は stages を宣言しないので top-level の default_stages を継承する。
-        # hook ブロック内だけを見る形は、宣言が無いとループが一度も回らず空虚に緑になり、
-        # 26 行目を [manual] へ変える 1 行で全 stage から消えても捕まらない (実測)
-        lines = self.live_lines(PRE_COMMIT_CONFIG)
-        block = self.hook_block(lines, "--check")
-        self.assertTrue(block, "--check の hook 定義が見つからない")
-        own = [l for l in block if l.lstrip().startswith("stages:")]
-        effective = own or [l for l in lines if re.match(r"^default_stages:", l)]
-        self.assertTrue(effective, "--check の stage を決める宣言がどこにも無い")
-        for line in effective:
-            self.assertIn(
-                "pre-commit", line, "--check の hook が pre-commit stage から外れている"
-            )
-
-    def test_tracked_file_hook_does_not_pass_filenames(self):
-        # 落ちると always_run のまま追跡パスが引数で渡り、argparse のエラーが argv を
-        # そのまま印字する。汚染パスの置き換えが隠すはずのパス (= 語そのもの) が
-        # Failed ブロックへ並ぶ (実測)。スクリプト側の parse_known_args と 2 層で塞ぐ
-        block = self.hook_block(self.live_lines(PRE_COMMIT_CONFIG), "--check")
-        self.assertTrue(block, "--check の hook 定義が見つからない")
-        self.assertTrue(
-            [l for l in block if "pass_filenames: false" in l],
-            "--check の hook に pass_filenames: false が無い",
-        )
-
-    def test_hook_blocks_have_no_unvetted_keys(self):
-        # 個別の narrowing キーを列挙して禁じる形は採らない。絞り込みの手段は列挙し切れず、
-        # pre-commit が新しいキーを足せば列挙の外から同じ穴が開く。許可する側を pin して、
-        # 知らないキーが増えたら赤にする (先例は scripts/test_issue_id_attachment.py)
-        for flag, allowed in (
-            ("--check", TRACKED_HOOK_KEYS),
-            ("--check-text", COMMIT_MSG_HOOK_KEYS),
-        ):
-            with self.subTest(flag=flag):
-                block = self.hook_block(self.live_lines(PRE_COMMIT_CONFIG), flag)
-                self.assertTrue(block, f"{flag} の hook 定義が見つからない")
-                unknown = sorted(self.hook_keys(block) - allowed)
-                self.assertFalse(
-                    unknown,
-                    f"{flag} の hook に未検討のキーがある: {unknown}。"
-                    "silent skip を招かないことを確かめてから許可集合へ足す",
-                )
-
-    def test_ci_does_not_run_this_check(self):
-        # PUBLIC リポジトリの Actions ログは誰でも読める。検出座標を公開ログへ出すと、
-        # 対象のコミットは push 済みなので座標の交差から語を復元できる。
-        # 取り付けない決定を散文だけでなく negative pin として置く。
-        #
-        # 1 ファイルだけを見ると、別の workflow ファイルから呼ぶ取り付けが射程の外で
-        # 素通りする。走査した件数が 0 でないことも併せて見る (0 件で緑になる形を作らない)
-        workflow_dir = ROOT / ".github" / "workflows"
-        workflows = sorted(workflow_dir.glob("*.yml")) + sorted(workflow_dir.glob("*.yaml"))
-        self.assertTrue(workflows, "workflow が 1 件も無い (negative pin が 0 件で緑になる)")
-        for wf in workflows:
-            with self.subTest(workflow=wf.name):
-                self.assertFalse(
-                    [line for line in self.live_lines(wf) if CHECKER in line],
-                    f"{wf.name} がこの検査を呼んでいる。検出座標が公開ログへ残る",
-                )
 
 
 if __name__ == "__main__":

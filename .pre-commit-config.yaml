@@ -68,7 +68,7 @@ repos:
       - id: leak-guard-denylist
         name: 禁止語リストで固有名詞の流入を検査する (追跡ファイル)
         language: system
-        entry: scripts/check-leak-guard-denylist.py --check
+        entry: plugins/dev-workflow/skills/commit-and-pr-message/scripts/check-leak-guard-denylist.py --check
         pass_filenames: false
         always_run: true
         verbose: true
@@ -84,7 +84,7 @@ repos:
       - id: leak-guard-denylist-commit-msg
         name: 禁止語リストで固有名詞の流入を検査する (コミットメッセージ)
         language: system
-        entry: scripts/check-leak-guard-denylist.py --check-text
+        entry: plugins/dev-workflow/skills/commit-and-pr-message/scripts/check-leak-guard-denylist.py --check-text
         stages: [commit-msg]
         always_run: true
         verbose: true

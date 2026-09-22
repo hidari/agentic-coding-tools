@@ -81,7 +81,7 @@ git diff --stat <前回のtag>..HEAD -- plugins/ skills/
 誰も見ないまま公開される。しかも push した後で本文を直すには打ち直すしかなく、参照が変わる。
 
 ```bash
-python3 scripts/check-leak-guard-denylist.py --check-text .cache/tag-v<X.Y.Z>.txt
+python3 plugins/dev-workflow/skills/commit-and-pr-message/scripts/check-leak-guard-denylist.py --check-text .cache/tag-v<X.Y.Z>.txt
 ```
 
 検査が skip された状態は緑ではない。禁止語リストが未設定の環境では静かに通るので、
@@ -106,7 +106,7 @@ tag は対象外である。
 release note も手順 3 と同じ検査を通す。理由も同じで、この面を見る機会がここにしか無い。
 
 ```bash
-python3 scripts/check-leak-guard-denylist.py --check-text .cache/notes-v<X.Y.Z>.md
+python3 plugins/dev-workflow/skills/commit-and-pr-message/scripts/check-leak-guard-denylist.py --check-text .cache/notes-v<X.Y.Z>.md
 ```
 
 ```bash
