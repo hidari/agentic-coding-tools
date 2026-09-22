@@ -146,10 +146,7 @@ Interfaces:
 - [ ] Step 6: `.pre-commit-config.yaml` の `leak-guard-denylist` と `leak-guard-denylist-commit-msg` の `entry` を
   移動先へ。hook のコメントのうち「CI へ取り付けない」理由がスクリプトの docstring を名指ししていたら、
   配線テストを名指しする形へ直す
-- [ ] Step 7: 移した 2 ファイルを全文読み、配布先で偽になる散文を直す。基準は「配布先に同じものが無くても
-  真であるか」。検索は補助にとどめる
-  (`tgrep -n 'このリポジトリ|本リポジトリ|scripts/|PUBLIC|ISSUE-|CI |pre-commit|commit-msg hook|spec|CLAUDE\.md|前セッション|run-python-tests|gitleaks\.toml|開発機|Attachment' CPM/scripts/`)。
-  直す方向は次のとおり
+- [ ] Step 7: 移した 2 ファイルを全文読み、配布先で偽になる散文を直す。基準は「配布先に同じものが無くても真であるか」。検索は補助にとどめる。直す方向は次のとおり
   - 配布元の実測や経緯は「配布元で測った」と分かる書き方にするか、一般化する
   - 取り付けの判断 (pre-commit へ載せる・CI へ載せない) は「利用する側の判断」とし、配布元の
     判断の理由は配線テストへ移す (Step 3)
@@ -165,11 +162,7 @@ Interfaces:
 - [ ] Step 9: `CLAUDE.md` の「確認手順の canonical は `scripts/check-leak-guard-denylist.py` の docstring」を
   移動先のパスへ。release skill の手順 3 と 4 の `python3 scripts/check-leak-guard-denylist.py` を移動先の
   パスへ (Task 4 で置き換えるまでの橋渡し)
-- [ ] Step 10: 旧パスが残っていないこと。旧パスは新パスの末尾に含まれるので、直前がパスの一部でない形で探す。
-  `tgrep -n '(^|[^/A-Za-z_-])scripts/check-leak-guard-denylist\.py' --glob '!docs/issues/**' .` が 0 件で、
-  dot 始まりの `.pre-commit-config.yaml` `.github/workflows/ci.yml` `.claude/skills/release/SKILL.md` を
-  個別に渡しても 0 件。陽性の対照として、新しいパスが `.pre-commit-config.yaml` で 2 件当たること。
-  `docs/issues/` はスナップショットなので対象外
+- [ ] Step 10: 旧パスが残っていないこと。旧パスは新パスの末尾に含まれるので、直前がパスの一部でない形で探す。`rg -n --hidden -g '!.git' -g '!docs/issues/**' '(^|[^/A-Za-z_-])scripts/check-leak-guard-denylist\.py' .` が 0 件。陽性の対照として、新しいパスが `.pre-commit-config.yaml` で 2 件当たること (この対照は dot 始まりが走査面に入っていることの確認を兼ねる)。`docs/issues/` はスナップショットなので対象外
 - [ ] Step 11: 単体テスト (移した層 2 のテスト、2 本の配線テスト) を直接回して緑
 - [ ] Step 12: 変異注入 (写しで行う)
   - `leak-guard-denylist` hook の `entry` 行をコメントアウト → `test_leak_guard_attachment` の pre-commit の pin が赤
