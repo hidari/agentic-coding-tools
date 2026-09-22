@@ -25,19 +25,14 @@ agent の dispatch は `security-blue-red-team:<agent 名>` の修飾名で行�
 
 ## 安全側の制約
 
-`environment.kind` が production の profile に対しては、いずれの経路も実行を拒否する。
-profile の `environment.kind` チェックと `allow_targets` の allowlist チェックによる二重防御。
+`environment.kind` が production の profile に対しては、いずれの経路も実行を拒否する。profile の `environment.kind` チェックと `allow_targets` の allowlist チェックによる二重防御。
 
-Layer 3 で seed されたリソースは `cleanup-queue.json` に記録され、`/security-cleanup` で
-purge する。cleanup はキューの自由文字列を実行せず、profile のテンプレートから削除コマンドを
-再導出する。
+Layer 3 で seed されたリソースは `cleanup-queue.json` に記録され、`/security-cleanup` で purge する。cleanup はキューの自由文字列を実行せず、profile のテンプレートから削除コマンドを再導出する。
 
 ## schema の所在
 
-`findings.json` と `cleanup-queue.json` および profile の schema は本パッケージの `schemas/`
-にある。`agents/` と `commands/` からは `${CLAUDE_PLUGIN_ROOT}/schemas/<name>` で参照する。
-root のこのファイルでは `${CLAUDE_PLUGIN_ROOT}` が展開されないため、schema を名指しする処理を
-ここへ書いてはならない。
+`findings.json` と `cleanup-queue.json` および profile の schema は本パッケージの `schemas/` にある。`agents/` と `commands/` からは `${CLAUDE_PLUGIN_ROOT}/schemas/<name>` で参照する。
 
-インストール先を絶対パスで書いてはならない。開発機の配置にしか当たらず、配布先では解決しない。
-`scripts/check-package-shape.py` がこの形を検出する。
+root のこのファイルでは `${CLAUDE_PLUGIN_ROOT}` が展開されないため、schema を名指しする処理をここへ書いてはならない。
+
+インストール先を絶対パスで書いてはならない。開発機の配置にしか当たらず、配布先では解決しない。 `scripts/check-package-shape.py` がこの形を検出する。
