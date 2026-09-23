@@ -16,11 +16,14 @@ exit code は「検出があったか」であって「期待どおりか」で�
 
 対照が痩せたことは対照自身には見えないので、pin を 2 段構えにしてある。
 
-1. ルール集合の一致。custom の config の [[rules]] id と SHOULD_DETECT が名指しする
-   ルールの 2 集合が一致することを要求する。片方向だけだと、config へルールを足して
-   検出ケースを書かない形が「ルール N 本を検査した」と名乗ったまま緑で通る。逆向きの
-   ずれ (config に無いルールを名指すケース) は、rename が「全ケース取りこぼし」に化けて
-   regex が壊れた形と同じ赤になる。どちらも検査不能として分ける
+1. ルール集合の一致。custom の config の [[rules]] id、SHOULD_DETECT が名指しするルール、
+   入口 (ENTRY) の custom_canary() のキーの 3 集合が一致することを要求する。片方向だけだと、
+   config へルールを足して検出ケースを書かない形が「ルール N 本を検査した」と名乗ったまま
+   緑で通る。逆向きのずれ (config に無いルールを名指すケース) は、rename が「全ケース
+   取りこぼし」に化けて regex が壊れた形と同じ赤になる。どちらも検査不能として分ける。
+   入口の canary を加えるのは、入口が実行時に config を読まず、ルールごとの canary が
+   検出されることでそのルールが生きていると判定するため。config にあって canary に無い
+   ルールは、入口では欠けても止まらない
 2. ケース ID 集合の manifest。pin するのは件数ではなく ID 集合で、消えた側 (痩せ) も
    未記録側 (増加) も名指しで赤にする。件数の下限は canonical の再掲になって drift し、
    下限を割らない痩せを原理的に捕捉できない。同型の先例は scripts/run-python-tests.py
@@ -36,6 +39,7 @@ config や manifest を読めないときと、想定外の例外で止まった
 """
 
 import argparse
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -49,6 +53,8 @@ ROOT = Path(__file__).resolve().parent.parent
 RULES_DIR = ROOT / "plugins" / "dev-workflow" / "skills" / "commit-and-pr-message" / "scripts"
 CUSTOM_RULES = RULES_DIR / "leak-guard.gitleaks.toml"
 DEFAULT_RULES = RULES_DIR / "leak-guard-default.gitleaks.toml"
+# 入口。custom ルールごとの canary の行を持ち、そのキー集合をここで借りる (docstring の 1)
+ENTRY = RULES_DIR / "check-outgoing-text.py"
 MANIFEST = ROOT / "scripts" / "leak-guard-cases-manifest.txt"
 UPDATE_CMD = "python3 scripts/check-leak-guard-rules.py --update-manifest"
 
@@ -305,6 +311,18 @@ def rule_ids(config: dict) -> set[str]:
     return {r["id"] for r in config.get("rules", []) if "id" in r}
 
 
+def canary_rule_ids() -> set[str]:
+    """入口の custom_canary() のキー集合。
+
+    ハイフン名のスクリプトは import 文では読めないため importlib で読む。読み込みは
+    モジュールの定義を実行するだけで、入口の main は呼ばない。
+    """
+    spec = importlib.util.spec_from_file_location("check_outgoing_text", ENTRY)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return set(module.custom_canary())
+
+
 def case_keys() -> list[str]:
     """manifest へ書く対照ケースの ID 集合。
 
@@ -339,11 +357,13 @@ def write_manifest(keys: list[str]) -> None:
 
 
 def check_rule_sets() -> int:
-    """custom の config の id と SHOULD_DETECT のルールの一致、既定の config がルールを
-    持たないことを要求する。
+    """custom の config の id・SHOULD_DETECT のルール・入口の canary のキーの一致と、既定の
+    config がルールを持たないことを要求する。
 
     一致しない形はどれも「ルール N 本を検査した」と名乗ったまま緑で通るか、rename が
     全ケース取りこぼしに化けるので、検査の結果 (1) ではなく検査不能 (2) として止める。
+    入口を読めないときも 2 にする。読めない入口は配布先でも動かず、canary の集合が取れない
+    ままここを緑にすると、config と canary のずれが見えなくなる。
 
     既定の config へ足したルールは、その config が持つ全体除外の下で動く (config を 2 本に
     分けた理由そのもの)。しかも検出側の判定は custom の config しか見ないので、そこへ足した
@@ -357,6 +377,13 @@ def check_rule_sets() -> int:
         except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
             print(redact_paths(f"[x] {label} を読めない: {e}"))
             return 2
+    try:
+        canaried = canary_rule_ids()
+    except Exception as e:  # noqa: BLE001
+        # exec_module は構文エラーから import の失敗まで何でも上げる。文言はパスを持ちうる
+        # (SyntaxError はファイル名を含む) ので redact_paths を通す
+        print(redact_paths(f"[x] 入口 (canary の借り先) を読めない: {type(e).__name__}: {e}"))
+        return 2
 
     rc = 0
     stray = loaded[DEFAULT_LABEL].get("rules")
@@ -365,14 +392,19 @@ def check_rule_sets() -> int:
         print(f"[x] {DEFAULT_LABEL} がルールを {len(stray)} 本持つ: {ids}")
         rc = 2
 
-    defined = rule_ids(loaded[CUSTOM_LABEL])
-    covered = {rule for rule, _, _ in SHOULD_DETECT}
-    for rule in sorted(defined - covered):
-        print(f"[x] {CUSTOM_LABEL} にあって SHOULD_DETECT に無いルール: {rule}")
-    for rule in sorted(covered - defined):
-        print(f"[x] SHOULD_DETECT にあって {CUSTOM_LABEL} に無いルール: {rule}")
-    if defined != covered:
-        rc = 2
+    # 3 集合を総当たりで比べる。どの 2 つのずれも名指しで出す
+    sets = (
+        (f"{CUSTOM_LABEL}", rule_ids(loaded[CUSTOM_LABEL])),
+        ("SHOULD_DETECT", {rule for rule, _, _ in SHOULD_DETECT}),
+        ("入口の custom_canary()", canaried),
+    )
+    for (label_a, set_a), (label_b, set_b) in ((sets[0], sets[1]), (sets[0], sets[2]), (sets[1], sets[2])):
+        for rule in sorted(set_a - set_b):
+            print(f"[x] {label_a} にあって {label_b} に無いルール: {rule}")
+        for rule in sorted(set_b - set_a):
+            print(f"[x] {label_b} にあって {label_a} に無いルール: {rule}")
+        if set_a != set_b:
+            rc = 2
     return rc
 
 
@@ -389,7 +421,7 @@ def main() -> int:
         print("[x] gitleaks が見つからない (brew install gitleaks)")
         return 2
 
-    for label, path in CONFIGS:
+    for label, path in (*CONFIGS, ("入口", ENTRY)):
         if not path.exists():
             print(redact_paths(f"[x] {label} が無い: {path}"))
             return 2

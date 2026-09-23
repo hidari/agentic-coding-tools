@@ -59,14 +59,15 @@ repos:
         always_run: true
 
       # ルールの regex は読むだけでは取りこぼしも誤検出も判定できず、両方とも実際に
-      # 埋め込んだ実績がある。ルール本体 (2 本の config) と対照ケースと manifest で 1 つの
-      # 契約なので、発火条件も全部見る。1 つでも外すと、その面を壊す変更が無検査で通る。
+      # 埋め込んだ実績がある。ルール本体 (2 本の config) と対照ケースと manifest と、
+      # ルールごとの canary を持つ入口 (check-outgoing-text.py) で 1 つの契約なので、発火条件も
+      # 全部見る。1 つでも外すと、その面を壊す変更が無検査で通る。
       - id: leak-guard-rules
         name: 漏洩ガードのルールを対照で検証する
         language: system
         entry: scripts/check-leak-guard-rules.py
         pass_filenames: false
-        files: ^(plugins/dev-workflow/skills/commit-and-pr-message/scripts/leak-guard(-default)?\.gitleaks\.toml|scripts/(check-leak-guard-rules\.py|leak-guard-cases-manifest\.txt))$
+        files: ^(plugins/dev-workflow/skills/commit-and-pr-message/scripts/(leak-guard(-default)?\.gitleaks\.toml|check-outgoing-text\.py)|scripts/(check-leak-guard-rules\.py|leak-guard-cases-manifest\.txt))$
 
       # 層 2 (固有名詞)。禁止語リストは PUBLIC なこのリポジトリへ置けないので環境変数で
       # 外から指す。設定していない第三者の環境では skip して緑になる (clone した人が

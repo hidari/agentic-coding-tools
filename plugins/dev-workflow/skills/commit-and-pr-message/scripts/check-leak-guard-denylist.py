@@ -732,7 +732,11 @@ def run_check_text(source: str, entries: list[Entry]) -> int:
     """
     path = Path(source)
     try:
-        text = path.read_text(encoding="utf-8")
+        # read_text ではなく bytes から decode する。read_text の universal newlines は
+        # 単独の \r を \n に置き換えてから渡すので、split_lines が \n だけを境界にしていても
+        # \r を持つ本文では行番号が 1 つ進む (実測)。同じ本文を層 1 (gitleaks。\n だけで
+        # 数える) と一緒に通す入口では、層ごとに座標がずれて片方が別の行を指す
+        text = path.read_bytes().decode("utf-8")
     except (OSError, UnicodeDecodeError) as e:
         raise Unable(
             f"走査対象のテキストを読めない ({type(e).__name__})。パスは印字しない"
@@ -757,7 +761,26 @@ def run_check_text(source: str, entries: list[Entry]) -> int:
     return EXIT_OK
 
 
+def _tolerate_unencodable_stdout() -> None:
+    """stdout の符号化で表せない文字を backslashreplace で \\x.. や \\u.... の形にして書く。
+
+    stdout の符号化が日本語を書けない (PYTHONIOENCODING=ascii、cp1252 のコンソール) と、既定の
+    strict では status=checked を出したあとの日本語の行で UnicodeEncodeError になり、rc 2 で
+    終わる (実測)。rc 1 と status=checked の組を検出として読む呼び出し元では、検出が「検査
+    不能」に化ける。UTF-8 のバイト列を直接書く案と比べ、cp932 の Windows では日本語がそのまま
+    出て、表せない符号化でも ASCII の目印は壊れない。stderr は Python の既定で backslashreplace
+    なので触らない。テストが StringIO へ差し替えた stdout には reconfigure が無いので呼ばない。
+    """
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(errors="backslashreplace")
+
+
 def main(argv: list[str] | None = None, *, env=None) -> int:
+    # 最初の書き込みより前に置く。argparse の --help は parse_known_args の中で日本語の説明を
+    # stdout へ書くので、その後ろに置くと ASCII の stdout で traceback が stderr へ出て
+    # rc 1 になる (実測)
+    _tolerate_unencodable_stdout()
     env = os.environ if env is None else env
     # allow_abbrev の既定 (True) は `--che` を別モードの短縮として受理する。
     # typo が静かに別の入口へ落ちないよう完全形の明示だけに絞る (先例 issue-id.py)

@@ -400,7 +400,8 @@ class DenylistValidation(unittest.TestCase):
         ):
             with self.subTest(label=label):
                 path = self.dir / f"{label}.txt"
-                path.write_text(body, encoding="utf-8", newline="")
+                # bytes で書く。write_text の newline= は Python 3.10 からで、3.9 では TypeError
+                path.write_bytes(body.encode("utf-8"))
                 entries = checker.load_entries(path)
                 self.assertEqual([e.raw for e in entries], [WORD, WORD_JA])
 
@@ -757,6 +758,20 @@ class CommitMessageSurface(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertNotIn("nonexistent", out, "読めなかった対象のパスが出力に漏れている")
 
+    def test_a_lone_cr_is_not_a_line_boundary(self):
+        # 層 1 (gitleaks) は \n だけで行を数える (gitleaks 8.30.1 で実測)。同じ本文を
+        # 両層へ通す入口では、層ごとに座標がずれると片方の座標が別の行を指す。
+        # read_text の universal newlines は単独の \r を \n に置き換えてから渡すので、
+        # scan_text が \n だけを境界にしていても入口の側でずれる (実測: この形で line 3)。
+        # ファイルは bytes で書く。write_text は \r を保つが、経路を bytes に揃えて
+        # テスト自身の変換に依存しない
+        path = self.dir / "COMMIT_EDITMSG"
+        path.write_bytes(f"alpha\rbeta\n{WORD}\n".encode("utf-8"))
+        rc, out = run_cli("--check-text", str(path), env={checker.ENV_VAR: str(self.deny)})
+        self.assertEqual(rc, 1)
+        self.assertIn("line 2: denylist line 1", out)
+        self.assertNotIn("line 3:", out)
+
     def test_a_clean_message_passes(self):
         # 上の 2 つは「剥がさない」方向の pin なので、剥がさないことが誤検出を
         # 増やしていないかを対照で見る。テンプレート相当のコメント行だけなら緑
@@ -1022,6 +1037,53 @@ class Reporting(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("denylist line 1", out)
         self.assertNotIn(WORD, out)
+
+    def run_with_stdout_encoding(self, encoding: str, *args: str, deny: Path | None = None):
+        """stdout の符号化を PYTHONIOENCODING で決めて起動する。stdout と stderr を bytes で分けて返す。"""
+        env = {k: v for k, v in GIT_ENV.items() if k != checker.ENV_VAR}
+        env["PYTHONIOENCODING"] = encoding
+        if deny is not None:
+            env[checker.ENV_VAR] = str(deny)
+        return subprocess.run(
+            [sys.executable, str(CHECKER), *args],
+            capture_output=True,
+            env=env,
+            cwd=str(self.repo),
+        )
+
+    def test_check_text_with_an_ascii_stdout(self):
+        # stdout の符号化が日本語を書けない (PYTHONIOENCODING=ascii、cp1252 のコンソール) と、
+        # 既定の strict では status=checked を出したあとの日本語の行で UnicodeEncodeError になり、
+        # rc 2 で終わる (実測)。rc 1 と status=checked の組を検出として読む呼び出し元では、
+        # 検出が「検査不能」に化ける
+        deny = denylist(self.dir / "deny.txt", WORD)
+        msg = self.dir / "COMMIT_EDITMSG"
+        msg.write_text(f"feat: x\n\n{WORD}\n", encoding="utf-8")
+        status = f"{checker.STATUS_CHECKED} lines=3 entries=1 findings=1"
+        coords = "  [x] line 3: denylist line 1\n"
+        # 要約の文は層 2 が UTF-8 の stdout へ実際に書いたものから取り、ここへ写さない
+        reference = self.run_with_stdout_encoding("utf-8", "--check-text", str(msg), deny=deny)
+        self.assertEqual(reference.returncode, checker.EXIT_VIOLATION)
+        self.assertEqual(reference.stderr.decode("utf-8"), coords)
+        head, summary = reference.stdout.decode("utf-8").splitlines()
+        self.assertEqual(head, status)
+        self.assertFalse(summary.isascii(), "要約が ASCII だけで、符号化の差を見られない (dead pin)")
+        proc = self.run_with_stdout_encoding("ascii", "--check-text", str(msg), deny=deny)
+        self.assertEqual(proc.returncode, checker.EXIT_VIOLATION)
+        escaped = summary.encode("ascii", "backslashreplace").decode("ascii")
+        self.assertEqual(proc.stdout.decode("ascii"), f"{status}\n{escaped}\n")
+        self.assertEqual(proc.stderr.decode("ascii"), coords)
+
+    def test_help_with_an_ascii_stdout(self):
+        # argparse の --help は parse_known_args の中で stdout へ書き、help の説明は日本語を
+        # 含む。stdout の符号化が日本語を書けない (PYTHONIOENCODING=ascii) と、既定の strict
+        # では UnicodeEncodeError の traceback が stderr へ出て rc 1 になり、traceback は
+        # このスクリプトの絶対パス (ホームディレクトリを含む) を載せる (実測)
+        proc = self.run_with_stdout_encoding("ascii", "--help")
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(proc.stderr, b"")
+        # 対照。help を実際に書いている。何も書かずに rc 0 で終わる形を通さない
+        self.assertIn(b"--check-text", proc.stdout)
 
     def test_check_text_without_a_path_is_not_a_silent_pass(self):
         # commit-msg stage でファイル名フィルタが集合を空にすると、pass_filenames が

@@ -2,6 +2,8 @@
 """漏洩検査の取り付けを pin する。検査機構ではなく「呼ばれていること」を見る。
 
 層 2 (禁止語リスト) は Attachment、層 1 (gitleaks の 2 本の config) は Layer1Attachment が見る。
+層 2 を subprocess で呼ぶ入口 (check-outgoing-text.py) に取り付けは無く、CI から呼ばないことの
+負の pin だけを Attachment が層 2 と一緒に持つ。
 
 機構そのもののテストは検査スクリプトの隣にある。あちらが全部緑でも、pre-commit から
 呼ばれていなければ一度も走らない。commit-msg stage は特に、配線 1 行で黙って skip に
@@ -27,6 +29,9 @@ ROOT = Path(__file__).resolve().parent.parent
 # 取り付け側が書く literal はこのパスだけ。pin が探す文字列が実在しないパスへ
 # drift すると dead pin になるので、実在も併せて検査する
 CHECKER = "plugins/dev-workflow/skills/commit-and-pr-message/scripts/check-leak-guard-denylist.py"
+# 層 2 を subprocess で呼ぶ入口。取り付けは無いが、CI から呼ばないことの負の pin を層 2 と
+# 同じ理由で掛ける (workflow が入口を呼ぶと、層 2 が公開ログへ取り付く)
+OUTGOING_CHECK = "plugins/dev-workflow/skills/commit-and-pr-message/scripts/check-outgoing-text.py"
 
 PRE_COMMIT_CONFIG = ROOT / ".pre-commit-config.yaml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
@@ -165,8 +170,11 @@ def _steps(job: list[str]) -> list[list[str]]:
 
 class Attachment(unittest.TestCase):
     def test_checker_path_exists(self):
-        # 取り付けを探す文字列が実在しないパスへ drift すると dead pin になる
-        self.assertTrue((ROOT / CHECKER).is_file(), f"{CHECKER} が無い")
+        # 取り付けを探す文字列が実在しないパスへ drift すると dead pin になる。入口は
+        # 負の pin にしか使わないが、名前が実在しなければその pin も同じく dead になる
+        for path in (CHECKER, OUTGOING_CHECK):
+            with self.subTest(path=path):
+                self.assertTrue((ROOT / path).is_file(), f"{path} が無い")
 
     def test_pre_commit_runs_the_tracked_file_check(self):
         self.assertTrue(
@@ -270,7 +278,9 @@ class Attachment(unittest.TestCase):
                 )
 
     def test_ci_does_not_run_this_check(self):
-        # この検査を CI へ取り付けないことを負の pin として置く。
+        # この検査 (層 2) と、それを subprocess で呼ぶ入口を CI へ取り付けないことを負の pin
+        # として置く。入口の出力は層 2 の座標を含むので、workflow が入口を呼ぶ形でも層 2 が
+        # 公開ログへ取り付く。
         #
         # PUBLIC リポジトリの Actions ログは誰でも読める。検出座標を公開ログへ出すと、
         # 対象のコミットは push 済みなので座標の交差から語を復元できる。取り付けない
@@ -288,16 +298,17 @@ class Attachment(unittest.TestCase):
         #
         # 1 ファイルだけを見ると、別の workflow ファイルから呼ぶ取り付けが射程の外で
         # 素通りする。走査した件数が 0 でないことも併せて見る (0 件で緑になる形を作らない)。
-        name = Path(CHECKER).name
         workflow_dir = ROOT / ".github" / "workflows"
         workflows = sorted(workflow_dir.glob("*.yml")) + sorted(workflow_dir.glob("*.yaml"))
         self.assertTrue(workflows, "workflow が 1 件も無い (negative pin が 0 件で緑になる)")
-        for wf in workflows:
-            with self.subTest(workflow=wf.name):
-                self.assertFalse(
-                    [line for line in live_lines(wf) if name in line],
-                    f"{wf.name} がこの検査を呼んでいる。検出座標が公開ログへ残る",
-                )
+        for path in (CHECKER, OUTGOING_CHECK):
+            name = Path(path).name
+            for wf in workflows:
+                with self.subTest(script=name, workflow=wf.name):
+                    self.assertFalse(
+                        [line for line in live_lines(wf) if name in line],
+                        f"{wf.name} が {name} を呼んでいる。検出座標が公開ログへ残る",
+                    )
 
 
 class Layer1Attachment(unittest.TestCase):

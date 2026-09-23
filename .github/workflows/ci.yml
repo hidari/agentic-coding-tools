@@ -82,4 +82,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      # 公開する本文の漏洩検査の入口 (commit-and-pr-message の scripts/ にある) のテストは、
+      # 実物の gitleaks で判定表を pin する。無いと層 1 が skipped になり、checked を期待する
+      # テストが赤になる (runner は skip も赤にするので、無い環境で飛ばす形にはしない)。
+      # 版と sha256 の canonical はスクリプトが持ち、leak-guard job と同じものを呼ぶ。
+      - name: Install gitleaks
+        run: scripts/ci/install-gitleaks.sh
+
       - run: python3 scripts/run-python-tests.py
