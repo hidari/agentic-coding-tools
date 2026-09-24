@@ -819,7 +819,7 @@ def main(argv: list[str] | None = None, *, env=None) -> int:
     except Unable as e:
         print(f"[x] {e}", file=sys.stderr)
         return EXIT_UNABLE
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # traceback を出力経路から閉じる。例外の str と traceback はリストのパスも
         # 語も載せることがあり (FileNotFoundError・KeyError・ValueError で実測)、
         # pre-commit は Failed ブロックへ hook の stdout+stderr を切り詰めずに出す

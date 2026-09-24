@@ -681,11 +681,13 @@ class BorrowedNotation(unittest.TestCase):
 class Attachment(unittest.TestCase):
     """取り付けを pin する。検査機構が緑でも呼ばれていなければ一度も走らない。
 
-    走査ヘルパは scripts/test_issue_id_attachment.py と同じ形を採る。stdlib に YAML
-    パーサが無いため、コメント行を除いた行の部分文字列で見るという判断もあちらの
+    走査ヘルパは scripts/hook_config_lines.py (scripts/test_issue_id_attachment.py と
+    scripts/test_leak_guard_attachment.py が共有する補助) と同じ形を採る。stdlib に YAML
+    パーサが無いため、コメント行を除いた行を文字列として照合するという判断もあちらの
     docstring が持つ (YAML 構造としての妥当性は pre-commit 自身と check-yaml hook が担う)。
-    共有しないのは、あちらが flag 付きの部分一致で pin するのに対しこちらは起動行の完全
-    一致で pin しており、厳しさが意図的に分岐しているため。
+    共有しないのは、あちらの照合 (_invokes) が checker の部分一致と flag の語単位の一致で
+    呼び出しの行を探すのに対し、こちらは起動行の完全一致で pin しており、厳しさが意図的に
+    分岐しているため。
     """
 
     HOOK_START = re.compile(r"^\s*-\s+id:")

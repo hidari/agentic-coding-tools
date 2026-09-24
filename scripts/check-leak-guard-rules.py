@@ -379,7 +379,7 @@ def check_rule_sets() -> int:
             return 2
     try:
         canaried = canary_rule_ids()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # exec_module は構文エラーから import の失敗まで何でも上げる。文言はパスを持ちうる
         # (SyntaxError はファイル名を含む) ので redact_paths を通す
         print(redact_paths(f"[x] 入口 (canary の借り先) を読めない: {type(e).__name__}: {e}"))

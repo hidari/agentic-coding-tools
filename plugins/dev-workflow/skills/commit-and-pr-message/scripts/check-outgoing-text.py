@@ -645,7 +645,7 @@ def discard_stdout() -> None:
         return
     try:
         os.dup2(os.open(os.devnull, os.O_WRONLY), stream.fileno())
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
@@ -663,13 +663,13 @@ def main(
         layer1, layer2 = check(args, environ, custom_rules, default_rules, denylist_script)
         rc = decide(layer1, layer2)
         lines = render(layer1, layer2, rc)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # 型名だけを出す。例外の str と traceback はパスを載せることがある (docstring)
         rc = EXIT_UNABLE
         lines = [f"error={type(e).__name__}", f"result={RESULT_BY_EXIT[rc]}", SUMMARY_UNEXPECTED]
     try:
         emit(lines)
-    except Exception:  # noqa: BLE001
+    except Exception:
         # 書き出しに失敗した (fd 1 を閉じて起動すると sys.stdout は None、読み手が閉じた pipe
         # では BrokenPipeError)。出力を読めない呼び出し元へ ok を返さない。stderr へも出さない
         # (出力は stdout だけ、という約束)
