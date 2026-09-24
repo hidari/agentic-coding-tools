@@ -1,6 +1,6 @@
 ---
 name: dev-workflow
-description: 個人開発のワークフローを支える skill バンドルの入口。ブランチ運用、リポジトリ内 Issue 管理、マージ前の品質ゲート、振り返りのルール化、E2E 影響の静的検出、コミットと PR 本文の作法を集約する。個別の作業は component skill を直接呼ぶ。
+description: 個人開発のワークフローを支える skill バンドルの入口。ブランチ運用、リポジトリ内 Issue 管理、マージ前の品質ゲート、振り返りのルール化、E2E 影響の静的検出、コミットや PR の本文を漏洩検査してから渡す手順を集約する。個別の作業は component skill を直接呼ぶ。
 ---
 
 # dev-workflow
@@ -19,7 +19,7 @@ install 時にも runtime にも自動実行されるコードを含まない。
 | `issue-scoped-artifacts` | spec と plan を Issue ディレクトリ配下へ置く規約 |
 | `pre-merge-quality-gate` | マージ直前に simplify / レビュー / E2E 影響チェックを並列で通す |
 | `e2e-scenario-impact-check` | フロントエンド変更が E2E を将来壊す可能性を静的に検出する |
-| `commit-and-pr-message` | git / gh へ渡す本文をファイル経由にする作法 |
+| `commit-and-pr-message` | 公開される本文をファイルに書き、同梱の入口で漏洩検査を通してから git / gh へ渡す手順 |
 | `retrospective-codify` | 試行錯誤の学びを lint ルール / skill / CLAUDE.md へ言語化する |
 
 呼び出しは `dev-workflow:<component 名>` の修飾名で行う。
@@ -32,6 +32,9 @@ install 時にも runtime にも自動実行されるコードを含まない。
 この規約を採らないプロジェクトでは、`issue-scoped-artifacts` は
 プロジェクトの CLAUDE.md にポインタがある場合にのみ適用される opt-in 設計になっている。
 
-`commit-and-pr-message` は日本語の散文をコマンド文字列へ載せない作法を扱う。特定のフック実装を
-前提とした説明を含むが、作法そのもの (本文はファイルに書いて `-F` / `--body-file` で渡す) は
-環境に依存しない。
+`commit-and-pr-message` は、公開される本文をファイルに書き、同梱の入口で漏洩検査を通してから
+`-F` / `--body-file` で渡す手順を扱う。入口は python3 と gitleaks と、環境変数で指す禁止語リストを
+使う。python3 か gitleaks が無い環境のように検査を完了できないときは、手順は渡す前に止まって
+ユーザーの判断を仰ぐ。止まる条件と行動は `dev-workflow:commit-and-pr-message` の「送る前の検査」節が
+持つ。コマンド文字列を検査する特定のフック実装を前提とした説明も含むが、手順そのものはフックの有無に
+依存しない。

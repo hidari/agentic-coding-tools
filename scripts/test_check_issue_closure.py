@@ -1305,9 +1305,8 @@ class Attachment(unittest.TestCase):
         self.assertTrue(lines[lines.index(run) - 1].startswith("- name:"))
 
 
-# 参照先の skill を名指ししている形だけを見る。`「X」節` 単体は同じ文書内の節を指す用法が
-# 既に 8 箇所あり (in-repo-issue に 5 / retrospective-codify に 2 / commit-and-pr-message
-# に 1)、区別せずに拾うと参照先が別文書だと誤診して赤くなる
+# 参照先の skill を名指ししている形だけを見る。`「X」節` 単体は同じ文書の中の節を指す用法が
+# 複数の SKILL.md にあり、区別せずに拾うと参照先が別文書だと誤診して赤くなる
 CROSS_SKILL_REFERENCE = re.compile(r"`([a-z0-9-]+):([a-z0-9-]+)` の「([^」]+)」節")
 
 

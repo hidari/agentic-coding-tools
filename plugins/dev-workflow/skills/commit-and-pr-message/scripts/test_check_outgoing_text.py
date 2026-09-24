@@ -23,6 +23,11 @@ Traceback と、パスのうちこのテスト自身の一時ディレクトリ 
 
 写しの config は元の本文への文字列置換で作り、置換が 1 回起きたことを assert する。起きて
 いないとテストが対象を壊していない dead pin になる。
+
+SkillTable は、隣の SKILL.md の「送る前の検査」節にある (終了コード, result) ごとの行動の表と、
+入口の定数の一致を見る。行動の canonical は SKILL.md、値の canonical は入口で、片方だけが
+動くと手順は存在しない組を読むか、ある組の行動を持たなくなる。表がどの組にも当たらない
+結果を受ける「上記以外」の行を 1 本持つことも見る。
 """
 
 from __future__ import annotations
@@ -51,6 +56,14 @@ ENTRY = HERE / "check-outgoing-text.py"
 DENYLIST = HERE / "check-leak-guard-denylist.py"
 CUSTOM_RULES = HERE / "leak-guard.gitleaks.toml"
 DEFAULT_RULES = HERE / "leak-guard-default.gitleaks.toml"
+SKILL_MD = HERE.parent / "SKILL.md"
+
+# SKILL.md の表を引く節の見出し。見出しを変えるときはここも変える
+CHECK_SECTION = "### 送る前の検査"
+EXIT_TABLE_ROW = re.compile(r"^\| (\d+) / ([a-z]+) \|")
+FALLBACK_ROW = "| 上記以外"
+FENCE = re.compile(r"^\s*(```|~~~)")
+HEADING = re.compile(r"^(#+) ")
 
 
 def load(name: str, path: Path):
@@ -154,6 +167,31 @@ def parse_output(out: str, summary=lambda text: text) -> dict:
         "hits": hits,
         "result": result.group(1),
     }
+
+
+def section_lines(text: str, heading: str) -> list[str]:
+    """Markdown の見出し heading の節の行 (見出しの行を除く)。合わなければ AssertionError。
+
+    節は、同じか上の階層の次の見出しまで。コードブロックの中の # で始まる行は見出しに数えない
+    (シェルのコメントで節が途中で切れ、表が節の外に落ちる)。見出しがコードブロックの外に
+    ちょうど 1 回現れることも見る。無いときに空の節を返すと、表の pin が 0 件の比較になる。
+    """
+    level = len(HEADING.match(heading).group(1))
+    found, inside, fenced, lines = 0, False, False, []
+    for line in text.split("\n"):
+        if FENCE.match(line):
+            fenced = not fenced
+        elif not fenced and line == heading:
+            found += 1
+            inside = True
+            continue
+        elif not fenced and HEADING.match(line) and len(HEADING.match(line).group(1)) <= level:
+            inside = False
+        if inside:
+            lines.append(line)
+    if found != 1:
+        raise AssertionError(f"見出し {heading!r} がコードブロックの外に {found} 回ある (1 回であること)")
+    return lines
 
 
 class Case(unittest.TestCase):
@@ -1028,6 +1066,61 @@ class PureFunctions(unittest.TestCase):
         # 層 2 なので、ずれをここで止める
         self.assertEqual(entry.DENYLIST_STATUS_SKIPPED, denylist_checker.STATUS_SKIPPED)
         self.assertEqual(entry.DENYLIST_STATUS_CHECKED, denylist_checker.STATUS_CHECKED)
+
+
+class SkillTable(unittest.TestCase):
+    """SKILL.md の「送る前の検査」節の表と、入口の定数。"""
+
+    def test_exit_table_matches_constants(self):
+        # 表の行は `| <終了コード> / <result> | <行動> |` の形。組の並びを入口の RESULT_BY_EXIT と
+        # 比べる。集合ではなく並べた list で比べ、同じ組の行が 2 本ある (行動が 2 通りに読める)
+        # 形も止める
+        rows = []
+        for line in section_lines(SKILL_MD.read_text(encoding="utf-8"), CHECK_SECTION):
+            m = EXIT_TABLE_ROW.match(line)
+            if m:
+                rows.append((int(m.group(1)), m.group(2)))
+        # 0 件を一致とみなさない。下の比較でも赤になるが、表が読めなかったことを名指す
+        self.assertTrue(rows, f"{CHECK_SECTION} の節に (終了コード, result) の行が無い")
+        self.assertEqual(sorted(rows), sorted(entry.RESULT_BY_EXIT.items()))
+
+    def test_exit_table_has_one_fallback_row(self):
+        # 「上記以外」の行は fail-closed の既定で、result= の行が出ない経路 (入口を起動できない
+        # など) を受ける。上の一致は (終了コード, result) の行しか見ないので、この行を消しても
+        # 緑のまま通る。2 本あると行動が 2 通りに読める。行動の文言は pin しない
+        fallback = [
+            line
+            for line in section_lines(SKILL_MD.read_text(encoding="utf-8"), CHECK_SECTION)
+            if line.startswith(FALLBACK_ROW)
+        ]
+        self.assertEqual(
+            len(fallback), 1, f"{CHECK_SECTION} の節に「上記以外」の行が {len(fallback)} 本ある (1 本であること)"
+        )
+
+    def test_exit_code_literals(self):
+        # 値そのもの。定数と表の番号を揃えて入れ替えると上の一致は保たれるが、終了コードは
+        # 出力を読まずに rc だけを見る呼び出し元や記録 (手順は rc と result= の行を残させる) も
+        # 読むので、揃えた入れ替えもここで止める
+        self.assertEqual(
+            (entry.EXIT_OK, entry.EXIT_FINDING, entry.EXIT_UNABLE, entry.EXIT_SKIPPED), (0, 1, 2, 3)
+        )
+
+    def test_section_lines(self):
+        # section_lines 自身の対照。節の終わりを見誤ると、表の行を取りこぼすか節の外の行を拾う
+        text = (
+            "## A\n### 送る前の検査\n| 0 / ok | x |\n```bash\n# comment\n```\n"
+            "#### 下位\n| 1 / finding | y |\n### 次\n| 2 / unable | z |\n"
+        )
+        rows = [line for line in section_lines(text, CHECK_SECTION) if EXIT_TABLE_ROW.match(line)]
+        self.assertEqual(rows, ["| 0 / ok | x |", "| 1 / finding | y |"])
+        for label, broken in (
+            ("missing", "## A\n| 0 / ok | x |\n"),
+            ("twice", f"{CHECK_SECTION}\n{CHECK_SECTION}\n"),
+            ("only-in-fence", f"```\n{CHECK_SECTION}\n```\n"),
+        ):
+            with self.subTest(label=label):
+                with self.assertRaises(AssertionError):
+                    section_lines(broken, CHECK_SECTION)
 
 
 if __name__ == "__main__":

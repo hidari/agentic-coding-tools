@@ -174,6 +174,7 @@ traceback (パス入り・rc 1) で落ちる経路を作らないため。
 
 - 層 2 が見るのはリストに載った語だけで、リストに無い語と、組み合わせで対象を特定する
   書き方は通る。層 1 が見る形は 2 本の config が持つ。渡す前に自分で読むこと
+- Linux のホームディレクトリ形のパスは層 1 に当たらない
 - 起動元に環境変数が届かない環境では、層 2 が skipped (env-unset) になる
 - canary が揃うことは gitleaks の版に依存する
 - canary を足した payload が MAX_PAYLOAD_BYTES を超える入力は input-too-large で止まる。検査

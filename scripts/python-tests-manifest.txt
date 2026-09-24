@@ -120,6 +120,10 @@ plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_outgoing_te
 plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_outgoing_text.py::test_check_outgoing_text.PureFunctions.test_py39_source
 plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_outgoing_text.py::test_check_outgoing_text.PureFunctions.test_resolve_gitleaks_relative_path
 plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_outgoing_text.py::test_check_outgoing_text.PureFunctions.test_resolve_gitleaks_uses_only_the_given_path
+plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_outgoing_text.py::test_check_outgoing_text.SkillTable.test_exit_code_literals
+plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_outgoing_text.py::test_check_outgoing_text.SkillTable.test_exit_table_has_one_fallback_row
+plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_outgoing_text.py::test_check_outgoing_text.SkillTable.test_exit_table_matches_constants
+plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_outgoing_text.py::test_check_outgoing_text.SkillTable.test_section_lines
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ArgumentSurface.test_abbreviated_flag_is_rejected
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ArgumentSurface.test_base_without_check_diff_is_rejected
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ArgumentSurface.test_check_and_check_diff_are_mutually_exclusive

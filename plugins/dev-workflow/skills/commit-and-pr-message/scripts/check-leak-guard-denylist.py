@@ -727,8 +727,6 @@ def run_check_text(source: str, entries: list[Entry]) -> int:
     当然通らない。GitHub 上の squash merge は PR タイトルと本文が main の恒久コミット
     メッセージになるが、ローカル hook は原理的に走らない。もう一方の入口 (追跡ファイル) は
     コミットメッセージを走査面に持たず、gitleaks もメッセージを見ないので backstop が無い。
-
-    PR タイトルと本文をこの入口へ手で通す手順は spec の実装順序 5 が扱う (未実装)。
     """
     path = Path(source)
     try:
