@@ -49,13 +49,13 @@ CLAUDE.md がボーイスカウトルールの境界に置いている「今回�
 - [x] **テスト:693** — index=temporary の分岐に到達するテストが無く、定数 default に潰しても緑 (F50 / pin-quality) — ISSUE-15 の PR で解決済み。**指摘の見立てより悪かった**。到達するテストが無いだけでなく判定規則そのものが誤りで、`GIT_INDEX_FILE` の有無で分けていたため as-is の `git commit` でも temporary になっていた (git は as-is でも hook へ `.git/index` を渡す。実測 git 2.55.0)。つまり hook 経由の全コミットが temporary で、序数ずれの手がかりとして機能していなかった。値を既定の index と突き合わせる形へ直し、両側に対照を置いて変異 2 種 (有無判定へ戻す / 定数 default へ潰す) で赤くなることを確認済み。なお同じ結論は closed の ISSUE-44 が「変数の有無ではなく値が絶対パスかどうかが分ける」として既に記録していた (記録済みの実測が新しいコードへ適用されなかった形)
 - [ ] **本体:362** — 非通常ファイル全部に errno=21 (EISDIR) と印字しており、そのためだけに errno を import している (F6 / simplification)
 - [x] **本体:39** — 走査面節が内容照合から外れる 3 クラスを書いていない。docstring が canonical と名指しされている面での宣言過大 (F17 / altitude) — ISSUE-15 の PR で解決済み。UTF-16 の手当てを書くときに 3 クラス (gitlink / 上限超え / NUL を含むもの) を明記した
-- [ ] **本体:196** — fold() の docstring に履歴説明コメントが残っており、同じ経緯が issue.md にもある (F33 / boy-scout)
+- [x] **本体:196** — fold() の docstring に履歴説明コメントが残っており、同じ経緯が issue.md にもある (F33 / boy-scout) — ISSUE-58の PR のマージ前ゲートで直した。「当初どちらも…測り直した結果がこれ」の2文を消した。前後の NFKC がそれぞれ何を守るかは、続く2つの段落が現在形の理由として持っている
 - [ ] **テスト:499** — test_oversize_blobs_are_excluded_without_being_read は「読まずに」を pin していない (F47 / pin-quality)
 - [ ] **テスト:424** — 「symlink は辿る」(resolve_denylist の stat) に正の対照が無く lstat へ戻しても緑 (F49 / pin-quality)
 - [x] **ISSUE-15 の issue.md** — 「残っているのは層 3 の skill と PR 本文の検査」の列挙が、同じファイルのタスク欄で未決のままの注釈付きタグ本文を落としている (F23 / canonical-drift) — ISSUE-15の PR で対象の文が消えていた (PR #52)。今の ISSUE-15の issue.md に「残っているのは」の列挙は無く、注釈付きタグの本文は「## 適用: 注釈付きタグ」節で走査面に含めると決まっている
 - [x] **テスト:878** — .pre-commit-config.yaml を読む 4 つのヘルパが scripts/test_issue_id_attachment.py から逐語で複製されている (F38 / boy-scout) — ISSUE-58の PR で解決済み。F2と同じ指摘で、同じ変更 (Task 1の `scripts/hook_config_lines.py`) で解決した
 - [x] **本体:609** — run_check_text の docstring が spec の項目を序数で指し、未実装ステータスをコードで持っている (F35 / boy-scout) — ISSUE-58の PR で解決済み。Task 4で、spec の序数と「未実装」を持つ1文を docstring から消した。層 2の本体に「実装順序」「未実装」の語は残っていない
-- [ ] **本体:10** — モジュール docstring が spec の旧表を再掲しており、同じ訂正が spec 側にも入って二重になっている (F34 / boy-scout)
+- [x] **本体:10** — モジュール docstring が spec の旧表を再掲しており、同じ訂正が spec 側にも入って二重になっている (F34 / boy-scout) — ISSUE-58の PR のマージ前ゲートで直した。「当初は3分岐で設計したが…」の旧表と経緯を消し、ファイルがあることとエントリが取れることは別の検査だ、という現在形の理由と「分岐はこの表が canonical」だけを残した。テスト側の docstring 2箇所にあった「当初の3分岐」も、同じく現在形の理由へ書き換えた
 - [x] **本体:2** — CLAUDE.md が canonical に指名した module docstring に、リストの書式と内容を読まない blob の条件が無い (F22 / canonical-drift) — ISSUE-15 の PR で解決済み。両方を書いた (「リストの書式」節の新設と、走査面節の 3 クラス)。リストを実際に作る段になって、canonical に指名された文書から書式が読めないことが表面化したもの
 - [x] **本体:91** — 恒久ルールの出所としてコード内で ISSUE-15 を引いている (canonical は CLAUDE.md) (F36 / boy-scout) — ISSUE-58の PR で解決済み。Task 1で層 2を配布物へ移したとき、ISSUE-15を出所として引く文を、この検査が防ぐ流入そのものを理由にする文へ書き換えた。層 2の本体に ISSUE-15の名指しは残っていない
 
@@ -85,7 +85,7 @@ CLAUDE.md がボーイスカウトルールの境界に置いている「今回�
 - [ ] **本体:362** — 通常ファイルでない指し先すべてに EISDIR を「相当」として印字しており、FIFO やデバイスでは誤誘導になる (F39 / boy-scout)
 - [ ] **テスト:840** — --check-text の要約の行数を見るテストが無い (F53 / pin-quality)
 - [x] **CLAUDE.md:23** — 新規に足した「形の決まったカテゴリ」の列挙は `.gitleaks.toml` のルール集合の再掲で、同じ段落が canonical を toml と名指ししている (F26 / canonical-drift) — ISSUE-15 の PR で解決済み。括弧内の列挙を落とした。列挙が toml のルール 3 本と完全一致していること (部分集合でないこと) を確認してから消している
-- [ ] **テスト:11** — テストの docstring が根拠を「前セッション」に置いており、後から検証できない (F40 / boy-scout)。追記 (2026-09-24): ISSUE-58の Task 1で語は言い換えたが、根拠の実測内容は引用されていないので未解決
+- [x] **テスト:11** — テストの docstring が根拠を「前セッション」に置いており、後から検証できない (F40 / boy-scout)。追記 (2026-09-24): ISSUE-58の Task 1で語は言い換えたが、根拠の実測内容は引用されていなかった — ISSUE-58の PR のマージ前ゲートで直した。言い換えた出所の括弧 (失敗モードを列挙したときの経緯) を丸ごと消した。引用できる実測を持たない出所の記述だったため
 - [ ] **テスト:1005** — CI の negative pin は文字列一致なので `pre-commit run` を CI に足す取り付けを見ない (F52 / pin-quality)
 - [x] **CLAUDE.md:27** — CLAUDE.md が「取り付けの canonical は docstring」と書いているが、docstring は pre-commit への取り付けを持たない (F41 / boy-scout) — ISSUE-15 の PR で解決済み。確認手順は docstring、取り付けは `.pre-commit-config.yaml` へ振り分けた。誤った参照先は「以後のセッションを間違ったファイルへ送る」ので、指示ファイル上では整理ではなく誤りとして扱った
 
@@ -101,8 +101,8 @@ CLAUDE.md がボーイスカウトルールの境界に置いている「今回�
 - [ ] **本体** — `scan_tracked` が git plumbing / バイト列のエンコーディング判定 / 走査の帳簿付けの 3 抽象層をまたぐ。S1 が 1 つ持ち上げるので、残るのは `readable → sizes → wanted` のパイプライン (A2 / altitude)。除外件数は要約が印字するので観測可能なまま残すこと
 - [ ] **本体** — `env` 引数と `_iter_blobs` の戻りが、モジュール内で唯一の未アノテーション署名 (A3 / altitude)
 - [ ] **テスト** — `GIT_ENV` の 9 行が `test_check_issue_closure.py` と `test_check_related_refs.py` と逐語一致で 3 コピー目 (R2 / reuse)。F2 / F38 の hook-config ヘルパと同じ共有モジュールへ寄せられる。これは pin ではなく隔離なので、まとめても検証力は変わらない。追記 (2026-09-24): 層 2のテストは ISSUE-58で配布物 (`plugins/dev-workflow/skills/commit-and-pr-message/scripts/`) へ移ったので、`scripts/` の共有モジュールの対象から外れる。配布物のテストが配布元の `scripts/` を読むと、配布先では成立しない。寄せられるのは `scripts/` に残る `test_check_issue_closure.py` と `test_check_related_refs.py` の2本だけになる
-- [ ] **本体** — `_locator` を集約したコメントに、この PR 自身が直した欠陥の過去形記述 (「実際に検査不能メッセージの側が序数だけを出しており、一時 index では別のファイルを指していた」) が残っている。集約の WHY は直前の文が述べている (boy-scout)
-- [ ] **テスト** — docstring が根拠を「(前セッションの実測)」に置き、実測内容を引用していない箇所がもう 1 つある (F40 と同種で別箇所)。CLAUDE.md は実測内容を添えることを要求しているので、引用するか落とす (boy-scout)。追記 (2026-09-24): ISSUE-58の Task 1で語は言い換えたが、根拠の実測内容は引用されていないので未解決
+- [x] **本体** — `_locator` を集約したコメントに、この PR 自身が直した欠陥の過去形記述 (「実際に検査不能メッセージの側が序数だけを出しており、一時 index では別のファイルを指していた」) が残っている。集約の WHY は直前の文が述べている (boy-scout) — ISSUE-58の PR のマージ前ゲートで直した。過去形の1文を消し、集約の理由を述べる直前の文だけを残した
+- [x] **テスト** — docstring が根拠を「(前セッションの実測)」に置き、実測内容を引用していない箇所がもう 1 つある (F40 と同種で別箇所)。CLAUDE.md は実測内容を添えることを要求しているので、引用するか落とす (boy-scout)。追記 (2026-09-24): ISSUE-58の Task 1で語は言い換えたが、根拠の実測内容は引用されていなかった — ISSUE-58の PR のマージ前ゲートで直した。`Fold` クラスの docstring の「かな・漢字には差が出ない」を測り直し、ひらがな・カタカナ・CJK 統合漢字の各ブロックの全 code point で lower・casefold・NFC・NFKC のどれを掛けても変わらないこと (Python 3.9と3.14の両方) を括弧の中へ引用した。「絶対に」の言い切りは外した
 - [ ] **本文側の fold が production の入口を通って pin されていない (未検証)** — `Fold` クラスの 8 件は全部 `scan_text` を直接呼び、`scan_tracked` / `run_check_text` を通る内容 fixture は `fold(x) == x` の語しか使っていないため、`scan_tracked` が fold を通していること自体の対照が無い、という指摘。**未検証**。出した側に Bash が無く静的読解のみだったため、着手時にまず再現から入ること。再現手順は隔離コピーで照合を `e.raw in line` (fold 無しの生一致) へ変えてテストを回す。緑なら dead。手当ては内容 fixture 1 件を全角か NFD の語にして、fold 不変の fixture も残して両側から挟む。F10 の前置フィルタを fold 前の生テキストへ掛ける実装が自然にこの形になるので F10 と同時に判断する
 - [ ] **判断の記録** — `split_lines` は `issue-id.py` の `_split_lines` と同じロジックだが**借用しない**。借用機構 (`notation()` + `BORROWED`) は読み込み失敗時に `CheckError` を投げ、この層を apm 配布の plugin パッケージへ結合させる。4 行のロジックと引き換えにしない。見落としではなく決定であることを残す (R3 / reuse)
 
@@ -112,4 +112,4 @@ ISSUE-15 (層 2 の実装本体。本 Issue はそのマージ前レビューの
 ISSUE-44 (closed。hook から見える `GIT_INDEX_FILE` の実測表を持つ。F15 / F50 の判定規則はこれを適用しなかったことによる)
 ISSUE-23 (同じく ISSUE-15 から派生した、散文側の露出スイープの保留分)
 ISSUE-12 (検査スクリプトが自分自身のテストを持たない。pin-quality の指摘群と面が重なる)
-ISSUE-58 (層 2を配布物へ移し、層 1の config を2本に分けた。同じ PR で F2・F25・F35・F36・F38・S3を解決した)
+ISSUE-58 (層 2を配布物へ移し、層 1の config を2本に分けた。同じ PR で F2・F25・F33・F34・F35・F36・F38・F40・S3と、F40と同種の箇所・`_locator` の過去形記述を解決した)

@@ -6,8 +6,8 @@ pre-commit と CI から呼ばれていなければ一度も走らないので�
 
 先例は scripts/test_run_python_tests.py の Attachment。あちらは run-python-tests.py の
 取り付けを、その run-python-tests.py 自身に走らされて検証するため、両取り付けを同時に
-外すとこのテスト自身が走らず検出できないという自己ホスト盲点を持つ (runner の docstring と
-ISSUE-13)。こちらは検証対象 (issue-id.py) と実行者 (run-python-tests.py) が別なので、
+外すとこのテスト自身が走らず検出できないという自己ホスト盲点を持つ (runner の docstring)。
+こちらは検証対象 (issue-id.py) と実行者 (run-python-tests.py) が別なので、
 issue-id.py の両取り付けを同時に外しても runner は走り続け、ここが赤くなる (実測)。
 
 設定を行で読む補助と、その読み方の限界 (YAML として解釈しない) は
@@ -38,12 +38,6 @@ CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 # 許可する側を pin して、知らないキーが増えたら赤にする。
 COMMIT_MSG_HOOK_KEYS = frozenset({"id", "name", "language", "entry", "stages", "always_run"})
 
-# hook の language は値まで pin する。キーの許可集合は値を見ないので、`language: pygrep` へ
-# 1 語変えても他の pin は緑のままになる (変異注入で確認)。pygrep は entry を正規表現として
-# 渡されたファイルを照合するだけで、issue-id.py を起動しない (pre-commit 4.6.2 の
-# languages/pygrep.py を読んで確認)
-HOOK_LANGUAGE = "system"
-
 
 def _load_helpers():
     """行で読む補助を読む。素の import はリポジトリ root から回すと解決できない。"""
@@ -61,6 +55,8 @@ invocations = _helpers.invocations
 hook_block = _helpers.hook_block
 hook_keys = _helpers.hook_keys
 hook_values = _helpers.hook_values
+effective_stages = _helpers.effective_stages
+HOOK_LANGUAGE = _helpers.HOOK_LANGUAGE
 
 
 class Attachment(unittest.TestCase):
@@ -90,8 +86,23 @@ class Attachment(unittest.TestCase):
             "--check-text の hook が commit-msg stage に紐付いていない",
         )
 
+    def test_repository_check_runs_on_the_pre_commit_stage(self):
+        # `stages: [manual]` を 1 行足すと、この hook は commit 時にも
+        # `pre-commit run --all-files` にも現れないまま追跡ファイル面が消え、他の pin は
+        # 全部緑のまま残る (変異注入で確認)。この hook は stages を宣言しないので
+        # top-level の default_stages を継承する
+        lines = live_lines(PRE_COMMIT_CONFIG)
+        block = hook_block(lines, CHECKER, "--check")
+        self.assertTrue(block, "--check の hook 定義が見つからない")
+        effective = effective_stages(lines, block)
+        self.assertTrue(effective, "--check の stage を決める宣言がどこにも無い")
+        for line in effective:
+            self.assertIn(
+                "pre-commit", line, "--check の hook が pre-commit stage から外れている"
+            )
+
     def test_both_hooks_use_the_system_language(self):
-        # 値まで pin する理由は HOOK_LANGUAGE のコメント
+        # 値まで pin する理由は hook_config_lines.py の HOOK_LANGUAGE のコメント
         for flag in ("--check", "--check-text"):
             with self.subTest(flag=flag):
                 block = hook_block(live_lines(PRE_COMMIT_CONFIG), CHECKER, flag)

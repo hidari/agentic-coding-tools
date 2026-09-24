@@ -40,16 +40,12 @@ pre-1.0 のあいだは次のとおり。
 
 ### 1. 事前検査
 
-main が最新で clean であることを確かめ、検査を全部通す。
+main が最新で clean であることを確かめ、検査を全部通す。何が走るかの canonical は `.pre-commit-config.yaml` で、ここでは検査を列挙しない。
 
 ```bash
 git checkout main && git pull
 git status --porcelain
-python3 scripts/run-python-tests.py
-python3 plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py --check
-python3 scripts/check-related-refs.py
-python3 scripts/check-package-shape.py
-python3 scripts/gen-readme.py --check
+pre-commit run --all-files
 ```
 
 CI も main の最新 SHA で確認する。**run の success だけでは足りない。**
@@ -77,7 +73,7 @@ git diff --stat <前回のtag>..HEAD -- plugins/ skills/
 本文はファイル経由で渡す。理由と書式の canonical は `dev-workflow:commit-and-pr-message`。
 
 渡す前に漏洩検査の入口へ通す。タグ本文は全履歴の `gitleaks` 走査 (ファイル内容だけを見る) の
-面の外にあり (ISSUE-15 の実測)、コミットメッセージを見る hook も届かない。この面を見る機会は
+面の外にあり (実測)、コミットメッセージを見る hook も届かない。この面を見る機会は
 この手順にしか無いので、飛ばすと誰も見ないまま公開される。しかも push した後で本文を直すには
 打ち直すしかなく、参照が変わる。
 
@@ -149,7 +145,7 @@ lockfile が持つのは plugin 個別の版で、リポジトリの tag とは�
 | 「plugin.json の version を tag に揃える」 | 別の数列である。plugin 個別の版と、コレクション全体の版は独立に動く |
 | 「`docs/issues/` を直したから release」 | 配布物が変わっていない。消費側が pin を上げる理由が無い |
 | 「release note は commit を並べれば足りる」 | 消費側が知りたいのは「自分の呼び出しが壊れるか」。壊れる変更を冒頭に置く |
-| 「gitleaks が全履歴で緑だからタグ本文も見られている」 | 全履歴の走査が見るのはファイル内容だけである。タグ本文・コミットメッセージ・author はいずれも面の外 (ISSUE-15 の実測)。手順 3 と 4 で入口を通さないと、この面は誰も見ない |
+| 「gitleaks が全履歴で緑だからタグ本文も見られている」 | 全履歴の走査が見るのはファイル内容だけである。タグ本文・コミットメッセージ・author はいずれも面の外 (実測)。手順 3 と 4 で入口を通さないと、この面は誰も見ない |
 | 「読み込まれている commit-and-pr-message に従えば検査も済む」 | 読み込まれるのは消費側の pin の版で、入口を持たないことがある。入口と「送る前の検査」節は、このリポジトリ内のパスで使う |
 
 ## 関連

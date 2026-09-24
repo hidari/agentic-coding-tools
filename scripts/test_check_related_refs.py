@@ -3,7 +3,7 @@
 
 陽性対照は実際の issue.md と同じ構造上の位置へ置く。`## 関連` 節を単独の 1 行として
 渡すと、節の切り出しが「見出しから次の h1/h2 まで」ではなく別経路で成立してしまい、
-節の境界を壊す変異を検出できない (同種の取りこぼしを ISSUE-24 の実測で 1 度踏んでいる)。
+節の境界を壊す変異を検出できない (同種の取りこぼしを実測で 1 度踏んでいる)。
 
 免除の検査は「免除されること」と「免除が広がりすぎていないこと」を対で置く。免除は
 届きすぎる方向へ広がっても違反 0 件の緑にしかならず、出力を見ても気づけない。
@@ -204,7 +204,7 @@ class SectionScope(unittest.TestCase):
         self.assertEqual(1, summary["sections"])
 
     def test_heading_quoting_the_section_name_does_not_open_a_section(self):
-        # ISSUE-24 の実ファイルが持つ形。h3 見出しがバッククォート内に節名を literal で
+        # 実在の issue.md が持つ形。h3 見出しがバッククォート内に節名を literal で
         # 含む。節を部分文字列で切り出す実装だとここで偽の節が開き、節が 1 つずれる
         fx = Fixture(self)
         fx.add_text(
@@ -756,6 +756,7 @@ class Attachment(unittest.TestCase):
             [line for line in self.live_lines(CI_WORKFLOW) if line.strip() == self.CI_RUN],
             f"ci.yml の run が `{self.CI_RUN}` でない",
         )
+
 
 class EnvironmentIsolation(unittest.TestCase):
     """プロセス内呼び出しが呼び出し元の git 環境を継承しないことを固定する。

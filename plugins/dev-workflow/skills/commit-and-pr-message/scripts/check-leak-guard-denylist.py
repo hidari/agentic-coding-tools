@@ -7,10 +7,8 @@
 
 ## 分岐 (canonical)
 
-当初は 3 分岐 (未設定 / ファイルあり / ファイル無し) で設計したが、
-「ファイルはある」と「比較に使えるエントリが取れる」は別の検査で、後者が 0 でも
-前者は通る。配布元で緑のまま何も見ていない形を 30 通り数えたので、判定軸を足してある。
-実際の分岐はこの表が canonical。
+ファイルがあることと、比較に使えるエントリが取れることは別の検査で、後者が 0 件でも
+前者は通る。分岐はこの表が canonical。
 
 | 状態                                                      | 終了コード |
 |-----------------------------------------------------------|-----------|
@@ -229,8 +227,6 @@ def fold(text: str) -> str:
     """照合の前にリスト側と本文側へ同一に掛ける正規化。
 
     NFKC → category Cf 除去 → casefold → NFKC の 4 段。前後の NFKC は別のものを守る。
-    当初どちらも「casefold が NFKC 正規形へ戻さない code point のため」と書いていたが、
-    どちらを外しても既存のテストが赤くならなかったので測り直した結果がこれ。
 
     先頭の NFKC は冪等性を守る。外すと fold(fold(x)) != fold(x) になる code point が
     BMP に現れる (実測: U+037A, U+03D2-U+03D4, U+03F2 ほか)。照合の結果そのものは
@@ -658,8 +654,7 @@ def _locator(index: int, oid: str) -> str:
 
     序数は走査した index に対するもので、運用者が後から引く `git ls-files` とずれるので
     oid を併記する (理由は Finding の docstring)。組み立てを 1 箇所に集約するのは、
-    位置指標を出す場所が増えたときに片方だけ oid を落とす形を避けるため。実際に
-    検査不能メッセージの側が序数だけを出しており、一時 index では別のファイルを指していた。
+    位置指標を出す場所が増えたときに片方だけ oid を落とす形を避けるため。
     """
     return f"tracked file {index} (oid {oid[:12]})"
 
@@ -780,8 +775,8 @@ def main(argv: list[str] | None = None, *, env=None) -> int:
     # rc 1 になる (実測)
     _tolerate_unencodable_stdout()
     env = os.environ if env is None else env
-    # allow_abbrev の既定 (True) は `--che` を別モードの短縮として受理する。
-    # typo が静かに別の入口へ落ちないよう完全形の明示だけに絞る (先例 issue-id.py)
+    # allow_abbrev の既定 (True) は `--check-t` を `--check-text` の短縮として受理する。
+    # 短縮は typo と同じ exit 2 へ倒し、完全形の明示だけに絞る (先例 issue-id.py)
     parser = argparse.ArgumentParser(
         description="禁止語リストで固有名詞の流入を検査する",
         allow_abbrev=False,

@@ -57,13 +57,6 @@ COMMIT_MSG_HOOK_KEYS = frozenset(
 # hook がコミット時に走らなくなり、呼び出し行の pin は緑のままになるため
 GITLEAKS_HOOK_KEYS = frozenset({"id", "name", "language", "entry", "pass_filenames", "always_run"})
 
-# 層 1 と層 2 の hook の language は値まで pin する。キーの許可集合は値を見ないので、
-# `language: pygrep` へ 1 語変えても他の pin は緑のままになる (変異注入で確認)。pygrep は
-# entry を正規表現として渡されたファイルを照合するだけで、検査スクリプトも gitleaks も
-# 起動しない。pass_filenames: false の hook では照合するファイルも渡らず、常に rc 0 になる
-# (pre-commit 4.6.2 の languages/pygrep.py を読んで確認)
-HOOK_LANGUAGE = "system"
-
 # gitleaks の呼び出しが持ってよいフラグ。範囲を絞るフラグ (gitleaks の help に出る
 # --log-opts / --enable-rule / --max-target-megabytes / --baseline-path など) は列挙し切れない
 # ので、許可する側を pin して知らないフラグが増えたら赤にする。-c とその値は別に見る。
@@ -106,31 +99,12 @@ invocations = _helpers.invocations
 hook_block = _helpers.hook_block
 hook_keys = _helpers.hook_keys
 hook_values = _helpers.hook_values
+effective_stages = _helpers.effective_stages
+HOOK_LANGUAGE = _helpers.HOOK_LANGUAGE
 
 
 def _indent(line: str) -> int:
     return len(line) - len(line.lstrip())
-
-
-def _effective_stages(lines: list[str], block: list[str]) -> list[str]:
-    """hook が走る stage を決める行。
-
-    hook 自身が stages を宣言しなければ top-level の default_stages を継ぐ。hook ブロック内
-    だけを見る形は、宣言が無いとループが一度も回らず空虚に緑になり、top-level の 1 行を
-    [manual] へ変えるだけで全 stage から消えても捕まらない (実測)
-    """
-    own = [line for line in block if line.lstrip().startswith("stages:")]
-    return own or [line for line in lines if re.match(r"^default_stages:", line)]
-
-
-def _command(line: str, key: str) -> list[str]:
-    """`<key>: <コマンド>` の行からコマンドの語を返す。key の行でなければ空。"""
-    body = line.strip()
-    if body.startswith("- "):
-        body = body[2:].lstrip()
-    if not body.startswith(f"{key}:"):
-        return []
-    return body[len(key) + 1 :].split()
 
 
 def _job_of(lines: list[str], index: int) -> list[str]:
@@ -222,7 +196,7 @@ class Attachment(unittest.TestCase):
                 )
 
     def test_both_hooks_use_the_system_language(self):
-        # 値まで pin する理由は HOOK_LANGUAGE のコメント
+        # 値まで pin する理由は hook_config_lines.py の HOOK_LANGUAGE のコメント
         for flag in ("--check", "--check-text"):
             with self.subTest(flag=flag):
                 block = hook_block(live_lines(PRE_COMMIT_CONFIG), CHECKER, flag)
@@ -241,7 +215,7 @@ class Attachment(unittest.TestCase):
         lines = live_lines(PRE_COMMIT_CONFIG)
         block = hook_block(lines, CHECKER, "--check")
         self.assertTrue(block, "--check の hook 定義が見つからない")
-        effective = _effective_stages(lines, block)
+        effective = effective_stages(lines, block)
         self.assertTrue(effective, "--check の stage を決める宣言がどこにも無い")
         for line in effective:
             self.assertIn(
@@ -347,7 +321,7 @@ class Layer1Attachment(unittest.TestCase):
         for config in GITLEAKS_CONFIGS:
             with self.subTest(config=config):
                 block = self._pre_commit_block(config)
-                entries = [c for c in (_command(line, "entry") for line in block) if c]
+                entries = [value.split() for value in hook_values(block, "entry") if value]
                 self.assertEqual(len(entries), 1, "hook の entry が 1 行でない")
                 self._assert_gitleaks_git(
                     entries[0], config, PRE_COMMIT_GITLEAKS_FLAGS, "pre-commit の gitleaks の entry"
@@ -374,7 +348,7 @@ class Layer1Attachment(unittest.TestCase):
                 )
 
     def test_pre_commit_gitleaks_hooks_use_the_system_language(self):
-        # 値まで pin する理由は HOOK_LANGUAGE のコメント
+        # 値まで pin する理由は hook_config_lines.py の HOOK_LANGUAGE のコメント
         for config in GITLEAKS_CONFIGS:
             with self.subTest(config=config):
                 self.assertEqual(
@@ -387,7 +361,7 @@ class Layer1Attachment(unittest.TestCase):
         lines = live_lines(PRE_COMMIT_CONFIG)
         for config in GITLEAKS_CONFIGS:
             with self.subTest(config=config):
-                effective = _effective_stages(lines, self._pre_commit_block(config))
+                effective = effective_stages(lines, self._pre_commit_block(config))
                 self.assertTrue(effective, "gitleaks の hook の stage を決める宣言がどこにも無い")
                 for line in effective:
                     self.assertIn(
@@ -419,8 +393,11 @@ class Layer1Attachment(unittest.TestCase):
                 found = invocations(lines, config, "--ignore-gitleaks-allow")
                 self.assertTrue(found, f"ci.yml が {config} を --ignore-gitleaks-allow 付きで呼んでいない")
                 for line in found:
+                    # 1 行だけを渡すので値は高々 1 つ。run の行でなければ空のコマンドになり、
+                    # 下の assert が「gitleaks git で始まらない」で落とす
+                    command = "".join(hook_values([line], "run")).split()
                     self._assert_gitleaks_git(
-                        _command(line, "run"), config, CI_GITLEAKS_FLAGS, "ci.yml の gitleaks の run"
+                        command, config, CI_GITLEAKS_FLAGS, "ci.yml の gitleaks の run"
                     )
 
     def test_ci_scan_job_checks_out_the_full_history(self):
@@ -463,11 +440,11 @@ class Layer1Attachment(unittest.TestCase):
                 checks = [
                     step
                     for step in _steps(self._ci_scan_job(config))
-                    if any(RULES_CHECK in _command(line, "run") for line in step)
+                    if any(RULES_CHECK in value.split() for value in hook_values(step, "run"))
                 ]
                 self.assertEqual(len(checks), 1, "走査する job に対照検査の step が 1 つでない")
                 self.assertEqual(
-                    [c for c in (_command(line, "run") for line in checks[0]) if c],
+                    [value.split() for value in hook_values(checks[0], "run") if value],
                     [["python3", RULES_CHECK]],
                     "対照検査の呼び出しが python3 での引数なしの 1 行でない",
                 )

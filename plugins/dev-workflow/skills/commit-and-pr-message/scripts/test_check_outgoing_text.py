@@ -65,6 +65,10 @@ FALLBACK_ROW = "| 上記以外"
 FENCE = re.compile(r"^\s*(```|~~~)")
 HEADING = re.compile(r"^(#+) ")
 
+# 入口の docstring で状態と理由の語を並べる節と、語の行の形 (4 字下げの語、2 つ以上の空白、説明)
+VOCABULARY_SECTION = "## 状態と理由の語彙"
+VOCABULARY_ROW = re.compile(r"^    ([a-z][a-z-]*)  +\S")
+
 
 def load(name: str, path: Path):
     """ハイフン名のスクリプトは import 文では読めないため importlib で読む。"""
@@ -613,15 +617,13 @@ class MainCalls(Case):
             ("oversize-before-read", (unread,), halted),
         )
         for label, args, layer2 in cases:
-            gitleaks_marker.unlink(missing_ok=True)
             with self.subTest(label=label), self.assert_not_called(
                 stub_marker, "上限を超える入力で層 2 が起動した"
-            ):
+            ), self.assert_not_called(gitleaks_marker, "上限を超える入力で gitleaks が起動した"):
                 rc, out, err = self.run_main(*args, env=env, denylist_script=stub)
                 parsed = self.parse(out, err)
                 self.assertEqual(rc, entry.EXIT_UNABLE)
                 self.expect(parsed, halted, layer2)
-                self.assertFalse(gitleaks_marker.exists(), "上限を超える入力で gitleaks が起動した")
 
     def test_stdin_is_a_regular_file(self):
         # gitleaks へは普通のファイルを stdin として渡す。pipe (input=) だと gitleaks の 1 回の
@@ -795,8 +797,17 @@ class MainCalls(Case):
         self.expect(parsed, (entry.STATE_UNABLE, "canary-not-detected"), CHECKED)
 
     def test_custom_regex_broken(self):
-        old = r"regex = '''[\\/]+Users[\\/]+(?i)[a-z_][a-z0-9._-]*'''"
-        broken = self.variant(CUSTOM_RULES, old, old.replace("Users", "Userz"))
+        # regex は literal で写さず config の本文から引く。写すと regex を直すたびに、見ている
+        # 機構 (壊れたルールを canary が捕まえること) と無関係にここが赤になる
+        text = CUSTOM_RULES.read_text(encoding="utf-8")
+        start = text.index('[[rules]]\nid = "user-path"')
+        end = text.index("[[rules]]", start + 1)
+        found = [line for line in text[start:end].splitlines() if line.startswith("regex = ")]
+        self.assertEqual(len(found), 1, "user-path のルールの regex の行が 1 本でない")
+        old = found[0]
+        new = old.replace("Users", "Userz")
+        self.assertNotEqual(new, old, "user-path の regex が Users を持たず、壊せていない")
+        broken = self.variant(CUSTOM_RULES, old, new)
         self._assert_canary_missing(custom_rules=broken)
 
     def test_custom_rule_missing(self):
@@ -1066,6 +1077,22 @@ class PureFunctions(unittest.TestCase):
         # 層 2 なので、ずれをここで止める
         self.assertEqual(entry.DENYLIST_STATUS_SKIPPED, denylist_checker.STATUS_SKIPPED)
         self.assertEqual(entry.DENYLIST_STATUS_CHECKED, denylist_checker.STATUS_CHECKED)
+
+    def test_vocabulary_matches_docstring(self):
+        # 語の意味の canonical は入口の docstring (SKILL.md がそう名指す)、出す値は定数。片方だけを
+        # 足す・改名すると、利用者は出ない語の意味を読むか、出た語の意味を引けない。集合ではなく
+        # 並べた list で比べ、docstring が同じ語を 2 度説明する形も止める
+        words = [
+            m.group(1)
+            for line in section_lines(entry.__doc__, VOCABULARY_SECTION)
+            if (m := VOCABULARY_ROW.match(line))
+        ]
+        # 0 件を一致とみなさない。下の比較でも赤になるが、節を読めなかったことを名指す
+        self.assertTrue(words, f"入口の docstring の {VOCABULARY_SECTION} の節に語の行が無い")
+        constants = [
+            value for name, value in vars(entry).items() if name.startswith(("STATE_", "REASON_"))
+        ]
+        self.assertEqual(sorted(words), sorted(constants))
 
 
 class SkillTable(unittest.TestCase):

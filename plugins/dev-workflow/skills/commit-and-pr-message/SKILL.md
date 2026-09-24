@@ -202,9 +202,7 @@ test -s .cache/pr-<slug>.title && gh pr create --body-file .cache/pr-<slug>.md -
 
 1 行の値 (`--title` / `--subject`) はどれもワークフローの 3 手目の形で渡す。タグ名 (`git tag -a <tag>` の `<tag>`) は版の名前で本文ではないので、ファイルにしない。
 
-**`gh pr merge --subject` は省略しないこと。**省略すると GitHub が subject を生成し、その形が
-in-repo Issue の識別子規約に違反する。書くべき形の canonical は `dev-workflow:in-repo-issue` の
-`## PR / コミット規約` 節で、本 skill は形を再掲しない。
+**`gh pr merge --subject` は省略しないこと。**省略すると GitHub が subject を生成し、その形が in-repo Issue の識別子規約に違反する。書くべき形の canonical は `dev-workflow:in-repo-issue` の「PR / コミット規約」節で、本 skill は形を再掲しない。
 
 フッタの既定は面ごとに次のとおり。harness がこれと異なる指示を出したらそちらが優先。
 

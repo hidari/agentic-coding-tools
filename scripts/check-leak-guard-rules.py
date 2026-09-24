@@ -40,6 +40,7 @@ config や manifest を読めないときと、想定外の例外で止まった
 
 import argparse
 import importlib.util
+import itertools
 import json
 import shutil
 import subprocess
@@ -131,13 +132,14 @@ SHOULD_DETECT = [
     # パスは / で始まるので ^true には掛からず、false と null$ の 2 形だけが成り立つ。
     ("user-path", "false-in-name", f"/Users/{NAME + 'false'}"),
     ("user-path", "null-suffixed-name", f"/Users/{NAME + 'null'}"),
-    # 大小の両方を置くのは、ISSUE-15 が小文字だけで数えて 3 ファイルを落とし、その教訓を
-    # 書いている最中に大文字の UUID を取りこぼした実績があるため。
+    # 大小の両方を置くのは、UUID が出力元によって大文字でも小文字でも現れ、片方だけで
+    # 数えると取りこぼすため (実測)。
     ("vm-uuid", "uuid-lowercase", UUID_LOWER),
     ("vm-uuid", "uuid-uppercase", UUID_UPPER),
     # 実際の露出は prlctl の出力を貼る経路で起きたので、引用符に囲まれた形も置く。
     ("vm-uuid", "uuid-in-json", f'{{"ID": "{{{UUID_LOWER}}}"}}'),
-    # 単語境界を使っていたころ素通りしていた 2 形。境界を戻すとここが赤くなる。
+    # 前後に単語境界 \b を置くと素通りする 2 形 (理由は custom の config の vm-uuid の節)。
+    # 境界を置くとここが赤くなる。
     # 接頭辞側は security-blue-red-team plugin が文書化している seed の形。
     ("vm-uuid", "uuid-underscore-prefixed", "seed" + "_" + UUID_LOWER),
     ("vm-uuid", "uuid-hex-suffixed", UUID_LOWER + "9"),
@@ -179,8 +181,8 @@ SHOULD_ALLOW = [
     ("rest-api-users", "/api/users/123"),
     # 追跡下の test_winvm.py / test_macvm.py が使っている合成 fixture。免除しないと
     # 既存ツリーが赤くなる。パスで免除しない理由の一般形は custom の config が持つ。
-    # このリポジトリでの実例は、ISSUE-15 のスイープで test_winvm.py の fixture から開発機に
-    # 実在する VM の UUID が出たこと。テストファイルを免除すると、見つけた穴を作り直す。
+    # このリポジトリでの実例は、test_winvm.py の fixture から開発機に実在する VM の UUID が
+    # 出たこと。テストファイルを免除すると、見つけた穴を作り直す。
     ("uuid-fixture-a", "aaaa1111-bbbb-4ccc-8ddd-eeee22223333"),
     ("uuid-fixture-a-upper", "AAAA1111-BBBB-4CCC-8DDD-EEEE22223333"),
     # 単語境界を外しても免除は縮まないこと。免除は match 全体 (素の UUID) へ ^...$ で
@@ -394,11 +396,11 @@ def check_rule_sets() -> int:
 
     # 3 集合を総当たりで比べる。どの 2 つのずれも名指しで出す
     sets = (
-        (f"{CUSTOM_LABEL}", rule_ids(loaded[CUSTOM_LABEL])),
+        (CUSTOM_LABEL, rule_ids(loaded[CUSTOM_LABEL])),
         ("SHOULD_DETECT", {rule for rule, _, _ in SHOULD_DETECT}),
         ("入口の custom_canary()", canaried),
     )
-    for (label_a, set_a), (label_b, set_b) in ((sets[0], sets[1]), (sets[0], sets[2]), (sets[1], sets[2])):
+    for (label_a, set_a), (label_b, set_b) in itertools.combinations(sets, 2):
         for rule in sorted(set_a - set_b):
             print(f"[x] {label_a} にあって {label_b} に無いルール: {rule}")
         for rule in sorted(set_b - set_a):
