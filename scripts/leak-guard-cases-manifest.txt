@@ -3,6 +3,7 @@
 # ケースを増減・改名したら上のコマンドで再生成し、diff ごとコミットする。
 # 衝突したら手でマージせず再生成する。
 allow::ci-runner
+allow::mail-anthropic-noreply
 allow::mail-example-com
 allow::mail-example-net
 allow::mail-example-org
@@ -31,16 +32,23 @@ allow::windows-default-app-pool
 allow::windows-public
 allow::windows-public-slash
 allow::windows-public-trailing-period
+detect::email-address::mail-anthropic-noreply-prefixed
+detect::email-address::mail-anthropic-noreply-suffixed
+detect::email-address::mail-false-in-local
+detect::email-address::mail-github-noreply
 detect::email-address::mail-in-prose
 detect::email-address::mail-plain
 detect::email-address::mail-reserved-2ld-in-middle
 detect::email-address::mail-reserved-tld-in-middle
+detect::email-address::mail-true-prefixed-local
 detect::email-address::mail-two-letter-tld
 detect::user-path::dotted-name
 detect::user-path::drive-omitted
 detect::user-path::escaped-double-backslash
+detect::user-path::false-in-name
 detect::user-path::json-value
 detect::user-path::macos
+detect::user-path::null-suffixed-name
 detect::user-path::unc-parallels-share
 detect::user-path::unc-server
 detect::user-path::underscore-name

@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
-"""禁止語リストで固有名詞の流入を検査する (ISSUE-15 の層 2)。
+"""禁止語リストで固有名詞の流入を検査する (漏洩検査の層 2)。
 
-層 1 (`.gitleaks.toml` の形が決まったルール) が捕まえられないのは固有名詞で、それには
-禁止語リストが要る。リストを PUBLIC な設定ファイルへ literal で書くとルールファイル
-自身が露出になるので、置き場所は環境変数 LEAK_GUARD_DENYLIST で外から指す。
+層 1 (形の決まったルール) が捕まえられないのは固有名詞で、それには禁止語リストが要る。
+リストを PUBLIC な設定ファイルへ literal で書くとルールファイル自身が露出になるので、
+置き場所は環境変数 LEAK_GUARD_DENYLIST で外から指す。
 
 ## 分岐 (canonical)
 
-ISSUE-15-spec.md は 3 分岐 (未設定 / ファイルあり / ファイル無し) で設計したが、
-「ファイルはある」と「比較に使えるエントリが取れる」は別の検査で、後者が 0 でも
-前者は通る。実際に緑のまま何も見ていない形を 30 通り数えたので、判定軸を足してある。
-spec の表はその時点の見立てで、実際の分岐はこの表が canonical。
+ファイルがあることと、比較に使えるエントリが取れることは別の検査で、後者が 0 件でも
+前者は通る。分岐はこの表が canonical。
 
 | 状態                                                      | 終了コード |
 |-----------------------------------------------------------|-----------|
@@ -31,8 +29,9 @@ spec の表はその時点の見立てで、実際の分岐はこの表が canon
 | 検出 0 件                                                  | 0         |
 
 2 を 1 と分けるのは、規約違反と「検査を走らせられなかった」を同じ赤にしないため。
-未設定を無条件の fail-closed にしないのは、このリポジトリが PUBLIC で第三者が clone
-するためで、その人と無関係な理由で常に赤くなる形は採れない。
+未設定を無条件の fail-closed にしないのは、リストを持たない人 (取り付けたリポジトリを
+clone した第三者や、このスクリプトを配布物として受け取った利用者) が居るためで、その人と
+無関係な理由で常に赤くなる形は採れない。
 
 ## 走査面
 
@@ -43,8 +42,9 @@ worktree は symlink 追従 (リポジトリ外の実体を読み、コミット
 返さず、「走査 1 件 / 違反 0 件」という健全に見える形で緑になる。root は
 `rev-parse --show-toplevel` で解決する。
 
-パスも照合対象に含める。追跡ファイルのパスは走査対象と同じ自由テキストで、このリポジトリの
-Issue ディレクトリ名は日本語タイトルを含む (追跡ファイルの 4 割強が非 ASCII パス。実測)。
+パスも照合対象に含める。追跡ファイルのパスは走査対象と同じ自由テキストで、たとえば
+Issue のタイトルをディレクトリ名に含める運用では日本語がそのままパスに入る (配布元では
+追跡ファイルの 4 割強が非 ASCII パスだった。実測)。
 
 内容の照合から外れるのは gitlink・上限超えの blob・NUL を含むファイルの 3 つ。UTF-16 は
 NUL を持つので 3 つ目に落ちるが、BOM がある形だけはテキストとして読んで走査する。BOM 無しの
@@ -82,21 +82,24 @@ Issue や PR への貼り付け、CI ログ、エージェント経由なら会�
 メッセージも同じ位置指標を使う。列オフセットや一致長は出さない
 (同じ行番号を指す複数行の共通部分文字列から語が計算できるため、1 件で確定させない)。
 
-座標に `#<数字>` の形を使わないのは、このリポジトリが `#N` を GitHub の番号空間を指す記法
-として機械検査で禁じているため (canonical は issue-id.py の docstring)。意味は別物だが
-機械検査に区別はできないので、免除を広げるのではなく衝突する記法を避ける。
+座標に `#<数字>` の形を使わないのは、同じ bundle の in-repo-issue にある issue-id.py が
+`#N` を GitHub の番号空間を指す記法として機械検査で禁じているため (canonical は issue-id.py
+の docstring)。意味は別物だが機械検査に区別はできないので、免除を広げるのではなく衝突する
+記法を避ける。
 
-CI へは取り付けない。PUBLIC リポジトリの Actions ログは誰でも読め、対象のコミットは
-push 済みなので、公開された座標の交差から語を復元できる。決定は scripts/
-test_check_leak_guard_denylist.py の Attachment が negative pin で保持する。
+どこへ取り付けるかは利用する側が決める。検出した座標を公開されるログへ出すと、対象が
+既に公開されている場合に座標の交差から語を復元できるので、取り付け先のログを誰が読めるか
+を見て決めること。
 
 ## セットアップの確認
 
-環境変数を設定したら、**コミットを打つのと同じ起動元から**次を実行すること。
-
-    python3 scripts/check-leak-guard-denylist.py --check
+環境変数を設定したら、**この検査を起動するのと同じ起動元から** (コミットの hook として
+取り付けたならコミットを打つ起動元、エージェントに実行させるならそのエージェントのシェル)、
+無害な 1 行だけのファイルを `--check-text` へ通すこと。
 
 `status=checked` が出れば、その起動元へ変数が届いている。`status=skipped` なら届いていない。
+`--check` は追跡ファイルを見るので、git リポジトリの外では変数が届いていても rc 2 になる
+(実測)。起動する場所で結果が変わるので、確認手順には使わない。
 
 コマンドの前に `LEAK_GUARD_DENYLIST=...` を置かないこと。その形は変数をその場で注入するので
 必ず `status=checked` になり、見たい失敗 (変数が届いていない) を原理的に出せない。確かめたい
@@ -104,11 +107,11 @@ test_check_leak_guard_denylist.py の Attachment が negative pin で保持す�
 
 届かない起動元は実在する: `.zshrc` の export は非対話シェル (`zsh -c`) に届かず、`launchctl
 getenv` も空を返すので GUI の git クライアントや IDE の VCS 機能が継承する環境にも入らない
-(実測)。設定したつもりのまま全コミットが skip で緑になる形は spec が「既知の限界」として
-引き受けており、この層は自分の取り付けを自分では検査できない。
+(実測)。設定したつもりのまま全ての実行が skip で緑になる形は既知の限界として引き受けており、
+この層は自分の取り付けを自分では検査できない。
 
-リストの置き場所をここへ書かない。PUBLIC なこのリポジトリへ private な配線規約を literal で
-書くと、ISSUE-15 が禁じている当のものに自分で抵触する。
+リストの置き場所をここへ書かない。このファイルは配布物として公開されているので、private な
+配線規約を literal で書くと、この検査が防ごうとしている流入を自分で起こす。
 
 中立なパスを既定値として持つ案は採らない。固有名詞を含まないので露出の面では書けるが、入力が
 環境変数 1 つという前提で数えた上の分岐表を広げ、シェル側の配線と既定値で同じことを 2 箇所で
@@ -133,7 +136,7 @@ EXIT_OK = 0
 EXIT_VIOLATION = 1
 EXIT_UNABLE = 2
 
-# 機械可読な状態語。pre-commit は rc 0 の hook の stdout も stderr も表示しないので
+# 機械可読な状態語。pre-commit から呼ぶと rc 0 の hook の stdout も stderr も表示されないので
 # (実測)、skip したことは verbose: true を付けた hook の出力としてしか見えない。
 # 表示されたときに「守っていない」と「見て 0 件だった」が読み分けられる必要がある。
 STATUS_SKIPPED = "status=skipped"
@@ -141,9 +144,9 @@ STATUS_CHECKED = "status=checked"
 
 # 1 blob あたりの上限。超えたものは内容を読まずに除外する。read_text は「decode できない
 # から安全に飛ばす」ように見えて例外が上がる前に全体を読み切っており (実測: 200MB の
-# ファイルで peak 615MB)、この検査は全コミットで追跡ファイル全体を走るので、動画や
-# フォントが 1 つ入った時点で毎コミットその倍以上を確保する。ホストには cgroup 境界が
-# 無いというのが CLAUDE.md の [MUST GLOBAL]。
+# ファイルで peak 615MB)、--check は実行のたびに追跡ファイル全体を走るので (pre-commit へ
+# 取り付ければ毎コミット)、動画やフォントが 1 つ入った時点で毎回その倍以上を確保する。
+# 開発機のホストには cgroup のような境界が無いことが多く、膨らんだ割り当てが OS 全体を巻き込む。
 MAX_BLOB_BYTES = 1024 * 1024
 
 # cat-file --batch へ一度に流すサイズの目安。出力は丸ごと stdout に載るので、
@@ -224,8 +227,6 @@ def fold(text: str) -> str:
     """照合の前にリスト側と本文側へ同一に掛ける正規化。
 
     NFKC → category Cf 除去 → casefold → NFKC の 4 段。前後の NFKC は別のものを守る。
-    当初どちらも「casefold が NFKC 正規形へ戻さない code point のため」と書いていたが、
-    どちらを外しても既存のテストが赤くならなかったので測り直した結果がこれ。
 
     先頭の NFKC は冪等性を守る。外すと fold(fold(x)) != fold(x) になる code point が
     BMP に現れる (実測: U+037A, U+03D2-U+03D4, U+03F2 ほか)。照合の結果そのものは
@@ -471,8 +472,8 @@ def _ls_files(root: Path) -> list[tuple[str, str, str]]:
 
     -z を使うのは、既定出力が非 ASCII パスを C クォートするため (実測:
     `"docs/issues/ISSUE-1_\\343\\201\\202"`)。クォートされた名前は照合にも open にも
-    使えず、しかもエラーではなく短い正常な結果で返る。このリポジトリは追跡ファイルの
-    4 割強が非 ASCII パスなので、-z を外すとその分が走査面から落ちる (実測)。
+    使えず、しかもエラーではなく短い正常な結果で返る。配布元では追跡ファイルの 4 割強が
+    非 ASCII パスで、-z を外すとその分が走査面から落ちた (実測)。
     """
     out = _git(root, "ls-files", "-s", "-z")
     entries = []
@@ -519,8 +520,8 @@ def _iter_blobs(root: Path, oids: list[str], sizes: list[int]):
     """--batch で内容を取り、読めたものから 1 件ずつ返す。
 
     list へ貯めて返す形は採らない。それだと BATCH_BYTES の分割が抑えるのは cat-file
-    1 回の stdout だけで、常駐量は走査対象の合計サイズに比例する (ホストには cgroup
-    境界が無いというのが CLAUDE.md の [MUST GLOBAL])。
+    1 回の stdout だけで、常駐量は走査対象の合計サイズに比例する (開発機のホストには
+    cgroup のような境界が無いことが多い)。
 
     逐次返しても 1 チャンクぶんにはならない。_read_chunk が stdout 全体を持ったまま
     そこから切り出した bytes のリストも作るので、常駐はチャンクの約 2 倍で頭打ちになる
@@ -653,8 +654,7 @@ def _locator(index: int, oid: str) -> str:
 
     序数は走査した index に対するもので、運用者が後から引く `git ls-files` とずれるので
     oid を併記する (理由は Finding の docstring)。組み立てを 1 箇所に集約するのは、
-    位置指標を出す場所が増えたときに片方だけ oid を落とす形を避けるため。実際に
-    検査不能メッセージの側が序数だけを出しており、一時 index では別のファイルを指していた。
+    位置指標を出す場所が増えたときに片方だけ oid を落とす形を避けるため。
     """
     return f"tracked file {index} (oid {oid[:12]})"
 
@@ -703,30 +703,33 @@ def run_check(start: Path, entries: list[Entry], env) -> int:
 
 
 def run_check_text(source: str, entries: list[Entry]) -> int:
-    """テキスト 1 本を走査する。コミットメッセージの入口。
+    """テキスト 1 本を走査する入口。渡されたファイルの全文を、何も剥がさずに走査する。
 
-    渡るのは git の cleanup より前の message ファイル全文で、コメント行も
-    `git commit -v` が末尾へ足す diff も含まれる。`#` 行の除去も scissors 行以降の
-    切り落としも行わない。既定の cleanup は編集経由が strip、-m / -F は whitespace で、
-    同じ本文でも `#` 行の運命が経路で逆になる (実測: 同一の `# ...` 行がエディタ経由では
-    commit object から消え、-F では残った)。本リポジトリの規約は -F なので、日常の経路が
-    まさに残る側にあたる。git の cleanup 規則を再実装すると二重管理になり、誤検出を
-    嫌って剥がす向きの変更がそのまま fail-open へ倒れる。既存の issue-id.py の
-    commit-msg hook が同じ面で誤検出を引き受けている。
+    コミットメッセージはその用途の 1 つで、commit-msg hook として取り付けたときに渡るのは
+    git の cleanup より前の message ファイル全文になる。コメント行も `git commit -v` が
+    末尾へ足す diff も含まれるが、`#` 行の除去も scissors 行以降の切り落としも行わない。
+    既定の cleanup は編集経由が strip、-m / -F は whitespace で、同じ本文でも `#` 行の
+    運命が経路で逆になる (実測: 同一の `# ...` 行がエディタ経由では commit object から
+    消え、-F では残った)。同梱先の commit-and-pr-message の手順は本文を -F で渡すので、
+    日常の経路がまさに残る側にあたる。git の cleanup 規則を再実装すると二重管理になり、
+    誤検出を嫌って剥がす向きの変更がそのまま fail-open へ倒れる。同じ bundle の
+    issue-id.py の --check-text も、同じ面で誤検出を引き受けている。
 
-    既知の限界: この入口が発火しない経路がある (すべて実測)。`git cherry-pick` と
-    `git revert` は元のメッセージを持つ新しいコミットを作るが hook は 1 度も発火せず、
-    revert が自動生成する件名は元の件名を丸ごと含む。`git rebase` の再生も発火しない
-    (発火するのは reword で編集した回だけ)。`--no-verify` も当然通らない。GitHub 上の
-    squash merge は PR タイトルと本文が main の恒久コミットメッセージになるが、ローカル
-    hook は原理的に走らない。もう一方の入口 (追跡ファイル) はコミットメッセージを走査面に
-    持たず、gitleaks もメッセージを見ないので backstop が無い。
-
-    PR タイトルと本文をこの入口へ手で通す手順は spec の実装順序 5 が扱う (未実装)。
+    既知の限界: commit-msg hook として取り付けても、この入口が発火しない経路がある
+    (すべて実測)。`git cherry-pick` と `git revert` は元のメッセージを持つ新しいコミットを
+    作るが hook は 1 度も発火せず、revert が自動生成する件名は元の件名を丸ごと含む。
+    `git rebase` の再生も発火しない (発火するのは reword で編集した回だけ)。`--no-verify` も
+    当然通らない。GitHub 上の squash merge は PR タイトルと本文が main の恒久コミット
+    メッセージになるが、ローカル hook は原理的に走らない。もう一方の入口 (追跡ファイル) は
+    コミットメッセージを走査面に持たず、gitleaks もメッセージを見ないので backstop が無い。
     """
     path = Path(source)
     try:
-        text = path.read_text(encoding="utf-8")
+        # read_text ではなく bytes から decode する。read_text の universal newlines は
+        # 単独の \r を \n に置き換えてから渡すので、split_lines が \n だけを境界にしていても
+        # \r を持つ本文では行番号が 1 つ進む (実測)。同じ本文を層 1 (gitleaks。\n だけで
+        # 数える) と一緒に通す入口では、層ごとに座標がずれて片方が別の行を指す
+        text = path.read_bytes().decode("utf-8")
     except (OSError, UnicodeDecodeError) as e:
         raise Unable(
             f"走査対象のテキストを読めない ({type(e).__name__})。パスは印字しない"
@@ -751,10 +754,29 @@ def run_check_text(source: str, entries: list[Entry]) -> int:
     return EXIT_OK
 
 
+def _tolerate_unencodable_stdout() -> None:
+    """stdout の符号化で表せない文字を backslashreplace で \\x.. や \\u.... の形にして書く。
+
+    stdout の符号化が日本語を書けない (PYTHONIOENCODING=ascii、cp1252 のコンソール) と、既定の
+    strict では status=checked を出したあとの日本語の行で UnicodeEncodeError になり、rc 2 で
+    終わる (実測)。rc 1 と status=checked の組を検出として読む呼び出し元では、検出が「検査
+    不能」に化ける。UTF-8 のバイト列を直接書く案と比べ、cp932 の Windows では日本語がそのまま
+    出て、表せない符号化でも ASCII の目印は壊れない。stderr は Python の既定で backslashreplace
+    なので触らない。テストが StringIO へ差し替えた stdout には reconfigure が無いので呼ばない。
+    """
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(errors="backslashreplace")
+
+
 def main(argv: list[str] | None = None, *, env=None) -> int:
+    # 最初の書き込みより前に置く。argparse の --help は parse_known_args の中で日本語の説明を
+    # stdout へ書くので、その後ろに置くと ASCII の stdout で traceback が stderr へ出て
+    # rc 1 になる (実測)
+    _tolerate_unencodable_stdout()
     env = os.environ if env is None else env
-    # allow_abbrev の既定 (True) は `--che` を別モードの短縮として受理する。
-    # typo が静かに別の入口へ落ちないよう完全形の明示だけに絞る (先例 issue-id.py)
+    # allow_abbrev の既定 (True) は `--check-t` を `--check-text` の短縮として受理する。
+    # 短縮は typo と同じ exit 2 へ倒し、完全形の明示だけに絞る (先例 issue-id.py)
     parser = argparse.ArgumentParser(
         description="禁止語リストで固有名詞の流入を検査する",
         allow_abbrev=False,
@@ -792,7 +814,7 @@ def main(argv: list[str] | None = None, *, env=None) -> int:
     except Unable as e:
         print(f"[x] {e}", file=sys.stderr)
         return EXIT_UNABLE
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # traceback を出力経路から閉じる。例外の str と traceback はリストのパスも
         # 語も載せることがあり (FileNotFoundError・KeyError・ValueError で実測)、
         # pre-commit は Failed ブロックへ hook の stdout+stderr を切り詰めずに出す

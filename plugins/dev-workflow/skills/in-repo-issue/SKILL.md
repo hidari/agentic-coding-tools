@@ -410,8 +410,10 @@ C.1 の抽出はキーワードとその直後の塊だけで決まるので、 
 
 ### squash merge の subject は既定に任せず明示する
 
+`.cache/merge-<slug>.title` に `<PR タイトルと同じ 1 行> (PR #<N>)` の 1 行を書き、 次の形で渡す。
+
 ```bash
-gh pr merge <N> --squash --subject "<PR タイトルと同じ 1 行> (PR #<N>)"
+test -s .cache/merge-<slug>.title && gh pr merge <N> --squash --subject "$(cat .cache/merge-<slug>.title)"
 ```
 
 GitHub は既定で subject の末尾へ括弧付きの数字記法を付ける。 この形は免除のどちらにも
@@ -427,8 +429,7 @@ GitHub は既定で subject の末尾へ括弧付きの数字記法を付ける�
 この形を免除すると読み手がどちらを指すか判別できなくなる。 免除は届きすぎても違反 0 件の
 緑にしかならないので、 出力を見ても気づけない。
 
-`--subject` はインラインなので句点を入れないこと (`dev-workflow:commit-and-pr-message` の
-`--title` と同じ制約)。 マージコミットに本文を付けるなら同コマンドの `--body-file` を使う。
+subject の値の渡し方と渡す前の検査は、 `dev-workflow:commit-and-pr-message` の「ワークフロー」節に従う。 マージコミットに本文を付けるなら同コマンドの `--body-file` を使う。
 
 既存の履歴に残る違反は直せない。 過去分は履歴として受容し、 以後のマージから適用する。
 

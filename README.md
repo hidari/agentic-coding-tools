@@ -28,7 +28,7 @@ component を持つパッケージ。skill と agent は `<plugin 名>:<componen
 
 | パス | component 数 | 説明 |
 |---|---|---|
-| `plugins/dev-workflow` | 7 | 個人開発のワークフローを支える skill バンドルの入口。ブランチ運用、リポジトリ内 Issue 管理、マージ前の品質ゲート、振り返りのルール化、E2E 影響の静的検出、コミットと PR 本文の作法を集約する。個別の作業は component skill を直接呼ぶ。 |
+| `plugins/dev-workflow` | 7 | 個人開発のワークフローを支える skill バンドルの入口。ブランチ運用、リポジトリ内 Issue 管理、マージ前の品質ゲート、振り返りのルール化、E2E 影響の静的検出、コミットや PR の本文を漏洩検査してから渡す手順を集約する。個別の作業は component skill を直接呼ぶ。 |
 | `plugins/security-blue-red-team` | 6 | Red Team (攻撃者視点の能動検証) と Blue Team (防御者視点の改善計画) を profile 駆動で継続運用する skill バンドルの入口。個別の実行は `/security-redteam` / `/security-blueteam` / `/security-vulnerability-assessment` / `/security-cleanup` を呼ぶ。 |
 | `plugins/web-monkey-qa` | 2 | Web アプリを重み付きランダム操作で探索し、コンソールエラーや HTTP 4xx/5xx、レイアウト崩れ、行き止まり遷移などを検出する monkey test バンドルの入口。実行は `/monkey-qa` を呼ぶ。 |
 

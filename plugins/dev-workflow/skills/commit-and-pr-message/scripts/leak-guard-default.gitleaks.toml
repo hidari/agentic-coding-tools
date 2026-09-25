@@ -1,0 +1,12 @@
+# 漏洩検査の層 1 のうち gitleaks の既定ルール (API キーやトークンの形) だけを有効にする config。
+#
+# custom ルール (同じディレクトリの leak-guard.gitleaks.toml) と 1 本にまとめない。既定 config の
+# 全体除外 (?i)^true|false|null$ は同じ config の custom ルールの検出にも効き、true で始まる
+# メールアドレスや false を含むユーザー名のパスが検出されなくなる (gitleaks 8.30.1 で実測)。
+# 呼ぶ側は 2 本をそれぞれ -c で渡し、1 回ずつ走らせる。
+#
+# 同じ理由で、ここへ [[rules]] を足さない。足したルールはこの全体除外の下で動く。
+title = "leak-guard default rules"
+
+[extend]
+useDefault = true

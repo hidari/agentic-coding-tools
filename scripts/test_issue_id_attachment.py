@@ -6,17 +6,18 @@ pre-commit と CI から呼ばれていなければ一度も走らないので�
 
 先例は scripts/test_run_python_tests.py の Attachment。あちらは run-python-tests.py の
 取り付けを、その run-python-tests.py 自身に走らされて検証するため、両取り付けを同時に
-外すとこのテスト自身が走らず検出できないという自己ホスト盲点を持つ (runner の docstring と
-ISSUE-13)。こちらは検証対象 (issue-id.py) と実行者 (run-python-tests.py) が別なので、
+外すとこのテスト自身が走らず検出できないという自己ホスト盲点を持つ (runner の docstring)。
+こちらは検証対象 (issue-id.py) と実行者 (run-python-tests.py) が別なので、
 issue-id.py の両取り付けを同時に外しても runner は走り続け、ここが赤くなる (実測)。
 
-stdlib に YAML パーサが無いため、コメント行を除いた行の部分文字列で見る。YAML 構造
-としての妥当性までは見ない。そこは pre-commit 自身と check-yaml hook が担う。
+設定を行で読む補助と、その読み方の限界 (YAML として解釈しない) は
+scripts/hook_config_lines.py が持つ。漏洩検査の取り付けを pin する
+scripts/test_leak_guard_attachment.py と共有している。
 """
 
 from __future__ import annotations
 
-import re
+import importlib.util
 import unittest
 from pathlib import Path
 
@@ -29,9 +30,6 @@ CHECKER = "plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py"
 PRE_COMMIT_CONFIG = ROOT / ".pre-commit-config.yaml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
-HOOK_START = re.compile(r"^\s*-\s+id:")
-HOOK_KEY = re.compile(r"^\s*(?:-\s+)?([A-Za-z_][A-Za-z0-9_-]*):")
-
 # commit-msg stage の hook が持ってよいキー。個別の narrowing キーを列挙して禁じる形は
 # 採らない。この stage では渡るファイルが message ファイル 1 本しかないため、ファイル名や
 # ファイル型で絞る指定はどれも集合を空にし、絞り込みではなく skip になる (実測: files /
@@ -41,45 +39,24 @@ HOOK_KEY = re.compile(r"^\s*(?:-\s+)?([A-Za-z_][A-Za-z0-9_-]*):")
 COMMIT_MSG_HOOK_KEYS = frozenset({"id", "name", "language", "entry", "stages", "always_run"})
 
 
-def live_lines(path: Path) -> list[str]:
-    """コメント行を除いた行。コメントの中の記述を取り付けと誤認しないため。"""
-    return [
-        line
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if not line.lstrip().startswith("#")
-    ]
+def _load_helpers():
+    """行で読む補助を読む。素の import はリポジトリ root から回すと解決できない。"""
+    spec = importlib.util.spec_from_file_location(
+        "hook_config_lines", Path(__file__).resolve().parent / "hook_config_lines.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def invocations(lines: list[str], flag: str) -> list[str]:
-    """checker を flag 付きで呼んでいる行。
-
-    flag は split() で照合する。部分文字列だと --check が --check-text にも
-    一致し、片方の hook を消しても両方の pin が緑のままになる。
-    """
-    return [line for line in lines if CHECKER in line and flag in line.split()]
-
-
-def hook_block(lines: list[str], flag: str) -> list[str]:
-    """flag で呼んでいる local hook の定義ブロック (次の `- id:` の手前まで)。"""
-    hits = [i for i, line in enumerate(lines) if CHECKER in line and flag in line.split()]
-    if not hits:
-        return []
-    start = hits[0]
-    while start > 0 and not HOOK_START.match(lines[start]):
-        start -= 1
-    end = start + 1
-    while end < len(lines) and not HOOK_START.match(lines[end]):
-        end += 1
-    return lines[start:end]
-
-
-def hook_keys(block: list[str]) -> set[str]:
-    """hook 定義ブロックが持つマッピングのキー。
-
-    入れ子のマッピングも同じ形なので拾う。取りこぼす方向ではなく余計に拾う方向へ
-    倒してあるのは、allowlist と突き合わせる用途だから (知らないキーは赤にする)。
-    """
-    return {m.group(1) for line in block if (m := HOOK_KEY.match(line))}
+_helpers = _load_helpers()
+live_lines = _helpers.live_lines
+invocations = _helpers.invocations
+hook_block = _helpers.hook_block
+hook_keys = _helpers.hook_keys
+hook_values = _helpers.hook_values
+effective_stages = _helpers.effective_stages
+HOOK_LANGUAGE = _helpers.HOOK_LANGUAGE
 
 
 class Attachment(unittest.TestCase):
@@ -91,23 +68,50 @@ class Attachment(unittest.TestCase):
 
     def test_pre_commit_runs_the_repository_check(self):
         self.assertTrue(
-            invocations(live_lines(PRE_COMMIT_CONFIG), "--check"),
+            invocations(live_lines(PRE_COMMIT_CONFIG), CHECKER, "--check"),
             "pre-commit が issue-id.py --check を呼んでいない",
         )
 
     def test_pre_commit_runs_the_commit_message_check(self):
         self.assertTrue(
-            invocations(live_lines(PRE_COMMIT_CONFIG), "--check-text"),
+            invocations(live_lines(PRE_COMMIT_CONFIG), CHECKER, "--check-text"),
             "pre-commit が issue-id.py --check-text を呼んでいない",
         )
 
     def test_commit_message_check_is_bound_to_the_commit_msg_stage(self):
-        block = hook_block(live_lines(PRE_COMMIT_CONFIG), "--check-text")
+        block = hook_block(live_lines(PRE_COMMIT_CONFIG), CHECKER, "--check-text")
         self.assertTrue(block, "--check-text の hook 定義が見つからない")
         self.assertTrue(
             [line for line in block if line.lstrip().startswith("stages:") and "commit-msg" in line],
             "--check-text の hook が commit-msg stage に紐付いていない",
         )
+
+    def test_repository_check_runs_on_the_pre_commit_stage(self):
+        # `stages: [manual]` を 1 行足すと、この hook は commit 時にも
+        # `pre-commit run --all-files` にも現れないまま追跡ファイル面が消え、他の pin は
+        # 全部緑のまま残る (変異注入で確認)。この hook は stages を宣言しないので
+        # top-level の default_stages を継承する
+        lines = live_lines(PRE_COMMIT_CONFIG)
+        block = hook_block(lines, CHECKER, "--check")
+        self.assertTrue(block, "--check の hook 定義が見つからない")
+        effective = effective_stages(lines, block)
+        self.assertTrue(effective, "--check の stage を決める宣言がどこにも無い")
+        for line in effective:
+            self.assertIn(
+                "pre-commit", line, "--check の hook が pre-commit stage から外れている"
+            )
+
+    def test_both_hooks_use_the_system_language(self):
+        # 値まで pin する理由は hook_config_lines.py の HOOK_LANGUAGE のコメント
+        for flag in ("--check", "--check-text"):
+            with self.subTest(flag=flag):
+                block = hook_block(live_lines(PRE_COMMIT_CONFIG), CHECKER, flag)
+                self.assertTrue(block, f"{flag} の hook 定義が見つからない")
+                self.assertEqual(
+                    hook_values(block, "language"),
+                    [HOOK_LANGUAGE],
+                    f"{flag} の hook の language が {HOOK_LANGUAGE} でない",
+                )
 
     def test_commit_msg_hook_type_is_installed_by_default(self):
         # stage の宣言だけでは `pre-commit install` が commit-msg の hook を置かず、
@@ -126,7 +130,7 @@ class Attachment(unittest.TestCase):
         # のは always_run: true の方で (実測: 絞り込みを足しても always_run があれば
         # 走る)、files: / exclude: を置かないのはその宣言。always_run だけが落ちると
         # 残った絞り込みが効き始め、走らなかったこと自体が出力に現れなくなる
-        block = hook_block(live_lines(PRE_COMMIT_CONFIG), "--check")
+        block = hook_block(live_lines(PRE_COMMIT_CONFIG), CHECKER, "--check")
         self.assertTrue(block, "--check の hook 定義が見つからない")
         self.assertFalse(
             [line for line in block if line.lstrip().startswith(("files:", "exclude:"))],
@@ -143,7 +147,7 @@ class Attachment(unittest.TestCase):
         # files: を足しても既存の pin は全て緑のままで、裸の数字記法を含むメッセージの
         # コミットが rc 0 で成功した。設定にあるのに一度も発火しない形で、
         # test_commit_msg_hook_type_is_installed_by_default が防いでいる形と同型
-        block = hook_block(live_lines(PRE_COMMIT_CONFIG), "--check-text")
+        block = hook_block(live_lines(PRE_COMMIT_CONFIG), CHECKER, "--check-text")
         self.assertTrue(block, "--check-text の hook 定義が見つからない")
         unknown = sorted(hook_keys(block) - COMMIT_MSG_HOOK_KEYS)
         self.assertFalse(
@@ -159,7 +163,7 @@ class Attachment(unittest.TestCase):
         # 同じ silent skip が起きる)。always_run: true があると空集合でも hook が起動し、
         # 引数ゼロの argparse エラー (exit 2) で落ちる (実測)。静かな skip を
         # 騒がしい失敗へ変える堰なので、キーの有無ではなく値まで見る
-        block = hook_block(live_lines(PRE_COMMIT_CONFIG), "--check-text")
+        block = hook_block(live_lines(PRE_COMMIT_CONFIG), CHECKER, "--check-text")
         self.assertTrue(block, "--check-text の hook 定義が見つからない")
         self.assertTrue(
             [line for line in block if "always_run: true" in line],
@@ -169,7 +173,7 @@ class Attachment(unittest.TestCase):
 
     def test_ci_runs_the_repository_check(self):
         self.assertTrue(
-            invocations(live_lines(CI_WORKFLOW), "--check"),
+            invocations(live_lines(CI_WORKFLOW), CHECKER, "--check"),
             "ci.yml が issue-id.py --check を呼んでいない",
         )
 

@@ -1,23 +1,27 @@
 ---
 name: commit-and-pr-message
-description: Tirith フックが有効な環境で git / gh コマンドに日本語の散文を渡すときに使う。対象はコミット本文 / PR 本文 / PR コメント / レビュー / Issue 本文 / リリースノート / 注釈付きタグ。日本語を Bash コマンド文字列に載せると confusable_text ルールでコマンドごとブロックされるため、本文は例外なく Write でファイルに書き `-F` / `--body-file` / `--notes-file` で渡す。「コミットして」「PR を作って」「PR 本文を書いて」「コメントして」「リリース切って」と指示された時、および該当コマンドを実行する直前に使う。
+description: 公開される本文を git / gh に渡すときに使う。対象はコミット本文 / PR の本文とタイトル / PR コメント / レビュー / Issue の本文とタイトル / リリースノート / 注釈付きタグ / squash merge の subject と本文で、言語と、コマンド文字列を検査する hook の有無を問わない。本文は Write でファイルに書き、渡す前に同梱の入口で漏洩検査 (形の決まったルールと禁止語リスト) を通してから、`-F` / `--body-file` / `--notes-file` でそのファイルを渡す。1 行の値もファイルに書いて一緒に検査する。「コミットして」「PR を作って」「PR 本文を書いて」「コメントして」「リリース切って」と指示された時、および該当コマンドを実行する直前に使う。
 ---
 
 # Commit and PR Message Authoring
 
-git / gh に渡す日本語の散文は Bash コマンド文字列に載せない。Write でファイルに書き、file 系フラグで渡す。
+公開される本文は Write でファイルに書き、同梱の入口で漏洩検査を通してから、file 系フラグでそのファイルを git / gh へ渡す。本文を Bash のコマンド文字列に載せない。
 
 ## 目的
 
-- **判定の機会を消す**: 「この文字列は安全か」を書くたびに考えさせる設計は実績として繰り返し失敗している。ファイル経由なら判定の対象にならない
-- **日本語を自然な文体で書く**: 文字種の自己規制が要らなくなる
-- **書式の canonical を一元化する**: prefix 一覧や `Closes` 書式をここに写経せず所在だけを示す
+- 渡す前に漏洩を止める: 形の決まった漏洩と、禁止語リストに載った語を、公開される前に見つける。どの形を見るかは同梱の gitleaks の config が持つ (当たらないと分かっている形は「既知の限界」)。コミット、タグ、マージ済みの本文は、公開したあとで消せない
+- 検査した中身をそのまま渡す: 検査と受け渡しが同じファイルを読む。コマンド文字列へ書き写すと、検査していない文字列が渡る
+- hook に止められるかの判定を要らなくする: コマンド文字列を検査する hook がある環境で、「この文字列は止められないか」を書くたびに考えさせる設計は実績として繰り返し失敗している。ファイル経由なら本文は hook の判定の対象にならない (「なぜファイル経由なのか」節)
+- 日本語を自然な文体で書く: 文字種の自己規制が要らなくなる
+- 書式の canonical を一元化する: prefix 一覧や `Closes` 書式をここに写経せず所在だけを示す
 
 ## いつ使うか
 
 ### 必ず使う
 
-下表の左側を打ちそうになったとき。ユーザーが「コミットして」「PR を作って」「PR 本文を書いて」「コメントして」「リリース切って」と指示したときも同じ。
+公開される本文を git / gh へ渡すとき。ここで公開される本文は、git / gh へメッセージや本文としてフラグやファイル引数で渡し、手元の外 (リモートのリポジトリや GitHub) に残るものを指す。コミットして push する追跡ファイルの内容 (in-repo Issue の本文など) は含まない。追跡ファイルの漏洩は利用者のリポジトリの側の検査が扱うもので、本 skill の手順の外にある。言語も、コマンド文字列を検査する hook の有無も問わない。送り先が PRIVATE でも対象で、そのときに外れるのは禁止語リストの層だけである (「送る前の検査」節)。
+
+下表の左側を打ちそうになったとき、ユーザーが「コミットして」「PR を作って」「PR 本文を書いて」「コメントして」「リリース切って」と指示したときも同じ。
 
 | 面 | 使わない | 使う |
 |---|---|---|
@@ -28,8 +32,9 @@ git / gh に渡す日本語の散文は Bash コマンド文字列に載せな�
 | Issue 本文 | `gh issue create --body` | `gh issue create --body-file <file>` |
 | リリースノート | `gh release create --notes` | `gh release create --notes-file <file>` |
 | 注釈付きタグ | `git tag -a -m` | `git tag -a -F <file>` |
+| 1 行の値 (PR タイトル、merge の subject、Issue タイトル、リリースタイトル) | `--title "<1 行>"` / `--subject "<1 行>"` | 同じフラグに `"$(cat <file>)"` |
 
-境界は「どのコマンドか」ではなく「日本語の散文が Bash コマンド文字列を通るか」である。表に無いコマンドでも同じ条件なら同じ扱いにする。
+境界は「どのコマンドか」ではなく「公開される本文か」である。表に無いコマンドでも、公開される本文を渡すなら同じ扱いにする。
 
 ### 使わない
 
@@ -38,9 +43,13 @@ git / gh に渡す日本語の散文は Bash コマンド文字列に載せな�
 
 ## 前提: なぜファイル経由なのか
 
-PreToolUse フックの Tirith は **Bash ツールの command 文字列だけ** を検査する。Write と Edit は素通しする。したがって本文をファイルに書けば、本文が何を含んでいても検査対象にならない。
+理由は 2 つある。1 つは、検査と受け渡しが同じファイルを読むこと (「送る前の検査」節)。もう 1 つは、コマンド文字列を検査する hook (Tirith) が日本語の散文を含むコマンドを止めることで、この節の残りはその条件を扱う。Tirith の無い環境でも手順は変わらない。
 
-発火するルールは `confusable_text` (severity HIGH)。tirith の policy 側では緩められない (severity / action の override も paranoia も upgrade only)。最終判定を下しているのは `~/.claude/hooks/tirith-check.py` なので機構的には wrapper 側で握り潰せるが、**それは homoglyph 難読化への防御を全コマンドで殺す変更なので採らない。**
+PreToolUse フックの Tirith は **Bash ツールの command 文字列だけ** を検査する。Write と Edit は素通しする。したがって本文をファイルに書けば、本文が何を含んでいても hook の検査対象にならない。
+
+発火するルールは `confusable_text` (severity HIGH)。tirith の policy 側では緩められない (severity / action の override も paranoia も upgrade only)。配布元の環境では tirith を呼ぶ hook の wrapper が最終判定を下すので、機構的には wrapper 側で握り潰せる。それは homoglyph 難読化への防御を全コマンドで殺す変更なので採らない。
+
+1 行の値を `"$(cat <file>)"` の形で渡すと、コマンド文字列に載るのは置換の式だけで、値の中身は載らない。hook はこの形を止めず、渡る値はファイルの中身から末尾の改行を落としたものになる (配布元で測った)。値をコマンド文字列へ直接書くと、次の条件で止められうる。
 
 ### 発火条件
 
@@ -61,27 +70,89 @@ PreToolUse フックの Tirith は **Bash ツールの command 文字列だけ**
 
 日本語の技術文書では「句点の直後に識別子」が頻出するので、この条件は実質的に頻繁に踏む。条件を覚えて避けるのではなく、ファイル経由にして判定ごと消す。
 
-条件は tirith のバージョンに結合する。再測は `tirith check --json --non-interactive --shell posix -- '<文字列>'` の exit code (0=allow / 1=block) で、プローブを Write でファイルに書いて `bash <file>` から回す (Bash に渡すコマンド文字列を ASCII に保つため)。
+条件は tirith と、それを呼ぶ hook の版と設定に依存する。
 
 ## ワークフロー
 
-どの面でも形は同じ 3 手である。**(1) 本文を Write でファイルに書く (2) file 系フラグで渡す (3) 載ったことを確認する。** 以下は代表として commit と PR を詳しく書くが、他の面も同じ 3 手を踏む。
+どの面でも形は同じ 4 手である。以下は代表として commit と PR を詳しく書くが、他の面も同じ 4 手を踏む。
+
+1. 書く: 本文を Write でファイルに書く。1 行で渡す値 (PR タイトル、merge の subject、Issue タイトル、リリースタイトル) も、本文のファイルと同じ名前で拡張子を `.title` にしたファイルへ 1 行だけ書く
+2. 送る前の検査: 送り先の公開範囲を判定し、1 で書いたファイルを全部、1 回の呼び出しで入口へ通す。結果ごとの行動と、検査のあとでファイルを変えたときのやり直しは、次の「送る前の検査」節が持つ
+3. 渡す: file 系フラグでファイルを渡す。渡すパスは、2 で入口に渡したパスと同じ文字列にする。1 行の値は `"$(cat <file>)"` の形で渡し、コマンドの前に `test -s <file> &&` を置く。ファイルが無いと置換は空文字列になり、外側のコマンドは空の値のまま走るので、`test -s` でファイルが無いか空のときに止める
+4. 載ったことを確認する
 
 コマンド例は cwd がリポジトリルート (`git rev-parse --show-toplevel`) である前提で相対パスを使っている。別の場所から打つならパスを絶対にすること。
 
+### 送る前の検査
+
+入口は 2 つの層を当てる。層 1 は同梱の gitleaks の config 2 本による形の決まったルール、層 2 は禁止語リストである。層 2 のリストは環境変数で指す (設定の確認手順は同梱の `scripts/check-leak-guard-denylist.py` の docstring)。入口は python3 と gitleaks を使い、動作を確かめた版は入口 (`scripts/check-outgoing-text.py`) の docstring が持つ。
+
+入口を呼ぶ前に、送り先のリポジトリの公開範囲を判定する。`gh` に `-R` で別のリポジトリを渡すときは、そのリポジトリを引数に足して判定する。
+
+```bash
+gh repo view --json visibility --jq .visibility
+```
+
+結果が `PRIVATE` のときだけ、入口のファイルの前に `--target-private` を置く。`PUBLIC`、`INTERNAL`、コマンドの失敗、空の出力では付けない。`--target-private` が外すのは層 2 だけで、層 1 は公開範囲を問わず当たる。判定は最初に入口を呼ぶ前に 1 回だけ行い、結果を見たあとで判定し直さない。rc 1 を見てから判定し直すと、検出を消すために層 2 を外す道になる。
+
+入口には、渡すコマンドが読むファイル (本文のファイルと 1 行の値のファイル) を全部、1 回の呼び出しで渡す。例は PR の本文とタイトル。
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/check-outgoing-text.py" .cache/pr-<slug>.md .cache/pr-<slug>.title; echo "rc=$?"
+```
+
+入口は層ごとの状態、検出の座標 (何番目に渡したファイルの何行目か、どの層か。`--target-private` は数えない)、`result=` の行を出す。語もパスも出さない。状態と理由の語彙は入口の docstring が持つ。終了コードと `result=` の組で次の行動を決める。
+
+| 終了コードと result | 行動 |
+|---|---|
+| 0 / ok | 渡す |
+| 1 / finding | 下の「書き直し」に従って直し、入口の呼び出しからやり直す |
+| 2 / unable | 渡さずに止め、入口の出力をそのままユーザーへ見せる。`reason=input-too-large` のときは、下の「既知の限界」の分け方で通し直してよいかも併せて聞く |
+| 3 / skipped | 渡さずに止め、未検査の層と理由を示して、このまま渡してよいかをユーザーに確認する。承認が無ければ渡さない |
+| 上記以外 (組が合わない、`result=` の行が無い、入口を起動できない) | 渡さずに止め、起きたことをユーザーへ伝える |
+
+検査のあとでファイルを変えたら、理由を問わず入口の呼び出しからやり直す。検査が見たのは入口を呼んだ時点の中身である。やり直しでも公開範囲は判定し直さず、最初の判定の結果を使う。
+
+rc 2 と 3 のあとで、環境変数の値・シェルの設定・リストの所在を調べたり表示したりしない。ツールも入れない。直すのはユーザーで、ここでは理由を伝えて確認するだけにする。
+
+検査が見るのは形の決まったルールとリストに載った語だけである。リストに無い語は通る。個々は公開してよい語なのに列挙の組み合わせが対象を特定する形と、それ自体は固有名詞を含まないまま他の記述の読み方を変えるメタ記述は、リストでは原理的に捕まらない。渡す前に本文を自分で読む。
+
+入口のコマンド行と出力は、公開する本文へ貼らない。コマンド行は skill の置き場の絶対パス (ホームディレクトリを含む) を持つことがあり、座標は語の推定に使える。記録するなら rc と `result=` の行だけにする。
+
+#### 書き直し
+
+rc 1 のときに従う。
+
+- 示された行の該当部分を、綴りの言い換えや略称ではなく中立な表現へ置き換える。言い換えは「リストに無い語は通る」を自分で踏む形になる。層 1 の検出 (パス、メールアドレス、トークンの形) は、値を消すか `<ユーザー名>` のようなプレースホルダへ置き換える
+- 禁止語リストを開かない。環境変数の値を表示しない (値のパス自体が私的な名前を含みがち)。候補の語を組み立てて入口に当てにいかない。どれも語を会話と書き捨てへ持ち込む
+- どの部分か読み取れないとき、2 回書き直しても rc 1 が続くとき、harness が指示した行に当たったときは、書き直さずに座標だけを示してユーザーに聞く。harness の行を黙って落とさない
+
+#### 既知の限界
+
+- 1 行の値を `"$(cat <file>)"` 以外の形で渡すと、検査した中身と一致する保証が無い
+- GitHub の画面上での編集と、この手順を踏まない主体が送る本文は通らない。GitHub が squash merge で足す `Co-authored-by:` の trailer も検査の外にある
+- 送り先の公開範囲はこの手順が判定する。PRIVATE と誤って判定すると層 2 が外れる
+- 起動元に環境変数が届かない環境では、送り先が PRIVATE でない限り層 2 が skipped になり、rc 3 で止まる
+- Linux のホームディレクトリ形のパスは層 1 に当たらない
+- 上限を超える大きさの本文は、`reason=input-too-large` の unable で止まる。検査するには、空行 (改行だけの行) の位置で分けたファイルを全部、1 回の呼び出しで通す。git / gh へ渡すのは元のファイルなので、分けたファイルを順につないだものが元のファイルと一致することを確かめる (例: `cat` でつないだものを `cmp` で元のファイルと比べる)。分けたあとにどちらかを変えたら、分け直して入口の呼び出しからやり直す。上限の値と、空行の位置で分ける理由は入口の docstring が持つ
+
 ### Phase A: コミット
 
-**A.1 メッセージを書く**
+#### A.1 メッセージを書く
 
-`<repo>/.cache/commit-<slug>.txt` に **Write ツールで**書く。`cat <<EOF` は中身が Bash コマンド文字列を通るので使えない。
+`<repo>/.cache/commit-<slug>.txt` に **Write ツールで**書く。`cat <<EOF` の heredoc は使わない。引用しない heredoc では `$` とバッククォートが展開され、書いた中身と違うものがファイルに入りうる。コマンド文字列を検査する hook がある環境では、heredoc の中身もコマンド文字列として検査されて止められうる (「なぜファイル経由なのか」節)。
 
-`<repo>` はコミット対象のリポジトリのルートで、`git rev-parse --show-toplevel` で解決する (置き場のルール自体はグローバル CLAUDE.md が持つ)。`<slug>` は対象を一意に指す短い識別子にする (`commit-readme.txt` / `comment-pr4.md` / `notes-v0.7.0.md` のように、ファイル名だけで何の本文か読めること)。
+`<repo>` はコミット対象のリポジトリのルートで、`git rev-parse --show-toplevel` で解決する (利用者の環境にグローバルな CLAUDE.md があれば、置き場のルールはそこが持つ)。`<slug>` は対象を一意に指す短い識別子にする (`commit-readme.txt` / `comment-pr4.md` / `notes-v0.7.0.md` のように、ファイル名だけで何の本文か読めること)。
 
 名前が決め打ちなので、前回の実行で作ったファイルが残っていることがある。Write する前に存在を確認し、自分が作った残骸なら上書きしてよい。別物なら slug を変える。
 
-本文は自然な日本語でよい。prefix と `(wip)` の一覧は `~/.claude/references/git-workflow.md` が canonical で、グローバル CLAUDE.md の「コミットメッセージのプレフィックスと本文の渡し方」節がそこを名指ししている。末尾に harness が指示するセッショントレーラを `Claude-Session: <URL>` の形式で置く。
+本文は自然な日本語でよい。prefix の一覧や作業中のコミットに付ける標記は、利用者の環境にグローバルな CLAUDE.md や、そこが指す参照ファイルがあれば、そちらが持つ。末尾に harness が指示するセッショントレーラを `Claude-Session: <URL>` の形式で置く。
 
-**A.2 コミットして着地を確認する**
+#### A.2 送る前の検査
+
+A.1 のファイルを「送る前の検査」節の手順で入口へ通す。
+
+#### A.3 コミットして着地を確認する
 
 ```bash
 git commit -F .cache/commit-<slug>.txt && git log -1 --format=%B
@@ -91,46 +162,47 @@ git commit -F .cache/commit-<slug>.txt && git log -1 --format=%B
 
 ### Phase B: push
 
-手順はグローバル CLAUDE.md の push ルールが持つ。
+push の粒度と手順は本 skill の外にある。利用者の環境にグローバルな CLAUDE.md やプロジェクトの CLAUDE.md があれば、そちらが持つ。
 
 ### Phase C: PR とその他の本文
 
-**C.1 本文を書く**
+#### C.1 本文とタイトルを書く
 
-`<repo>/.cache/pr-<slug>.md` に Write ツールで書く。入れるものは変更の要約と背景、検証結果、`Closes` 行 (書式は `dev-workflow:in-repo-issue` が canonical)、末尾に harness が指示するセッション URL。
+`<repo>/.cache/pr-<slug>.md` に Write ツールで書く。入れるものは変更の要約と背景、検証結果、`Closes` 行 (書式は `dev-workflow:in-repo-issue` が canonical)、末尾に harness が指示するセッション URL。タイトルは `<repo>/.cache/pr-<slug>.title` に 1 行の名詞句で書く。
 
 **フッタはコミットと非対称である。** PR 本文は URL の裸置きで `Claude-Session:` キーを付けない。
 
-**C.2 作成して本文が載ったことを確認する**
+#### C.2 送る前の検査
+
+本文とタイトルのファイルを「送る前の検査」節の手順で、一緒に入口へ通す。
+
+#### C.3 作成して本文が載ったことを確認する
 
 ```bash
-gh pr create --body-file .cache/pr-<slug>.md --title "<1 行>" && gh pr view --json url,title,body
+test -s .cache/pr-<slug>.title && gh pr create --body-file .cache/pr-<slug>.md --title "$(cat .cache/pr-<slug>.title)" && gh pr view --json url,title,body
 ```
 
 `--assignee` や `--base` などのフラグと、作成後の PR 確認手順はプロジェクトの CLAUDE.md が定める。プロジェクトごとに異なるのでここには書かない。
 
-**`--title` だけはファイルで渡せない。** これが本 skill の方針を貫けない唯一の箇所である。タイトルは 1 行の名詞句で書き、句点を入れないこと。
+タイトルを `--title` へ直接書くと、検査を通っていない文字列が渡る。コマンド文字列を検査する hook がある環境では、句点で止められもする (「なぜファイル経由なのか」節)。上の例のとおり、ワークフローの 3 手目の形で渡す。
 
-**C.3 その他の面**
+#### C.4 その他の面
 
-同じ形で渡す。置き場は `<repo>/.cache/` で、ファイル名は面がわかるものにする。
+同じ形で渡す。置き場は `<repo>/.cache/` で、ファイル名は面がわかるものにする。どの面も 2 手目で、渡すコマンドが読む `.cache/` のファイルを全部入口へ通す。
 
 | 渡す | 載ったことを確認する |
 |---|---|
 | `gh pr edit <num> --body-file .cache/pr-<slug>.md` | `gh pr view <num> --json body` |
 | `gh pr comment <num> --body-file .cache/comment-<slug>.md` | `gh pr view <num> --json comments` |
 | `gh pr review <num> --approve --body-file .cache/review-<slug>.md` | `gh pr view <num> --json reviews` |
-| `gh issue create --title "<1 行>" --body-file .cache/issue-<slug>.md` | `gh issue view <num> --json body` |
-| `gh release create <tag> --title "<1 行>" --notes-file .cache/notes-<slug>.md` | `gh release view <tag> --json body` |
+| `test -s .cache/issue-<slug>.title && gh issue create --title "$(cat .cache/issue-<slug>.title)" --body-file .cache/issue-<slug>.md` | `gh issue view <num> --json title,body` |
+| `test -s .cache/notes-<slug>.title && gh release create <tag> --title "$(cat .cache/notes-<slug>.title)" --notes-file .cache/notes-<slug>.md` | `gh release view <tag> --json name,body` |
 | `git tag -a <tag> -F .cache/tag-<slug>.txt` | `git tag -n99 -l <tag>` |
-| `gh pr merge <num> --squash --subject "<1 行>" --body-file .cache/merge-<slug>.md` | `git log -1 --format=%B origin/main` |
+| `test -s .cache/merge-<slug>.title && gh pr merge <num> --squash --subject "$(cat .cache/merge-<slug>.title)" --body-file .cache/merge-<slug>.md` | `git log -1 --format=%B origin/main` |
 
-`--title` と同じく `gh issue create --title` / `git tag <tag>` / `gh pr merge --subject` も
-インラインなので句点を入れない。
+1 行の値 (`--title` / `--subject`) はどれもワークフローの 3 手目の形で渡す。タグ名 (`git tag -a <tag>` の `<tag>`) は版の名前で本文ではないので、ファイルにしない。
 
-**`gh pr merge --subject` は省略しないこと。**省略すると GitHub が subject を生成し、その形が
-in-repo Issue の識別子規約に違反する。書くべき形の canonical は `dev-workflow:in-repo-issue` の
-`## PR / コミット規約` 節で、本 skill は形を再掲しない。
+**`gh pr merge --subject` は省略しないこと。**省略すると GitHub が subject を生成し、その形が in-repo Issue の識別子規約に違反する。書くべき形の canonical は `dev-workflow:in-repo-issue` の「PR / コミット規約」節で、本 skill は形を再掲しない。
 
 フッタの既定は面ごとに次のとおり。harness がこれと異なる指示を出したらそちらが優先。
 
@@ -144,23 +216,28 @@ in-repo Issue の識別子規約に違反する。書くべき形の canonical �
 
 | 思考の罠 | 実態 |
 |---|---|
-| 「短いから `-m` でいい」「ブロックされたら半角に直せばいい」 | どちらも例外判定を続ける道。その判定こそが繰り返し失敗した箇所なので、無条件にファイル経由にする |
-| 「heredoc でファイルに書けば同じこと」 | heredoc の中身は Bash コマンド文字列を通る。ブロックされるのはコマンド全体なのでファイルすら作られない |
-| 「`--body-file` を使ったから全部安全」 | `--title` はインライン。タイトルに句点を入れると弾かれる |
+| 「短いから `-m` でいい」「ブロックされたら半角に直せばいい」 | どちらも例外判定を続ける道。その判定こそが繰り返し失敗した箇所なので、無条件にファイル経由にする。インラインの本文は入口の検査も通っていない |
+| 「heredoc でファイルに書けば同じこと」 | 引用しない heredoc は `$` とバッククォートを展開するので、書いた中身と違うものが入りうる。コマンド文字列を検査する hook がある環境では、止められるのはコマンド全体なのでファイルすら作られない (「なぜファイル経由なのか」節) |
+| 「`--body-file` を使ったから全部安全」 | `--title` / `--subject` へ直接書いた値は検査を通っていない。コマンド文字列を検査する hook がある環境では、句点で止められもする (「なぜファイル経由なのか」節)。1 行の値もファイルに書いて検査し、ワークフローの 3 手目の形で渡す |
 | 「読点や全角括弧も避けるべき」 | 発火しない。過剰な自己規制で日本語が不自然になる |
 | 「コミットと PR に同じフッタを付ける」 | 非対称。コミットは `Claude-Session: <URL>`、PR 本文は URL の裸置き |
-| 「コミットと PR だけ気をつければいい」 | `gh pr comment` / `gh release create` / `git tag -a` も同じ機構で踏む。境界は面ではなく「日本語の散文が Bash を通るか」 |
+| 「コミットと PR だけ気をつければいい」 | コメント、レビュー、リリースノート、タグの本文も公開される。境界は面ではなく「公開される本文か」 |
+| 「検査で 3 が出たが急ぐので渡す」 | 3 は未検査の層が残っている状態で、緑ではない。ユーザーの承認が無ければ渡さない |
+| 「rc 1 の語をリストで確かめる」 | リストを開くと語が会話と書き捨てへ入る。示された行を中立な表現へ書き直すだけにする |
+| 「skip の理由を見て環境を直しに行く」 | 環境変数の値、シェルの設定、リストの所在を調べると、私的な名前が会話へ出る。直すのはユーザーで、理由を伝えて確認するだけにする |
+| 「通ったあとの小さな修正をそのまま渡す」 | 検査が見たのは修正前の中身である。理由を問わず入口の呼び出しからやり直す (公開範囲は判定し直さない) |
+| 「rc 1 を見てから公開範囲を判定し直す」 | 検出を消すために層 2 を外す道になる。判定は最初に入口を呼ぶ前の 1 回だけで、やり直しでもその結果を使う |
+| 「上限を超えた本文を行の途中で分けて通す」 | 切れ目をまたぐ一致がどちらの層からも消える。空行の位置で分ける (理由は入口の docstring) |
 
 ## 関連
 
-- `dev-workflow:in-repo-issue` (sibling skill): PR タイトル書式と `Closes` 行の書式の canonical。in-repo Issue は同 skill が Write と Edit でファイルを直接扱うので Bash コマンド文字列を通らない (GitHub Issues を使うリポジトリで `gh issue create` を打つ場合は本 skill の対象)
+- `dev-workflow:in-repo-issue` (sibling skill): PR タイトル書式と `Closes` 行の書式の canonical。in-repo Issue の本文は追跡ファイルの内容で、git / gh へメッセージや本文として渡すものではないので本 skill の対象外 (起票や更新のコミット本文は対象)。GitHub Issues を使うリポジトリで `gh issue create` に渡す本文は本 skill の対象
 - `dev-workflow:pre-merge-quality-gate` (sibling skill): `gh pr create` と `gh pr merge` の直前に通すゲート。本 skill は何をどう書いて渡すかだけを持ち、いつ実行してよいかは持たない
 - `dev-workflow:git-branch-switcher` (sibling skill): 作業前のブランチ選択
 
-本 skill が持つのは本文の作成と受け渡しだけである。その前後の工程 (リリースの版更新やタグ付けの順序、Issue の起票フロー、レビューの approve 判断など) は各プロジェクトの CLAUDE.md と上記の兄弟 skill が持つ。本 skill が沈黙している工程は「不要」ではなく「他所の担当」と読むこと。
+本 skill が持つのは本文の作成と、送る前の検査と、受け渡しだけである。その前後の工程 (リリースの版更新やタグ付けの順序、Issue の起票フロー、レビューの approve 判断など) は各プロジェクトの CLAUDE.md と上記の兄弟 skill が持つ。本 skill が沈黙している工程は「不要」ではなく「他所の担当」と読むこと。
 
 ## 関連 CLAUDE.md ルール
 
-- `~/.claude/CLAUDE.md`: push ルール / 一時ファイルの置き場 / prefix 一覧の所在
-- `~/.claude/references/git-workflow.md`: prefix と `(wip)` の一覧 (CLAUDE.md が指す先)
+- 利用者の環境のグローバルな CLAUDE.md とそこが指す参照ファイル (あれば): push のルール / 一時ファイルの置き場 / prefix の一覧
 - 各プロジェクトの `CLAUDE.md`: `gh pr create` のフラグと PR 確認手順

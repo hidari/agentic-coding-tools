@@ -95,7 +95,7 @@ def issue_md(
     """fixture 用の issue.md を組む。frontmatter は status の後ろへ足す行。
 
     親子リンク用に別のビルダを立てず既存のここへ引数を足すのは、fixture の派生方法が
-    増えるとテストごとに違う形の issue.md が生まれるため (ISSUE-42 が扱っている問題)。
+    増えるとテストごとに違う形の issue.md が生まれるため。
     """
     head = "\n".join(["---", f"status: {status}", *frontmatter, "---"])
     body = "\n".join(tasks)
@@ -1305,9 +1305,8 @@ class Attachment(unittest.TestCase):
         self.assertTrue(lines[lines.index(run) - 1].startswith("- name:"))
 
 
-# 参照先の skill を名指ししている形だけを見る。`「X」節` 単体は同じ文書内の節を指す用法が
-# 既に 8 箇所あり (in-repo-issue に 5 / retrospective-codify に 2 / commit-and-pr-message
-# に 1)、区別せずに拾うと参照先が別文書だと誤診して赤くなる
+# 参照先の skill を名指ししている形だけを見る。`「X」節` 単体は同じ文書の中の節を指す用法が
+# 複数の SKILL.md にあり、区別せずに拾うと参照先が別文書だと誤診して赤くなる
 CROSS_SKILL_REFERENCE = re.compile(r"`([a-z0-9-]+):([a-z0-9-]+)` の「([^」]+)」節")
 
 
@@ -1372,8 +1371,8 @@ class SectionReferences(unittest.TestCase):
 
         射程はここまで。見ているのは「gate のどこかに 1 本ある」ことだけで、入口が Phase 0 /
         2 / 3 に在ることは見ていない。3 箇所を消しても Phase 5 の名指しをこの記法へ書き換えれば
-        緑になる。ISSUE-41 が直した状態そのもの (main 時点の gate はこの記法に 0 件しか
-        マッチしない) は捕まるが、同じ状態の別の作り方は捕まらない。
+        緑になる。gate がこの記法の名指しを 1 本も持たない状態は捕まるが、同じ状態の別の
+        作り方は捕まらない。
         """
         text = "\n".join(_prose_lines(GATE_SKILL_MD))
         targets = {

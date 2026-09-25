@@ -40,16 +40,12 @@ pre-1.0 のあいだは次のとおり。
 
 ### 1. 事前検査
 
-main が最新で clean であることを確かめ、検査を全部通す。
+main が最新で clean であることを確かめ、検査を全部通す。何が走るかの canonical は `.pre-commit-config.yaml` で、ここでは検査を列挙しない。
 
 ```bash
 git checkout main && git pull
 git status --porcelain
-python3 scripts/run-python-tests.py
-python3 plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py --check
-python3 scripts/check-related-refs.py
-python3 scripts/check-package-shape.py
-python3 scripts/gen-readme.py --check
+pre-commit run --all-files
 ```
 
 CI も main の最新 SHA で確認する。**run の success だけでは足りない。**
@@ -76,21 +72,23 @@ git diff --stat <前回のtag>..HEAD -- plugins/ skills/
 
 本文はファイル経由で渡す。理由と書式の canonical は `dev-workflow:commit-and-pr-message`。
 
-**渡す前に禁止語の検査へ通す。** タグ本文は `gitleaks` の走査面の外にあり (ISSUE-15 の実測)、
-コミットメッセージを見る hook も届かない。この面を見る機会はこの手順にしか無いので、飛ばすと
-誰も見ないまま公開される。しかも push した後で本文を直すには打ち直すしかなく、参照が変わる。
+渡す前に漏洩検査の入口へ通す。タグ本文は全履歴の `gitleaks` 走査 (ファイル内容だけを見る) の
+面の外にあり (実測)、コミットメッセージを見る hook も届かない。この面を見る機会は
+この手順にしか無いので、飛ばすと誰も見ないまま公開される。しかも push した後で本文を直すには
+打ち直すしかなく、参照が変わる。
 
 ```bash
-python3 scripts/check-leak-guard-denylist.py --check-text .cache/tag-v<X.Y.Z>.txt
+python3 plugins/dev-workflow/skills/commit-and-pr-message/scripts/check-outgoing-text.py .cache/tag-v<X.Y.Z>.txt; echo "rc=$?"
 ```
 
-検査が skip された状態は緑ではない。禁止語リストが未設定の環境では静かに通るので、
-設定してから打ち直すこと (入口と出力の canonical はスクリプトの docstring)。
+このリポジトリは PUBLIC なので `--target-private` は付けない。終了コードと `result=` の組ごとの
+行動、検査のあとでファイルを変えたときのやり直し、渡す前に本文を自分で読む理由は、リポジトリ内の
+`plugins/dev-workflow/skills/commit-and-pr-message/SKILL.md` の「送る前の検査」節に従う。
 
-この検査が見るのはリストに載っている語だけである。**載っていないものは通る**ので、本文は
-自分で読んでから渡す。特に、個々は公開してよい語なのに列挙の組み合わせが対象を特定する形と、
-それ自体は固有名詞を含まないまま他の記述の読み方を変えるメタ記述は、リストでは原理的に
-捕まらない。
+読み込まれている `dev-workflow:commit-and-pr-message` へ委ねるだけにしないのは、消費側が
+この skill を SHA で pin しているためである。読み込まれるのは pin の時点の版で、このリポジトリの
+版より古いことがあり、入口を持たない版もある。入口も手順も、このリポジトリの作業ツリーにある版を
+使う。
 
 ```bash
 git tag -a v<X.Y.Z> -F .cache/tag-v<X.Y.Z>.txt
@@ -104,17 +102,18 @@ tag は対象外である。
 ### 4. GitHub release を作る
 
 release note も手順 3 と同じ検査を通す。理由も同じで、この面を見る機会がここにしか無い。
+タイトルは `.cache/notes-v<X.Y.Z>.title` に 1 行で書き、ノートと一緒に 1 回の呼び出しで通す。
 
 ```bash
-python3 scripts/check-leak-guard-denylist.py --check-text .cache/notes-v<X.Y.Z>.md
+python3 plugins/dev-workflow/skills/commit-and-pr-message/scripts/check-outgoing-text.py .cache/notes-v<X.Y.Z>.md .cache/notes-v<X.Y.Z>.title; echo "rc=$?"
 ```
 
 ```bash
-gh release create v<X.Y.Z> --title "<1 行>" --notes-file .cache/notes-v<X.Y.Z>.md
-gh release view v<X.Y.Z> --json body,tagName,url
+test -s .cache/notes-v<X.Y.Z>.title && gh release create v<X.Y.Z> --title "$(cat .cache/notes-v<X.Y.Z>.title)" --notes-file .cache/notes-v<X.Y.Z>.md
+gh release view v<X.Y.Z> --json name,body,tagName,url
 ```
 
-`--title` はインラインなので句点を入れない。
+タイトルの渡し方 (`test -s` を前に置く理由を含む) は、手順 3 で名指した SKILL.md の「ワークフロー」節の「渡す」と「C.4 その他の面」に従う。
 
 release note に必ず入れるもの:
 
@@ -146,10 +145,11 @@ lockfile が持つのは plugin 個別の版で、リポジトリの tag とは�
 | 「plugin.json の version を tag に揃える」 | 別の数列である。plugin 個別の版と、コレクション全体の版は独立に動く |
 | 「`docs/issues/` を直したから release」 | 配布物が変わっていない。消費側が pin を上げる理由が無い |
 | 「release note は commit を並べれば足りる」 | 消費側が知りたいのは「自分の呼び出しが壊れるか」。壊れる変更を冒頭に置く |
-| 「gitleaks が全履歴で緑だからタグ本文も見られている」 | 走査するのはファイル内容だけである。タグ本文・コミットメッセージ・author はいずれも面の外 (ISSUE-15 の実測)。手順 3 と 4 の検査を飛ばすと、この面は誰も見ない |
+| 「gitleaks が全履歴で緑だからタグ本文も見られている」 | 全履歴の走査が見るのはファイル内容だけである。タグ本文・コミットメッセージ・author はいずれも面の外 (実測)。手順 3 と 4 で入口を通さないと、この面は誰も見ない |
+| 「読み込まれている commit-and-pr-message に従えば検査も済む」 | 読み込まれるのは消費側の pin の版で、入口を持たないことがある。入口と「送る前の検査」節は、このリポジトリ内のパスで使う |
 
 ## 関連
 
-- `dev-workflow:commit-and-pr-message`: tag メッセージと release note の渡し方の canonical
+- `dev-workflow:commit-and-pr-message`: tag メッセージと release note の渡し方の canonical。送る前の検査の行動は、このリポジトリ内の同 skill の SKILL.md を読む (手順 3)
 - `dev-workflow:git-branch-switcher`: 作業前のブランチ選択
 - `dev-workflow:pre-merge-quality-gate`: release へ含める変更をマージする前のゲート
