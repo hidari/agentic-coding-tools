@@ -1,6 +1,6 @@
 """jevlint_host.py (env、host、node、上流の起動) の仕様。
 
-見るのは次の 9 つの入口: `build_env`、`install_env`、`key_status`、`host_dir`、
+見るのは次の 11 の入口: `build_env`、`install_env`、`key_status`、`host_dir`、
 `prepare_host`、`host_reusable`、`parse_node_version`、`engines_ok`、`read_engines`、
 `upstream_argv`、`fixed_tail`。`prepare_host` のテストだけが `run` を偽物に差し替えて
 副作用 (argv・cwd・env・ファイルの生成) を見る。ネットワーク・pnpm 本体・node 本体・
@@ -11,12 +11,19 @@
 テストの `source` は `os.environ` を直接使わず、`XDG_CACHE_HOME` を差し替えた辞書を渡す
 (host の置き場をテストごとに隔離するため)。cwd の検査は `os.chdir` で「消費側のリポジトリ」
 を模した別ディレクトリへ一時的に移動し、`run` に渡った cwd がそれと一致しないことで見る。
+
+権限エラー (`PermissionError`) と symlink ループの `resolve()` の扱いは Python の版で
+挙動が違う (3.9.6 では例外が伝播するが、3.14.7 の pathlib はどちらも握りつぶして偽の
+値を返す。fix round 1 で実測)。該当のテストは `sys.version_info` で期待値を分けており、
+`unittest.skip` は使わない (このリポジトリのテスト runner は skip を赤にする)。
 """
 
 from __future__ import annotations
 
 import json
 import os
+import stat
+import sys
 import tempfile
 import types
 import unittest
@@ -37,10 +44,16 @@ class BuildEnvTests(unittest.TestCase):
         "NODE_TLS_REJECT_UNAUTHORIZED": "0",
         "NODE_EXTRA_CA_CERTS": "/etc/ssl/custom.pem",
         "GIT_DIR": "/somewhere/else/.git",
+        "GIT_CONFIG_PARAMETERS": "'core.fsmonitor=evil'",
         "JEV_LINT_AST_GREP": "/tmp/evil-ast-grep",
         "TYPESAFEAI_API_KEY": "legacy-secret",
         "TYPESAFE_BASE_URL": "https://evil.example",
         "TYPESAFE_API_KEY": "secret-key",
+        # "L" で始まるが LC_ prefix ではない変数。`startswith("LC_")` が
+        # `startswith("L")` に退行する変異を検出するために入れる (fix round 1)
+        "LD_PRELOAD": "/evil.so",
+        "DYLD_INSERT_LIBRARIES": "/evil.dylib",
+        "LANGUAGE": "de:en",
     }
 
     def test_without_key_output_is_subset_of_allowlist(self):
@@ -61,10 +74,14 @@ class BuildEnvTests(unittest.TestCase):
             "NODE_TLS_REJECT_UNAUTHORIZED",
             "NODE_EXTRA_CA_CERTS",
             "GIT_DIR",
+            "GIT_CONFIG_PARAMETERS",
             "JEV_LINT_AST_GREP",
             "TYPESAFEAI_API_KEY",
             "TYPESAFE_BASE_URL",
             "TYPESAFE_API_KEY",
+            "LD_PRELOAD",
+            "DYLD_INSERT_LIBRARIES",
+            "LANGUAGE",
         ):
             self.assertNotIn(forbidden, env)
 
@@ -112,6 +129,24 @@ class BuildEnvTests(unittest.TestCase):
         env = jevlint_host.build_env(source, with_key=False)
         self.assertEqual(env["LC_ALL"], "fr_FR.UTF-8")
 
+    def test_path_keeps_only_absolute_nonempty_entries(self):
+        # node 24.18.0 の spawnSync("git", {cwd: worktree}) で実測 (fix round 1):
+        # 相対成分や空成分がある PATH は worktree 内のコミット済み実行ファイル
+        # (mode 100755 の blob) を解決してしまう
+        cases = [
+            ("node_modules/.bin:/usr/bin:/bin", "/usr/bin:/bin"),
+            (":/usr/bin:/bin", "/usr/bin:/bin"),
+            ("/usr/bin:/bin:.", "/usr/bin:/bin"),
+            ("/usr/bin:/bin:", "/usr/bin:/bin"),
+            ("/usr/bin:/bin", "/usr/bin:/bin"),
+        ]
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                source = dict(self.SOURCE)
+                source["PATH"] = raw
+                env = jevlint_host.build_env(source, with_key=False)
+                self.assertEqual(env["PATH"], expected)
+
 
 class InstallEnvTests(unittest.TestCase):
     SOURCE = {
@@ -141,6 +176,34 @@ class InstallEnvTests(unittest.TestCase):
         self.assertEqual(env["HTTPS_PROXY"], "http://proxy.example:8080")
         self.assertEqual(env["PATH"], "/usr/bin:/bin")
         self.assertEqual(env["FOO"], "bar")
+
+    def test_path_keeps_only_absolute_nonempty_entries(self):
+        source = dict(self.SOURCE)
+        source["PATH"] = "node_modules/.bin:/usr/bin::/bin:.:"
+        env = jevlint_host.install_env(source)
+        self.assertEqual(env["PATH"], "/usr/bin:/bin")
+
+    def test_drops_npm_and_pnpm_config_vars_case_insensitively(self):
+        # pnpm 12.3.4 で実測 (fix round 1): `pnpm add` 自身が PNPM_CONFIG_REGISTRY を
+        # 読み、到達不能な registry を指すとそこへ fetch しようとして失敗する
+        # (`pnpm config get registry` だけの話ではない)
+        source = dict(self.SOURCE)
+        source.update(
+            {
+                "npm_config_registry": "http://evil.example",
+                "PNPM_CONFIG_REGISTRY": "http://evil.example",
+                "Npm_Config_Cafile": "/evil.pem",
+                "pnpm_config_store_dir": "/evil-store",
+            }
+        )
+        env = jevlint_host.install_env(source)
+        for dropped in (
+            "npm_config_registry",
+            "PNPM_CONFIG_REGISTRY",
+            "Npm_Config_Cafile",
+            "pnpm_config_store_dir",
+        ):
+            self.assertNotIn(dropped, env)
 
 
 class KeyStatusTests(unittest.TestCase):
@@ -188,6 +251,39 @@ class HostDirTests(unittest.TestCase):
     def test_raises_when_neither_present(self):
         with self.assertRaises(jevlint_host.HostError):
             jevlint_host.host_dir("0.7.0", {})
+
+    def test_relative_xdg_cache_home_is_ignored_and_falls_back_to_home(self):
+        # XDG Base Directory の仕様: 相対な値は invalid で無視しなければならない。
+        # 無視せず使うと host が起動時の cwd (消費側のリポジトリになりうる) の下に
+        # 置かれる (fix round 1 で実測)
+        path = jevlint_host.host_dir(
+            "0.7.0", {"XDG_CACHE_HOME": "cache", "HOME": "/home/user"}
+        )
+        self.assertEqual(path, Path("/home/user/.cache/jev-lint-curated/0.7.0"))
+
+    def test_unexpanded_tilde_xdg_cache_home_is_ignored(self):
+        path = jevlint_host.host_dir(
+            "0.7.0", {"XDG_CACHE_HOME": "~/.cache", "HOME": "/home/user"}
+        )
+        self.assertEqual(path, Path("/home/user/.cache/jev-lint-curated/0.7.0"))
+
+    def test_raises_when_xdg_relative_and_home_missing(self):
+        with self.assertRaises(jevlint_host.HostError):
+            jevlint_host.host_dir("0.7.0", {"XDG_CACHE_HOME": "cache"})
+
+    def test_raises_when_home_is_relative(self):
+        with self.assertRaises(jevlint_host.HostError):
+            jevlint_host.host_dir("0.7.0", {"HOME": "relative/home"})
+
+    def test_raises_when_home_is_unexpanded_tilde(self):
+        with self.assertRaises(jevlint_host.HostError):
+            jevlint_host.host_dir("0.7.0", {"HOME": "~"})
+
+    def test_rejects_unsafe_version_component(self):
+        for version in ("", ".", "..", "a/b", "a\\b"):
+            with self.subTest(version=version):
+                with self.assertRaises(jevlint_host.HostError):
+                    jevlint_host.host_dir(version, {"HOME": "/home/user"})
 
 
 def _populate_fake_package(root: Path, version: str) -> None:
@@ -282,15 +378,87 @@ class PrepareHostTests(unittest.TestCase):
         self.assertEqual(run2.calls, [])
 
     def test_version_mismatch_rebuilds_host(self):
-        run1 = _FakeRun("0.7.0")
-        jevlint_host.prepare_host("0.7.0", self.source, run=run1)
-        run2 = _FakeRun("0.8.0")
-        host = jevlint_host.prepare_host("0.8.0", self.source, run=run2)
-        self.assertEqual(len(run2.calls), 1)
+        # 前の版は「別バージョンの host_dir を用意した」だけで、書き直しの分岐
+        # (host_reusable(host) が偽で既存の host をどかしてから置き換える経路) を
+        # 一度も通っていなかった (fix round 1 のレビューで指摘。:221-222 相当を消しても
+        # 50/50 green のまま、と実測された)。同じ host_dir("0.7.0", ...) に直接古い
+        # version を置いてから、その同じ version で prepare_host を呼び直す
+        host = jevlint_host.host_dir("0.7.0", self.source)
+        _populate_fake_package(host, "0.6.9")
+        run = _FakeRun("0.7.0")
+        result = jevlint_host.prepare_host("0.7.0", self.source, run=run)
+        self.assertEqual(result, host)
+        self.assertEqual(len(run.calls), 1)
         package_json = json.loads(
             (host / "node_modules/jev-lint/package.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(package_json["version"], "0.8.0")
+        self.assertEqual(package_json["version"], "0.7.0")
+        leftovers = [p.name for p in host.parent.iterdir() if p.name != host.name]
+        self.assertEqual(leftovers, [])
+
+    def test_pnpm_runs_in_a_tmp_dir_not_directly_in_host(self):
+        # 「一時ディレクトリで取得してから host の名前へ置く」設計そのものを pin する。
+        # host へ直接インストールする変異でも、最終状態 (cli.js が host にある) だけを
+        # 見るテストは green のままだった (fix round 1 のレビューで指摘)
+        host = jevlint_host.host_dir("0.7.0", self.source)
+        seen = {}
+
+        def probing_run(argv, cwd, env):
+            seen["cwd"] = Path(cwd)
+            seen["host_existed_during_run"] = host.exists()
+            _populate_fake_package(Path(cwd), "0.7.0")
+            return types.SimpleNamespace(returncode=0)
+
+        jevlint_host.prepare_host("0.7.0", self.source, run=probing_run)
+        self.assertNotEqual(seen["cwd"], host)
+        self.assertTrue(seen["cwd"].name.startswith(".tmp-"), seen["cwd"].name)
+        self.assertFalse(seen["host_existed_during_run"])
+
+    def test_concurrent_winner_already_placed_host_is_respected(self):
+        # 2 プロセスが同時に「再利用できない」と判定して pnpm を走らせた場面を模す。
+        # 自分の run が返る前に、別プロセス (勝者) が同じ version を host に直接
+        # 置いてしまっている。tmp.replace(host) は host が非空になっていて競合するが、
+        # prepare_host は host を再確認して勝者に譲り、例外を出さない。
+        #
+        # 勝者と自分の取得物を同じ内容にすると、「再確認して譲る」と「確認せず自分の
+        # もので上書きする」が区別できない (両方とも最終的に妥当な 0.7.0 の host に
+        # なるため)。post-pnpm の再確認を消す変異を当てても green のままだったことを
+        # 変異注入で確認したので、cli.js の中身を勝者と自分とで変えて区別できるようにする
+        host = jevlint_host.host_dir("0.7.0", self.source)
+        winner_marker = "// winner cli (別プロセスが置いた)\n"
+
+        def winner_run(argv, cwd, env):
+            package_dir = host / "node_modules" / "jev-lint"
+            (package_dir / "dist").mkdir(parents=True, exist_ok=True)
+            (package_dir / "dist" / "cli.js").write_text(winner_marker, encoding="utf-8")
+            (package_dir / "package.json").write_text(
+                json.dumps({"version": "0.7.0", "engines": {"node": ">=24"}}),
+                encoding="utf-8",
+            )
+            _populate_fake_package(Path(cwd), "0.7.0")  # 自分の tmp 側も揃える
+            return types.SimpleNamespace(returncode=0)
+
+        result = jevlint_host.prepare_host("0.7.0", self.source, run=winner_run)
+        self.assertEqual(result, host)
+        self.assertEqual(
+            (host / "node_modules/jev-lint/dist/cli.js").read_text(encoding="utf-8"),
+            winner_marker,
+        )
+        # 自分の tmp が host の隣に残っていない (勝者の host だけが残る)
+        siblings = [p.name for p in host.parent.iterdir()]
+        self.assertEqual(siblings, [host.name])
+
+    def test_run_succeeds_but_leaves_incomplete_package(self):
+        # pnpm が rc=0 を返しても、取得物の形が想定と違えば (populate=False) 再利用
+        # できないとみなして HostError にする。returncode!=0 の失敗経路と混同しない
+        # ことを別のテストとして pin する
+        run = _FakeRun("0.7.0", returncode=0, populate=False)
+        with self.assertRaises(jevlint_host.HostError):
+            jevlint_host.prepare_host("0.7.0", self.source, run=run)
+        host = jevlint_host.host_dir("0.7.0", self.source)
+        self.assertFalse(host.exists())
+        remaining = list(host.parent.iterdir()) if host.parent.exists() else []
+        self.assertEqual(remaining, [])
 
     def test_pnpm_workspace_ancestor_is_rejected(self):
         self.cache_home.mkdir(parents=True, exist_ok=True)
@@ -299,6 +467,29 @@ class PrepareHostTests(unittest.TestCase):
         with self.assertRaises(jevlint_host.HostError):
             jevlint_host.prepare_host("0.7.0", self.source, run=run)
         self.assertEqual(run.calls, [])
+
+    def test_symlink_loop_in_cache_path_becomes_hosterror(self):
+        # 3.9.6: _reject_pnpm_workspace_ancestor の resolve() が RuntimeError になり
+        # HostError に変わる (実測)。3.14.7: resolve() 自体は例外にならないが、その後の
+        # parent.mkdir() がループを辿れず OSError (ELOOP) になり、それも HostError に
+        # 変わる (jevlint_tree.py の _temp_base と同じ収束。両方とも実測、fix round 1)。
+        # どちらの版でも HostError になるので version 分岐は要らない
+        loop = self.cache_home.parent / "loop"
+        loop.symlink_to(loop)
+        source = {"XDG_CACHE_HOME": str(loop / "cache")}
+        with self.assertRaises(jevlint_host.HostError):
+            jevlint_host.prepare_host("0.7.0", source, run=_FakeRun("0.7.0"))
+
+    def test_permission_denied_ancestor_becomes_hosterror(self):
+        # 3.9.6: 祖先の exists() が PermissionError を再送出し HostError になる (実測)。
+        # 3.14.7: exists() は握りつぶして False を返すが、その後 parent.mkdir() が
+        # 同じ権限不足で OSError になり、それも HostError に変わる (実測、fix round 1)。
+        # これも両方の版で HostError に収束する
+        self.cache_home.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.cache_home, 0)
+        self.addCleanup(os.chmod, self.cache_home, stat.S_IRWXU)
+        with self.assertRaises(jevlint_host.HostError):
+            jevlint_host.prepare_host("0.7.0", self.source, run=_FakeRun("0.7.0"))
 
     def test_package_json_written_is_private_true(self):
         seen = {}
@@ -350,6 +541,22 @@ class HostReusableTests(unittest.TestCase):
 
     def test_false_when_host_empty(self):
         self.assertFalse(jevlint_host.host_reusable(self.host, "0.7.0"))
+
+    def test_permission_denied_host_directory(self):
+        # host_reusable は単独の関数で、prepare_host のように downstream の mkdir で
+        # 例外を収束させる仕組みが無い。is_file() の PermissionError の扱いが版で
+        # 違う (実測、fix round 1): 3.9.6 は再送出するので host_reusable は
+        # HostError にする。3.14.7 の pathlib は PermissionError も握りつぶして
+        # False を返すので、この版では「再利用できない」という通常の判定に落ちる。
+        # unittest.skip は使わず (このリポジトリの runner は skip を赤にする)、
+        # 版ごとの正しい期待値をそれぞれ検証する
+        os.chmod(self.host, 0)
+        self.addCleanup(os.chmod, self.host, stat.S_IRWXU)
+        if sys.version_info >= (3, 13):
+            self.assertFalse(jevlint_host.host_reusable(self.host, "0.7.0"))
+        else:
+            with self.assertRaises(jevlint_host.HostError):
+                jevlint_host.host_reusable(self.host, "0.7.0")
 
 
 class ParseNodeVersionTests(unittest.TestCase):

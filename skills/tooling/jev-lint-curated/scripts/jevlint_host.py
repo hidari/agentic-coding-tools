@@ -2,10 +2,10 @@
 
 `jevlint.py` (入口) の下流モジュールの 1 つ。上流 (jev-lint) は消費側のリポジトリの外にある
 ラッパ所有の host ディレクトリへ、キー無しの env で取得する (`prepare_host`)。上流の起動その
-ものの env は `build_env` が組み立て、上流に渡してよい変数だけを列挙形式ではなく allowlist
-形式で写す (spec の「設定と、起動の引数と環境変数」節)。`install_env` は取得のときだけに使う
-別の組み立てで、pnpm と `@ast-grep/cli` の postinstall にキーと上流固有の変数を見せない
-ための落とし方 (denylist 形式) を取る。この 2 つの組み立て方向が違う理由は、上流の起動は
+ものの env は `build_env` が組み立て、上流に渡してよい変数だけを allowlist 形式で写す
+(spec の「設定と、起動の引数と環境変数」節)。`install_env` は取得のときだけに使う別の
+組み立てで、pnpm と `@ast-grep/cli` の postinstall にキーと上流固有の変数を見せないための
+落とし方 (denylist 形式) を取る。allowlist と denylist で方向が違う理由は、上流の起動は
 「入れてよいものだけ許す」対象が小さく、取得は「消費側や利用者の環境をほぼそのまま渡しつつ
 危険な一部だけ落とす」対象が大きいため。
 
@@ -19,7 +19,9 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -57,6 +59,23 @@ _FIXED_GIT_SAFETY_ENV = {
 _INSTALL_DROPPED_PREFIXES = ("TYPESAFE_", "TYPESAFEAI_", "JEV_LINT_")
 
 
+def _sanitize_path(value: str) -> str:
+    """`PATH` の各成分から、絶対パスでない・空の成分を落とす。
+
+    相対な成分 (`node_modules/.bin`、`.`、先頭や途中の空成分など) を含む `PATH` で
+    bare なコマンド名 (`git`、`pnpm`) を起動すると、worktree や消費側のリポジトリの
+    中にある実行ファイルが先に解決されうる。`jevlint_tree.py` の展開は mode 100755 の
+    blob を実行ビット付きで書き出すので、コミットされた実行ファイルは worktree の中で
+    「実行できる」状態になる。node 24.18.0 の `spawnSync("git", {cwd: worktree})` で
+    実測 (fix round 1 のレビュー): `PATH=node_modules/.bin:/usr/bin:/bin` は
+    `node_modules/.bin/git` を、`PATH=:/usr/bin:/bin` (先頭が空成分) は `./git` を、
+    `PATH=/usr/bin:/bin` (絶対パスのみ) は `/usr/bin/git` を解決した。`build_env`
+    (上流の起動) と `install_env` (pnpm の取得) の両方がこの関数を通す。
+    """
+    parts = [part for part in value.split(":") if part and part.startswith("/")]
+    return ":".join(parts)
+
+
 def build_env(source: Mapping[str, str], with_key: bool) -> dict:
     """上流の起動 (と、ラッパ自身の git 呼び出し) に渡す env を組み立てる。
 
@@ -64,7 +83,8 @@ def build_env(source: Mapping[str, str], with_key: bool) -> dict:
     `NODE_OPTIONS`、proxy 系、`NODE_TLS_*`、`GIT_*` (下の固定の 2 つを除く)、
     `JEV_LINT_*`、`TYPESAFEAI_*` はこの組み立てには存在しないので入らない。
     `with_key` が真のときだけ `TYPESAFE_API_KEY` を足す (`--dry-run` や事前検査など
-    キーが要らない起動では呼び出し側が False を渡す)。
+    キーが要らない起動では呼び出し側が False を渡す)。`PATH` は `_sanitize_path` で
+    相対・空の成分を落とす。
 
     `LC_ALL` を自分では足さない。上流の env は利用者の locale をそのまま保つ設計で
     (`jevlint_tree.py` の `_git_env` が行う `LC_ALL=C` の固定はラッパ自身の git 呼び出し
@@ -74,7 +94,7 @@ def build_env(source: Mapping[str, str], with_key: bool) -> dict:
     env: dict = {}
     for name in _ALLOWED_ENV_NAMES:
         if name in source:
-            env[name] = source[name]
+            env[name] = _sanitize_path(source[name]) if name == "PATH" else source[name]
     for name, value in source.items():
         if name.startswith("LC_"):
             env[name] = value
@@ -84,19 +104,40 @@ def build_env(source: Mapping[str, str], with_key: bool) -> dict:
     return env
 
 
+def _is_npm_or_pnpm_config(name: str) -> bool:
+    """`npm_config_*` / `pnpm_config_*` (大文字小文字を問わない) か。
+
+    `npm_config_*` は npm/pnpm が子プロセスへ渡す慣例の小文字形、`PNPM_CONFIG_*` は
+    利用者や CI 設定が書く大文字形。fix round 1 で実測: pnpm 12.3.4 は `pnpm add`
+    自身が `PNPM_CONFIG_REGISTRY` を読み、到達不能な registry を指すとそこへ fetch
+    しようとして失敗する (`pnpm config get registry` だけの話ではない)。
+    """
+    lowered = name.lower()
+    return lowered.startswith("npm_config_") or lowered.startswith("pnpm_config_")
+
+
 def install_env(source: Mapping[str, str]) -> dict:
-    """`pnpm add` (host の取得) に渡す env。`source` の写しから危険な prefix だけを落とす。
+    """`pnpm add` (host の取得) に渡す env。`source` の写しから危険な変数だけを落とす。
 
     `build_env` とは逆に denylist で組み立てる。取得は利用者の PATH やネットワーク周りの
     設定 (proxy 等) をほぼそのまま必要とする一方、キー (`TYPESAFE_API_KEY` /
-    `TYPESAFEAI_API_KEY`) と上流固有の変数 (`TYPESAFE_BASE_URL` 等) だけを `@ast-grep/cli`
-    の postinstall に見せないために落とす。
+    `TYPESAFEAI_API_KEY`)、上流固有の変数 (`TYPESAFE_BASE_URL` 等)、そして
+    `npm_config_*` / `PNPM_CONFIG_*` を落とす。最後のものを落とす理由: pnpm は
+    `pnpm_config_registry` / `PNPM_CONFIG_REGISTRY` を `pnpm add` の registry 解決に
+    読む (実測)。プロジェクトの Claude Code 設定でコミットされた `env` がこれを注入
+    すると、キー無しで取得したはずの host が実は偽の registry から取得したものになり、
+    次のキー付きの起動でその host (別物の jev-lint) が使われる。利用者自身の
+    `~/.npmrc` はファイルであってこの denylist の対象ではないので、そのまま効く。
+    `PATH` は `_sanitize_path` で相対・空の成分を落とす (`build_env` と共通の理由)。
     """
-    return {
+    env = {
         name: value
         for name, value in source.items()
-        if not name.startswith(_INSTALL_DROPPED_PREFIXES)
+        if not name.startswith(_INSTALL_DROPPED_PREFIXES) and not _is_npm_or_pnpm_config(name)
     }
+    if "PATH" in env:
+        env["PATH"] = _sanitize_path(env["PATH"])
+    return env
 
 
 def key_status(source: Mapping[str, str]) -> str:
@@ -118,23 +159,53 @@ def host_dir(version: str, source: Mapping[str, str]) -> Path:
 
     `<repo>/.cache/` のようなリポジトリの中には置かない (spec の「host ディレクトリ」節)。
     ここではパスを計算するだけで、ディレクトリを作りも検査もしない (`prepare_host` の責務)。
+
+    `XDG_CACHE_HOME` が絶対パスでなければ無視して `HOME` へ読み替える (XDG Base
+    Directory の仕様: 相対な値は invalid で無視しなければならない)。相対な値をそのまま
+    使うと host が起動時の cwd の下、つまり消費側のリポジトリの中に置かれかねない
+    (fix round 1 で実測: `XDG_CACHE_HOME=cache` かつ
+    `cache/jev-lint-curated/<版>/node_modules/jev-lint/{package.json,dist/cli.js}` を
+    あらかじめ用意しておくと、`prepare_host` は pnpm を走らせずそれを再利用し、次の
+    キー付きの起動が消費側の `cli.js` を実行した)。`~/.cache` のような未展開の `~` も
+    `Path.is_absolute()` では絶対パスと判定されないので、同じ理由で弾かれる。`HOME`
+    自体が無いか絶対パスでなければ置き場を決められない。
+
+    `version` は `jev-lint-curated/<version>` という 1 つのパス成分になる。空・`.`・
+    `..`・区切り文字を含む値は拒否する (X.Y.Z の形式そのものは `jevlint.py` の
+    `parse_version` の責務で、ここは経路の安全性だけを見る defense in depth)。
     """
+    if not version or version in (".", "..") or "/" in version or "\\" in version:
+        raise HostError(f"version は単一の安全なパス成分でなければならない: {version!r}")
     xdg = source.get("XDG_CACHE_HOME", "")
-    if xdg:
+    if xdg and Path(xdg).is_absolute():
         base = Path(xdg)
     else:
         home = source.get("HOME", "")
-        if not home:
-            raise HostError("XDG_CACHE_HOME も HOME も無いので host の置き場を決められない")
+        if not Path(home).is_absolute():
+            raise HostError(
+                "XDG_CACHE_HOME が絶対パスでなく、HOME も絶対パスでないので host の"
+                f"置き場を決められない (XDG_CACHE_HOME={xdg!r}, HOME={home!r})"
+            )
         base = Path(home) / ".cache"
     return base / "jev-lint-curated" / version
 
 
 def host_reusable(host: Path, version: str) -> bool:
-    """`host` を作り直さずに使えるか。`package.json` の `version` が一致し `cli.js` がある。"""
+    """`host` を作り直さずに使えるか。`package.json` の `version` が一致し `cli.js` がある。
+
+    `is_file()` は ENOENT 等を握りつぶして `False` を返すが、権限エラー
+    (`PermissionError`) は Python 3.9 では再送出する (実測: 3.9.6。3.14.7 の pathlib は
+    `PermissionError` も握りつぶして `False` を返すようになっている。実測、fix round 1)。
+    再送出された場合は判定不能を「無い」に丸めず `HostError` にする。
+    """
     package_json = host / "node_modules" / "jev-lint" / "package.json"
     cli_js = host / "node_modules" / "jev-lint" / "dist" / "cli.js"
-    if not package_json.is_file() or not cli_js.is_file():
+    try:
+        package_json_is_file = package_json.is_file()
+        cli_js_is_file = cli_js.is_file()
+    except PermissionError as error:
+        raise HostError(f"host を確認できない (権限不足): {host}: {error}") from None
+    if not package_json_is_file or not cli_js_is_file:
         return False
     try:
         data = json.loads(package_json.read_text(encoding="utf-8"))
@@ -147,21 +218,87 @@ def _reject_pnpm_workspace_ancestor(host: Path) -> None:
     """`host` の祖先ディレクトリに `pnpm-workspace.yaml` があれば拒否する。
 
     pnpm は cwd から親方向に `pnpm-workspace.yaml` を探してモノレポと判定し、workspace の
-    root にある `.npmrc` を読む (spec 前提 14 の一般化)。`prepare_host` は host の親を
-    cwd にして `pnpm add` を呼ぶため、host の祖先にこのファイルがあると同じ理由で意図しない
-    registry に化ける経路が残る。macOS では `/tmp` が `/private/tmp` の symlink であるように
-    (`jevlint_tree.py` の `_temp_base` と同じ実測)、与えられた表記だけでは祖先を見落とす
-    ことがあるため、解決した表記の祖先も合わせて見る。
+    root にある `.npmrc` を読む (spec 前提 14 の一般化)。`prepare_host` は host の親の
+    中に作った一時ディレクトリを cwd にして `pnpm add` を呼ぶため、host の祖先にこの
+    ファイルがあると同じ理由で意図しない registry に化ける経路が残る。macOS では
+    `/tmp` が `/private/tmp` の symlink であるように (`jevlint_tree.py` の `_temp_base`
+    と同じ実測)、与えられた表記だけでは祖先を見落とすことがあるため、解決した表記の
+    祖先も合わせて見る。
+
+    `resolve()` は symlink のループで Python 3.9 では `RuntimeError` になる (実測:
+    3.9.6。`jevlint_tree.py` の `_temp_base` と同じ現象。3.14.7 は投げない)。`exists()`
+    は権限エラーで 3.9 では `PermissionError` を再送出する (3.14.7 は握りつぶして
+    `False` を返す。実測、fix round 1)。どちらも `HostError` に変える。
     """
-    ancestors = set(host.parents) | set(host.resolve().parents)
+    try:
+        resolved_parents = set(host.resolve().parents)
+    except (OSError, RuntimeError) as error:
+        raise HostError(f"host の祖先を解決できない: {host}: {error}") from None
+    ancestors = set(host.parents) | resolved_parents
     for ancestor in ancestors:
         candidate = ancestor / "pnpm-workspace.yaml"
-        if candidate.exists():
+        try:
+            found = candidate.exists()
+        except OSError as error:
+            raise HostError(f"host の祖先を確認できない: {candidate}: {error}") from None
+        if found:
             raise HostError(f"host の祖先に pnpm-workspace.yaml がある: {candidate}")
 
 
+def _replace_host_atomically(host: Path, tmp: Path, version: str) -> None:
+    """再利用可能な `tmp` を host の名前へ置く。複数プロセスが同時に取得しても壊れない。
+
+    直接 `shutil.rmtree(host)` してから `rename` すると、`rmtree` は atomic でないため
+    (a) 別プロセスが使用中の host を削除してしまう (b) 2 つの `rmtree` が競合して
+    `FileNotFoundError` になる、の 2 通りの競合を生む。fix round 1 のレビューで実測:
+    2 プロセスが同時に「再利用できない」と判定して `pnpm add` を走らせたとき、先に
+    `tmp.replace(host)` が通った側が host を置いたあと、後から `tmp.replace(host)`
+    を呼んだ側は host が既に非空のディレクトリになっていて `OSError` (`ENOTEMPTY`、
+    macOS で errno 66) になる。
+
+    手順:
+
+    1. host を再確認する。既に他プロセスが同じ version を置いていれば (`host_reusable`
+       が真) 何もせず勝者に譲る (呼び出し側が `tmp` を消す)
+    2. 既存の host (別 version か壊れた取得物) があれば、同じ親の中で重複しない名前
+       (`.old-<uuid>`) へ `rename` で「どかして」から `tmp.replace(host)` する。
+       `rename` は同一ファイルシステム上で atomic なので、host の名前が「無い」中間
+       状態を経由しない
+    3. その置き換えが競合で失敗したら (2 の rename、3 の replace のどちらでも) host を
+       再確認し、他プロセスが勝っていればそちらに譲り、そうでなければ `HostError`
+    4. どかした古いディレクトリは最後に消す (使用中でも `ignore_errors` で無視する)
+
+    呼び出されるのは `host_reusable(tmp, version)` が真であることを確認した後だけ。
+    """
+    if host_reusable(host, version):
+        return
+    old = None
+    try:
+        if host.exists():
+            old = host.parent / f".old-{uuid.uuid4().hex}"
+            host.rename(old)
+        tmp.replace(host)
+    except OSError as error:
+        if host_reusable(host, version):
+            return
+        raise HostError(f"host の設置に失敗した: {error}") from None
+    finally:
+        if old is not None:
+            shutil.rmtree(old, ignore_errors=True)
+
+
+def _default_run(argv: list, cwd: str, env: Mapping[str, str]) -> "subprocess.CompletedProcess":
+    """`prepare_host` の `run` の既定実装。pnpm の stdout をラッパ自身の stderr へ流す。
+
+    ラッパの stdout は Task 6 で書く JSON の要約専用にするため、pnpm 自身の進捗表示
+    (`Progress: resolved ...` 等) を混ぜない。stderr は継承したまま (pnpm 自身の
+    エラーメッセージは利用者にそのまま見えたほうが診断しやすい)。
+    """
+    return subprocess.run(argv, cwd=cwd, env=env, stdout=sys.stderr)
+
+
 def prepare_host(
-    version: str, source: Mapping[str, str], run: Callable = subprocess.run
+    version: str, source: Mapping[str, str], run: Callable = _default_run
 ) -> Path:
     """host を再利用できればそれを返し、できなければ取得してから host の名前に置く。
 
@@ -171,14 +308,13 @@ def prepare_host(
     いても読む (キャッシュのキーが registry を含むため)。環境変数 `npm_config_registry`
     はこの project の `.npmrc` に負ける。消費側がコミットした `.npmrc` のある worktree で
     `pnpm dlx` を起動すると、偽の registry が返す別物の jev-lint がキー付きの env で走る
-    ことをダミーのキーで再現した。この関数は host の親 (利用者の cache ディレクトリの
-    下で、どの消費側のリポジトリにも属さない) を cwd にして `pnpm add` を 1 回だけ呼ぶ。
+    ことをダミーのキーで再現した。この関数は host の親の中に作った一時ディレクトリ
+    (利用者の cache ディレクトリの下で、どの消費側のリポジトリにも属さない) を cwd に
+    して `pnpm add` を 1 回だけ呼ぶ。
 
-    一時ディレクトリを host と同じ親に作り、取得の成功を確認してから `rename` で host の
-    名前に置くのは、途中で切れた取得 (ネットワーク断・プロセス kill 等) が host として
-    再利用されるのを防ぐため。`rename` (`Path.replace`) は同一ファイルシステム上で
-    atomic なので、host の名前が「未取得」か「完全に取得済み」のどちらかの状態しか
-    取らない (取得の途中の状態を host の名前で観測することがない)。
+    一時ディレクトリを host と同じ親に作り、取得の成功を確認してから host の名前に
+    置くのは、途中で切れた取得 (ネットワーク断・プロセス kill 等) が host として再利用
+    されるのを防ぐため。host への設置自体の競合耐性は `_replace_host_atomically` が持つ。
     """
     host = host_dir(version, source)
     _reject_pnpm_workspace_ancestor(host)
@@ -195,13 +331,17 @@ def prepare_host(
     except OSError as error:
         raise HostError(f"host の取得用の一時ディレクトリを作れない: {error}") from None
 
-    renamed = False
     try:
         try:
             (tmp / "package.json").write_text(
                 json.dumps({"private": True}), encoding="utf-8"
             )
-            argv = ["pnpm", "add", "--allow-build=@ast-grep/cli", f"jev-lint@{version}"]
+        except OSError as error:
+            raise HostError(
+                f"host の取得用の package.json を書けない: {tmp / 'package.json'}: {error}"
+            ) from None
+        argv = ["pnpm", "add", "--allow-build=@ast-grep/cli", f"jev-lint@{version}"]
+        try:
             proc = run(argv, cwd=str(tmp), env=install_env(source))
         except OSError as error:
             # `pnpm` が PATH に無いときの `subprocess.run` は非 0 の returncode ではなく
@@ -218,13 +358,12 @@ def prepare_host(
             raise HostError(
                 f"pnpm add jev-lint@{version} は成功したが取得物の形が想定と違う"
             )
-        if host.exists():
-            shutil.rmtree(host)
-        tmp.replace(host)
-        renamed = True
+        _replace_host_atomically(host, tmp, version)
     finally:
-        if not renamed:
-            shutil.rmtree(tmp, ignore_errors=True)
+        # `_replace_host_atomically` が成功すると tmp はその名前ではもう存在しない
+        # (host の名前へ rename 済み) ので、ここでの rmtree は無視されるだけの no-op に
+        # なる。どの失敗経路でも tmp の残骸を必ず片付けるために分岐を作らず常に呼ぶ
+        shutil.rmtree(tmp, ignore_errors=True)
     return host
 
 
