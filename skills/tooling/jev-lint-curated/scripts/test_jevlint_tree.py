@@ -3,10 +3,11 @@
 前半は `repo_root` / `resolve_commit` / `normalize_path` / `path_in_commit` と `TreeError`。
 後半は送る範囲の境界そのもので、`validate_tree_paths` / `materialize` / `expanded_commit` /
 `signals_as_exceptions` / `count_suffix` が対象。後半の fixture リポジトリには、checkout や
-hook を経由すると中身が変わるもの (smudge filter、リポジトリの外を指す symlink、cwd に目印を
-置く 3 つの hook) をわざと入れてあり、展開後のディスクがコミットの blob と同一で、余分な
-ものが無く、リポジトリの root にも何も足されないことを見る。hook が本当に起動する状態かは
-陽性対照 (ラッパの `-c core.hooksPath` 無しで同じ git 操作をする) が確かめる。
+hook を経由すると中身が変わるもの (smudge filter、リポジトリの外を指す symlink、3 つの event
+に hook ディレクトリと設定定義の 2 系統で置いた cwd に目印を置く hook) をわざと入れてあり、
+展開後のディスクがコミットの blob と同一で、余分なものが無く、リポジトリの root にも何も
+足されないことを見る。hook が本当に起動する状態かは陽性対照 (ラッパのフラグ無しで同じ git
+操作をする) が系統ごとに確かめる。
 
 git を呼ぶテストはすべて `GIT_*` を落とした `os.environ` の写しを `env` として自前で渡す
 (production の `build_env` は Task 4 で追加されるため)。一時リポジトリごとに
@@ -109,6 +110,35 @@ class GitRepo:
         """`git worktree list --porcelain` に載る worktree の数 (本体を含む)。"""
         lines = self.git("worktree", "list", "--porcelain").splitlines()
         return sum(1 for line in lines if line.startswith("worktree "))
+
+    def knows_config_hooks(self) -> "tuple[bool, str, str]":
+        """この git が設定で定義する hook (`hook.<name>.command` / `.event`) を知っているか。
+
+        `git hook list <event>` は、その event に結び付いた hook の名前を 1 行ずつ出す
+        (実測: git 2.55.0。`-c hook.probe.command=true -c hook.probe.event=<event>` を
+        付けると `probe` の行が出る)。知らない git では `hook` サブコマンド自体が無いか、
+        設定の hook が列挙されない。判定、生の stdout、失敗時に読む根拠の文字列を返す
+        """
+        proc = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(self.path),
+                "-c",
+                "hook.probe.command=true",
+                "-c",
+                "hook.probe.event=post-index-change",
+                "hook",
+                "list",
+                "post-index-change",
+            ],
+            env=ENV,
+            capture_output=True,
+            text=True,
+        )
+        evidence = f"rc={proc.returncode} stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        knows = proc.returncode == 0 and "probe" in proc.stdout.split()
+        return knows, proc.stdout, evidence
 
 
 class NormalizePathTests(unittest.TestCase):
@@ -318,6 +348,20 @@ class RepoRootTests(unittest.TestCase):
         self.assertTrue(result.samefile(repo.path))
 
 
+class ReadonlyGitTests(unittest.TestCase):
+    def test_refuses_subcommands_that_can_run_hooks(self):
+        # 展開の外で使う runner は hook を止めるフラグを持たない。誤って展開の中の
+        # 操作に使われないよう、通せるサブコマンドを読み取り専用のものに限る
+        repo = GitRepo(self)
+        repo.write("a.py")
+        sha = repo.commit()
+        for args in (["read-tree", sha], ["worktree", "prune"], ["checkout", sha], []):
+            with self.subTest(args=args):
+                with self.assertRaises(ValueError):
+                    jevlint_tree._git_readonly(repo.path, args, ENV)
+        self.assertEqual(0, jevlint_tree._git_readonly(repo.path, ["rev-parse", "HEAD"], ENV).returncode)
+
+
 class ValidateTreePathsTests(unittest.TestCase):
     def test_rejects_absolute_dotdot_and_any_case_of_dot_git_component(self):
         for path in ("/abs", "a/../b", ".GIT/config", "sub/.Git", ".git"):
@@ -357,12 +401,20 @@ MISSING_SHA = "0123456789abcdef0123456789abcdef01234567"
 # worktree なら worktree の中に、リポジトリの root なら root に現れる。checkout 無しの
 # 操作でも hook は起動する: `worktree add --no-checkout` は reference-transaction を
 # (cwd = root)、`read-tree` は post-index-change を (cwd = worktree) 起動する (実測:
-# git 2.55.0)。post-checkout は checkout が走ったときだけ、cwd = 新しい worktree で起動する
+# git 2.55.0)。post-checkout は checkout が走ったときだけ、cwd = 新しい worktree で起動する。
+# hook の置き方は 2 系統ある。hook ディレクトリのファイル (`core.hooksPath` で止まる) と、
+# 設定で定義する hook (`hook.<name>.command` + `hook.<name>.event`。`core.hooksPath` では
+# 止まらず、`hook.<event>.enabled=false` で止まる。逆にこのフラグは hook ディレクトリの
+# hook を止めない。実測: git 2.55.0)。fixture は両系統を同じ event に置く
 HOOK_NAMES = ("post-checkout", "post-index-change", "reference-transaction")
 
 
 def injected_marker(hook: str) -> str:
     return f"INJECTED-{hook}.txt"
+
+
+def config_marker(hook: str) -> str:
+    return f"INJECTED-config-{hook}.txt"
 
 
 def tree_entries(tree: Path) -> list:
@@ -405,11 +457,18 @@ class ExpansionFixture:
         self.hooks_dir = root / ".git" / "hooks"
         self.hooks_dir.mkdir(exist_ok=True)
         for hook in HOOK_NAMES:
-            script = self.hooks_dir / hook
-            script.write_text(
-                f'#!/bin/sh\ntouch "$PWD/{injected_marker(hook)}"\n', encoding="utf-8"
+            targets = (
+                (self.hooks_dir / hook, injected_marker(hook)),
+                (self.hooks_dir / f"config-{hook}", config_marker(hook)),
             )
-            script.chmod(0o755)
+            for script, marker in targets:
+                script.write_text(f'#!/bin/sh\ntouch "$PWD/{marker}"\n', encoding="utf-8")
+                script.chmod(0o755)
+            # 設定の hook の command には hook の引数がそのまま付く (post-index-change なら
+            # `1 0`、reference-transaction なら `prepared` 等)。`touch "$PWD/..."` を直接
+            # 書くと引数の名前のファイルまで作る (実測) ので、引数を読まないスクリプトを指す
+            self.repo.config(f"hook.config-{hook}.command", str(self.hooks_dir / f"config-{hook}"))
+            self.repo.config(f"hook.config-{hook}.event", hook)
         self.repo.config("core.hooksPath", str(self.hooks_dir))
         self.paths = [
             ".gitattributes",
@@ -440,9 +499,12 @@ class MaterializeTests(unittest.TestCase):
         self.repo = self.fixture.repo
         self.dest = Path(tempfile.mkdtemp(prefix="jevlint-dest-"))
         self.addCleanup(lambda: shutil.rmtree(self.dest, ignore_errors=True))
+        # `core.hooksPath` に渡す空のディレクトリ。materialize も git を呼ぶので必須
+        self.hooks = Path(tempfile.mkdtemp(prefix="jevlint-hooks-"))
+        self.addCleanup(lambda: shutil.rmtree(self.hooks, ignore_errors=True))
 
     def test_every_written_file_equals_the_blob_and_the_count_is_returned(self):
-        count = jevlint_tree.materialize(self.repo.path, self.fixture.sha, self.dest, ENV)
+        count = jevlint_tree.materialize(self.repo.path, self.fixture.sha, self.dest, ENV, self.hooks)
         self.assertEqual(len(self.fixture.paths), count)
         for path in self.fixture.paths:
             with self.subTest(path=path):
@@ -454,23 +516,23 @@ class MaterializeTests(unittest.TestCase):
         self.assertEqual(sorted(self.fixture.paths), written)
 
     def test_symlink_becomes_a_regular_file_holding_the_target_string(self):
-        jevlint_tree.materialize(self.repo.path, self.fixture.sha, self.dest, ENV)
+        jevlint_tree.materialize(self.repo.path, self.fixture.sha, self.dest, ENV, self.hooks)
         link = self.dest / "link"
         self.assertFalse(link.is_symlink())
         self.assertTrue(link.is_file())
         self.assertEqual(b"../outside.txt", link.read_bytes())
 
     def test_filtered_file_is_not_smudged(self):
-        jevlint_tree.materialize(self.repo.path, self.fixture.sha, self.dest, ENV)
+        jevlint_tree.materialize(self.repo.path, self.fixture.sha, self.dest, ENV, self.hooks)
         self.assertEqual(b"hello lower\n", (self.dest / "filtered.txt").read_bytes())
 
     def test_executable_bit_follows_mode_100755(self):
-        jevlint_tree.materialize(self.repo.path, self.fixture.sha, self.dest, ENV)
+        jevlint_tree.materialize(self.repo.path, self.fixture.sha, self.dest, ENV, self.hooks)
         self.assertTrue(os.access(self.dest / "run.sh", os.X_OK))
         self.assertFalse(os.access(self.dest / "plain.py", os.X_OK))
 
     def test_five_megabyte_blob_is_written_byte_for_byte(self):
-        jevlint_tree.materialize(self.repo.path, self.fixture.sha, self.dest, ENV)
+        jevlint_tree.materialize(self.repo.path, self.fixture.sha, self.dest, ENV, self.hooks)
         data = (self.dest / "big.bin").read_bytes()
         self.assertEqual(FIVE_MB, len(data))
         self.assertEqual(bytes(range(256)) * (FIVE_MB // 256), data)
@@ -481,7 +543,7 @@ class MaterializeTests(unittest.TestCase):
             [("100644", "blob", blob, "file.txt"), ("160000", "commit", self.fixture.sha, "vendor")]
         )
         sha = self.repo.commit_tree(tree)
-        count = jevlint_tree.materialize(self.repo.path, sha, self.dest, ENV)
+        count = jevlint_tree.materialize(self.repo.path, sha, self.dest, ENV, self.hooks)
         self.assertEqual(1, count)
         self.assertEqual(["file.txt"], [p.name for p in self.dest.iterdir()])
 
@@ -494,7 +556,7 @@ class MaterializeTests(unittest.TestCase):
         tree = self.repo.mktree([("100644", "blob", blob, "a.txt"), ("040000", "tree", sub, "sub")])
         sha = self.repo.commit_tree(tree)
         with self.assertRaises(jevlint_tree.TreeError):
-            jevlint_tree.materialize(self.repo.path, sha, self.dest, ENV)
+            jevlint_tree.materialize(self.repo.path, sha, self.dest, ENV, self.hooks)
         self.assertEqual([], list(self.dest.iterdir()))
 
     def test_case_only_duplicate_names_reject_before_writing_anything(self):
@@ -504,12 +566,12 @@ class MaterializeTests(unittest.TestCase):
         )
         sha = self.repo.commit_tree(tree)
         with self.assertRaises(jevlint_tree.TreeError):
-            jevlint_tree.materialize(self.repo.path, sha, self.dest, ENV)
+            jevlint_tree.materialize(self.repo.path, sha, self.dest, ENV, self.hooks)
         self.assertEqual([], list(self.dest.iterdir()))
 
     def test_git_failure_is_a_tree_error(self):
         with self.assertRaises(jevlint_tree.TreeError):
-            jevlint_tree.materialize(self.repo.path, "deadbeef" * 5, self.dest, ENV)
+            jevlint_tree.materialize(self.repo.path, "deadbeef" * 5, self.dest, ENV, self.hooks)
         self.assertEqual([], list(self.dest.iterdir()))
 
     def test_missing_blob_is_a_tree_error(self):
@@ -523,7 +585,7 @@ class MaterializeTests(unittest.TestCase):
         )
         sha = self.repo.commit_tree(tree)
         with self.assertRaises(jevlint_tree.TreeError) as cm:
-            jevlint_tree.materialize(self.repo.path, sha, self.dest, ENV)
+            jevlint_tree.materialize(self.repo.path, sha, self.dest, ENV, self.hooks)
         self.assertIn(MISSING_SHA, str(cm.exception))
         self.assertEqual([], list(self.dest.iterdir()))
 
@@ -532,7 +594,7 @@ class MaterializeTests(unittest.TestCase):
         # ラッパの「1 = finding あり」と衝突する
         (self.dest / "plain.py").write_text("stale\n", encoding="utf-8")
         with self.assertRaises(jevlint_tree.TreeError) as cm:
-            jevlint_tree.materialize(self.repo.path, self.fixture.sha, self.dest, ENV)
+            jevlint_tree.materialize(self.repo.path, self.fixture.sha, self.dest, ENV, self.hooks)
         self.assertIn("plain.py", str(cm.exception))
 
 
@@ -638,6 +700,60 @@ class ExpandedCommitTests(unittest.TestCase):
         self.assertIn(injected_marker("reference-transaction"), os.listdir(self.repo.path))
         self.assertIn(injected_marker("post-checkout"), os.listdir(control))
         self.repo.git("worktree", "remove", "--force", str(control))
+
+    def test_config_hooks_fire_without_the_wrappers_flags_or_this_git_cannot_run_them(self):
+        # 設定で定義する hook の陽性対照。この git がそれを知っているかを先に
+        # `git hook list` で判定し、知っていれば目印が付くことを、知らなければ判定の
+        # 根拠 (列挙に `probe` が無い) と目印が付かないことを、どちらも失敗で確かめる。
+        # skip にはしない (runner は skip を赤にし、CI の git の版は分からない)
+        knows, listed, evidence = self.repo.knows_config_hooks()
+        self.repo.git("read-tree", self.sha)
+        control = Path(tempfile.mkdtemp(prefix="jevlint-control-")) / "wt"
+        self.addCleanup(lambda: shutil.rmtree(control.parent, ignore_errors=True))
+        self.repo.git("worktree", "add", "--detach", str(control), self.sha)
+        in_root = os.listdir(self.repo.path)
+        in_control = os.listdir(control)
+        self.repo.git("worktree", "remove", "--force", str(control))
+        if knows:
+            self.assertIn(config_marker("post-index-change"), in_root, evidence)
+            self.assertIn(config_marker("reference-transaction"), in_root, evidence)
+            self.assertIn(config_marker("post-checkout"), in_control, evidence)
+        else:
+            # 判定の根拠そのものを見る: 列挙に `probe` が無い (生の stdout を split する。
+            # 根拠の文字列は repr で包んであり、そちらを split しても token にならない)
+            self.assertNotIn("probe", listed.split(), evidence)
+            for name in (config_marker("post-index-change"), config_marker("reference-transaction")):
+                self.assertNotIn(name, in_root, f"設定の hook を知らないはずの git が起動した: {evidence}")
+            self.assertNotIn(config_marker("post-checkout"), in_control, evidence)
+
+    def test_commit_to_commit_diff_in_the_expanded_tree_matches_the_repository(self):
+        # 上流が worktree の中で呼ぶ git は `git diff <base>...HEAD` だけ (spec の前提 17)。
+        # 展開は read-tree を使わず worktree に index を持たせないが、コミット同士の diff
+        # は index も作業ツリーも読まないので、リポジトリ本体で取った diff と一致する
+        base_sha = self.sha
+        self.repo.write("plain.py", "print('changed')\n")
+        self.repo.write("added.py", "y = 2\n")
+        head_sha = self.repo.commit("second")
+        args = [
+            "diff",
+            "--unified=0",
+            "--no-color",
+            "--no-ext-diff",
+            "--diff-filter=d",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            f"{base_sha}...HEAD",
+        ]
+        expected = self.repo.git(*args)
+        self.assertIn("plain.py", expected)
+        self.assertIn("added.py", expected)
+        with jevlint_tree.expanded_commit(self.repo.path, head_sha, ENV) as expanded:
+            self.assertFalse(
+                (self.repo.path / ".git" / "worktrees" / expanded.tree.name / "index").exists(),
+                "展開した worktree に index がある",
+            )
+            actual = run(["git", "-C", str(expanded.tree), *args]).stdout
+        self.assertEqual(expected, actual)
 
     def test_normal_exit_removes_the_worktree_and_the_temp_dir(self):
         with jevlint_tree.expanded_commit(self.repo.path, self.sha, ENV) as expanded:
@@ -758,6 +874,40 @@ class ExpandedCommitTests(unittest.TestCase):
                 self.assertEqual([], os.listdir(inside))
                 self.assertEqual(listing, sorted(os.listdir(repo.path)))
                 self.assertEqual(1, repo.worktree_count())
+
+    def test_tmpdir_inside_the_repository_is_refused_even_when_only_the_case_differs(self):
+        # 大文字小文字を区別しないファイルシステムでは `.../Repo` と `.../repo/sub` が同じ
+        # 場所を指すが、`resolve()` は与えられた表記の大文字小文字を保つので (実測: APFS)
+        # 文字列の包含では見えない。区別するファイルシステムでは表記違いのパスは存在せず、
+        # 置き場を作れない失敗になる。どちらも TreeError で、root の下に何も残らない
+        repo = GitRepo(self)
+        repo.write("a.py")
+        sha = repo.commit()
+        (repo.path / "sub").mkdir()
+        swapped = repo.path.parent / repo.path.name.swapcase() / "sub"
+        listing = sorted(os.listdir(repo.path))
+        with self.assertRaises(jevlint_tree.TreeError) as cm:
+            with jevlint_tree.expanded_commit(repo.path, sha, dict(ENV, TMPDIR=str(swapped))):
+                self.fail("表記違いでリポジトリの中を置き場にした展開が通った")
+        if swapped.exists():
+            self.assertIn("リポジトリの中", str(cm.exception))
+        else:
+            self.assertIn("一時ディレクトリを作れない", str(cm.exception))
+        self.assertEqual([], os.listdir(repo.path / "sub"))
+        self.assertEqual(listing, sorted(os.listdir(repo.path)))
+        self.assertEqual(1, repo.worktree_count())
+
+    def test_tmpdir_through_a_symlink_loop_is_a_tree_error(self):
+        # 3.9 の `Path.resolve()` は symlink のループを RuntimeError にする (実測: 3.9.6。
+        # 3.14.7 は投げず、後の mkdtemp が OSError になる)。どちらも TreeError に落とす
+        outer = Path(tempfile.mkdtemp(prefix="jevlint-loop-"))
+        self.addCleanup(lambda: shutil.rmtree(outer, ignore_errors=True))
+        loop = outer / "loop"
+        os.symlink(str(loop), loop)
+        with self.assertRaises(jevlint_tree.TreeError):
+            with jevlint_tree.expanded_commit(self.repo.path, self.sha, dict(ENV, TMPDIR=str(loop / "x"))):
+                self.fail("symlink のループを置き場にした展開が通った")
+        self.assertEqual(1, self.repo.worktree_count())
 
     def test_missing_blob_during_expansion_is_a_tree_error_and_tears_down(self):
         blob = self.repo.hash_blob(b"x\n")

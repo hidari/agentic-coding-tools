@@ -8,12 +8,13 @@
 展開が checkout を使わない理由: `git worktree add` / `checkout` / `archive` は追跡された
 `.gitattributes` の `filter=` が選ぶ smudge (git-crypt の平文化、git-lfs の取得) を利用者の
 環境の driver で走らせ、symlink を symlink として復元し、hook を起動する (spec の前提 16)。
-`worktree add --no-checkout` と `read-tree` はファイルを書かないので、ディスクへ書く経路は
-`git cat-file --batch` が返す blob の生のバイトだけになり、ディスクの中身がコミットの blob と
-同一であることが構造で保証される。ただし checkout を伴わなくても hook は起動する
-(`worktree add --no-checkout` は `reference-transaction` を、`read-tree` は
-`post-index-change` を起動する。実測: git 2.55.0) ので、展開の間の git の呼び出しは
-すべて `-c core.hooksPath=<空のディレクトリ>` を付けて利用者の hook を止める。
+`worktree add --no-checkout` は worktree を登録するだけでファイルを書かず、index も作らない
+(`read-tree` は呼ばない。上流が worktree の中で呼ぶ git はコミット同士の diff だけで、index
+を読まない)。ディスクへ書く経路は `git cat-file --batch` が返す blob の生のバイトだけになり、
+ディスクの中身がコミットの blob と同一であることが構造で保証される。ただし checkout を
+伴わなくても hook は起動する (`worktree add --no-checkout` は `reference-transaction` を
+起動する。実測: git 2.55.0) ので、展開の間の git はすべて `_QuietGit` を通し、hook
+ディレクトリの hook・設定で定義する hook・fsmonitor の 3 経路を止める。
 
 このモジュールは他の jevlint* モジュールを import しない。依存は入口 (`jevlint.py`)
 から下流へ一方向に流し、循環を作らないため。git を呼ぶ関数はすべて `env` を引数で
@@ -31,7 +32,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator
 
 
 class TreeError(Exception):
@@ -50,31 +51,102 @@ class SignalInterrupt(KeyboardInterrupt):
         self.signum = signum
 
 
-def _git_argv(cwd: Path, args: list, hooks: Optional[Path]) -> list:
-    """`git -C <cwd> [-c core.hooksPath=<hooks>] <args>` の argv を組む。
+# githooks(5) が列挙する hook の名前。出典はこのマシンの `git help githooks` (git 2.55.0、
+# 28 件)。設定で定義する hook (`hook.<name>.command` + `hook.<name>.event`) は
+# `core.hooksPath` では止まらず `hook.<event>.enabled=false` で止まる (実測) ので、観測した
+# event に限らず全 event を止める。新しい版の git が event を足したらここにも足す
+_HOOK_EVENTS = (
+    "applypatch-msg",
+    "pre-applypatch",
+    "post-applypatch",
+    "pre-commit",
+    "pre-merge-commit",
+    "prepare-commit-msg",
+    "commit-msg",
+    "post-commit",
+    "pre-rebase",
+    "post-checkout",
+    "post-merge",
+    "pre-push",
+    "pre-receive",
+    "update",
+    "proc-receive",
+    "post-receive",
+    "post-update",
+    "reference-transaction",
+    "push-to-checkout",
+    "pre-auto-gc",
+    "post-rewrite",
+    "sendemail-validate",
+    "fsmonitor-watchman",
+    "p4-changelist",
+    "p4-prepare-changelist",
+    "p4-post-changelist",
+    "p4-pre-submit",
+    "post-index-change",
+)
 
-    `hooks` は空のディレクトリで、渡したコマンドは利用者の hook を一切起動しない。hook は
-    checkout だけのものではなく、`worktree add --no-checkout` は `reference-transaction`
-    を (cwd はリポジトリの root)、`read-tree` は `post-index-change` を (cwd は
-    worktree) 起動する (実測: git 2.55.0)。`-c` はコマンドラインの設定なので、利用者の
-    リポジトリの local 設定や global 設定の `core.hooksPath` より優先される (実測)。
+
+class _QuietGit:
+    """展開の間の git。呼び出しごとに利用者の hook を止めるフラグを必ず付ける。
+
+    止める経路は 3 つで、それぞれ別のフラグが要る (実測: git 2.55.0):
+
+    - hook ディレクトリ (`.git/hooks` か `core.hooksPath`) のファイル: `core.hooksPath=<空の
+      ディレクトリ>`。コマンドラインの `-c` は local 設定にも global 設定にも勝つ
+    - 設定で定義する hook (`hook.<name>.command` + `hook.<name>.event`): `core.hooksPath`
+      では止まらない。`hook.<event>.enabled=false` で止まる。逆にこのフラグは hook
+      ディレクトリの hook を止めない (`git hook list` は `event-disabled` と表示しつつ
+      `hook from hookdir` を残し、実際に起動する)
+    - fsmonitor: `core.fsmonitor=false`。設定の `core.fsmonitor` は daemon か任意の hook
+      コマンドを起動しうるが、展開が呼ぶコマンド (worktree add --no-checkout、ls-tree、
+      cat-file、worktree remove / prune) と上流のコミット同士の diff は問い合わせない
+      (実測: 問い合わせたのは対照の `git status` だけ)。予防のために止める
+
+    `expanded_commit` と `materialize` はこのクラス経由でしか git を呼ばない。hook を
+    止めないコマンドは展開の外だけで使える形 (`_git_readonly`) にして、展開の中に新しい
+    呼び出しを書くときフラグを忘れられないようにしている。
     """
-    argv = ["git", "-C", str(cwd)]
-    if hooks is not None:
-        argv += ["-c", f"core.hooksPath={hooks}"]
-    return argv + list(args)
+
+    def __init__(self, env: dict, hooks: Path):
+        self.env = env
+        flags = ["-c", f"core.hooksPath={hooks}", "-c", "core.fsmonitor=false"]
+        for event in _HOOK_EVENTS:
+            flags += ["-c", f"hook.{event}.enabled=false"]
+        self.flags = flags
+
+    def argv(self, cwd: Path, args: list) -> list:
+        return ["git", "-C", str(cwd), *self.flags, *args]
+
+    def run(self, cwd: Path, args: list) -> "subprocess.CompletedProcess[bytes]":
+        """終了コードの判定は呼び出し側が行う。"""
+        return subprocess.run(self.argv(cwd, args), env=self.env, capture_output=True)
+
+    def popen(self, cwd: Path, args: list) -> "subprocess.Popen[bytes]":
+        # stderr は継承する。PIPE にすると読み切るまで子が詰まりうるし、git の診断は
+        # 利用者にそのまま見えてよい
+        return subprocess.Popen(
+            self.argv(cwd, args), stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=self.env
+        )
 
 
-def _git(
-    cwd: Path, args: list, env: dict, text: bool = False, hooks: Optional[Path] = None
+# 展開の外 (ref の解決とパスの検査) だけで使う読み取り専用の git。hook を止めるフラグを
+# 持たないので、通せるサブコマンドを hook の event を持たないものに限る。展開の中で
+# 誤って使うと ValueError で止まる
+_READONLY_SUBCOMMANDS = ("rev-parse", "ls-tree")
+
+
+def _git_readonly(
+    cwd: Path, args: list, env: dict, text: bool = False
 ) -> "subprocess.CompletedProcess":
-    """git を起動して結果を返す。終了コードの判定は呼び出し側が行う。"""
-    return subprocess.run(_git_argv(cwd, args, hooks), env=env, capture_output=True, text=text)
+    if not args or args[0] not in _READONLY_SUBCOMMANDS:
+        raise ValueError(f"展開の外で使える git は {_READONLY_SUBCOMMANDS} のみ: {args!r}")
+    return subprocess.run(["git", "-C", str(cwd), *args], env=env, capture_output=True, text=text)
 
 
 def repo_root(cwd: Path, env: dict) -> Path:
     """`cwd` を含むリポジトリの root を返す。サブディレクトリを cwd にしても解決できる。"""
-    proc = _git(cwd, ["rev-parse", "--show-toplevel"], env, text=True)
+    proc = _git_readonly(cwd, ["rev-parse", "--show-toplevel"], env, text=True)
     if proc.returncode != 0:
         raise TreeError(f"git リポジトリの root を解決できない: {cwd}")
     return Path(proc.stdout.strip())
@@ -89,7 +161,9 @@ def resolve_commit(root: Path, ref: str, env: dict) -> str:
     """
     if ref.startswith("-"):
         raise TreeError(f"'-' で始まる ref は受け付けない: {ref!r}")
-    proc = _git(root, ["rev-parse", "--verify", "--quiet", ref + "^{commit}"], env, text=True)
+    proc = _git_readonly(
+        root, ["rev-parse", "--verify", "--quiet", ref + "^{commit}"], env, text=True
+    )
     sha = proc.stdout.strip()
     # --quiet は「解決できる ref が無い」ときの fatal メッセージだけを消す。blob の
     # ような「コミットでない object」を渡したときは --quiet でも stderr に出る
@@ -136,7 +210,7 @@ def path_in_commit(root: Path, sha: str, path: str, env: dict) -> bool:
     """
     if path == "":
         return True
-    proc = _git(root, ["ls-tree", "-z", sha, "--", path], env)
+    proc = _git_readonly(root, ["ls-tree", "-z", sha, "--", path], env)
     if proc.returncode != 0:
         raise TreeError(f"git ls-tree の呼び出しに失敗した (sha={sha!r}, path={path!r})")
     # -z は区切りを NUL にするだけでなく、非 ASCII なファイル名を引用符で包む既定の
@@ -187,9 +261,9 @@ def validate_tree_paths(paths: list) -> None:
 _WRITTEN_MODES = ("100644", "100755", "120000")
 
 
-def _ls_tree(root: Path, sha: str, env: dict, hooks: Optional[Path]) -> list:
+def _ls_tree(root: Path, sha: str, git: _QuietGit) -> list:
     """`sha` の tree を `(mode, type, object sha, path)` の列にする。"""
-    proc = _git(root, ["ls-tree", "-r", "-z", "--full-tree", sha], env, hooks=hooks)
+    proc = git.run(root, ["ls-tree", "-r", "-z", "--full-tree", sha])
     if proc.returncode != 0:
         raise TreeError(f"git ls-tree の呼び出しに失敗した (sha={sha!r})")
     entries = []
@@ -227,14 +301,15 @@ def _read_batch_blob(proc: "subprocess.Popen", object_sha: str) -> bytes:
     return data
 
 
-def materialize(
-    root: Path, sha: str, dest: Path, env: dict, hooks: Optional[Path] = None
-) -> int:
+def materialize(root: Path, sha: str, dest: Path, env: dict, hooks: Path) -> int:
     """`sha` の tree の blob を、生のバイトのまま `dest/<path>` に書く。書いた本数を返す。
 
     mode 100644 と 100755 は通常ファイル (100755 は実行ビットを立てる)、120000 (symlink)
     はリンク先の文字列を中身にした通常ファイルにする。symlink を復元しないのは、利用者が
     そのパスを明示すると上流がリンク先 (リポジトリの外を含む) を読んで送るため。
+
+    `hooks` は `core.hooksPath` に渡す空のディレクトリ。ここで呼ぶ `ls-tree` と `cat-file`
+    は hook を起動しない (実測: git 2.55.0) が、展開の中の git はすべて `_QuietGit` で呼ぶ。
 
     パスの検査は書き始める前に全件に対して通す (途中まで書いてから止めない)。書き出しは
     `O_EXCL` で行い、同じパスが既にあれば失敗させる。production では空の worktree に
@@ -243,17 +318,11 @@ def materialize(
     その失敗も含め、書き出しの OSError は `TreeError` にする。素の例外で抜けると Python は
     1 で終わり、ラッパの「1 = finding あり」と衝突するため。
     """
-    entries = _ls_tree(root, sha, env, hooks)
+    git = _QuietGit(env, hooks)
+    entries = _ls_tree(root, sha, git)
     validate_tree_paths([path for _, _, _, path in entries])
     written = 0
-    # stderr は継承する。PIPE にすると読み切るまで cat-file が詰まりうるし、git の
-    # 診断は利用者にそのまま見えてよい
-    with subprocess.Popen(
-        _git_argv(root, ["cat-file", "--batch"], hooks),
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        env=env,
-    ) as proc:
+    with git.popen(root, ["cat-file", "--batch"]) as proc:
         for mode, _, object_sha, path in entries:
             if mode not in _WRITTEN_MODES:
                 continue
@@ -299,14 +368,14 @@ def _reject_sgconfig_in_ancestors(tree: Path) -> None:
                 raise TreeError(f"一時ディレクトリの祖先に {name} がある: {ancestor / name}")
 
 
-def _discard_worktree(root: Path, tree: Path, env: dict, hooks: Path) -> None:
+def _discard_worktree(git: _QuietGit, root: Path, tree: Path) -> None:
     # 後始末は元の例外を隠さないよう、どの段も失敗を投げない。`worktree remove --force`
     # は worktree の `.git` ファイルが壊れていると終了コード 128 でディレクトリを残す
     # (実測: git 2.55.0) ので、そのときはディレクトリを消してから登録を prune する
-    proc = _git(root, ["worktree", "remove", "--force", str(tree)], env, hooks=hooks)
+    proc = git.run(root, ["worktree", "remove", "--force", str(tree)])
     if proc.returncode != 0:
         shutil.rmtree(tree, ignore_errors=True)
-        _git(root, ["worktree", "prune"], env, hooks=hooks)
+        git.run(root, ["worktree", "prune"])
 
 
 def _temp_base(env: dict, root: Path) -> Path:
@@ -315,20 +384,33 @@ def _temp_base(env: dict, root: Path) -> Path:
     `env` の `TMPDIR` が空でない絶対パスならそれ、それ以外は `tempfile.gettempdir()`。
     空や相対の値を `mkdtemp(dir=...)` にそのまま渡すと cwd の下に作られ、3.9 では返る
     パスも相対になる (実測: 3.9.6 は `'jevlint-xxx'`、3.14.7 は cwd を前置した絶対パス)。
-    相対のままだと `worktree add` は `-C root` の root から、`read-tree` と書き出しは
-    cwd から解決して別の場所を指す。
+    相対のままだと `worktree add` は `-C root` の root から、書き出しは cwd から解決して
+    別の場所を指す。
 
     解決した置き場がリポジトリの root の中なら拒否する。利用者の作業ツリーの中に
-    worktree を作ると、走査対象に自分の展開が混ざるため。
+    worktree を作ると、走査対象に自分の展開が混ざるため。包含は inode で見る。大文字
+    小文字を区別しないファイルシステムでは `resolve()` が与えられた表記の大文字小文字を
+    保つので (実測: APFS)、文字列の比較は `.../Repo` と `.../repo/sub` の包含を見落とす。
     """
     candidate = env.get("TMPDIR", "")
-    if candidate and os.path.isabs(candidate):
-        base = Path(candidate).resolve()
-    else:
-        base = Path(tempfile.gettempdir()).resolve()
-    root_resolved = root.resolve()
-    if base == root_resolved or root_resolved in base.parents:
-        raise TreeError(f"一時ディレクトリの置き場がリポジトリの中にある: {base}")
+    try:
+        if candidate and os.path.isabs(candidate):
+            base = Path(candidate).resolve()
+        else:
+            # gettempdir は候補が 1 つも使えないと FileNotFoundError を投げる
+            base = Path(tempfile.gettempdir()).resolve()
+    except (OSError, RuntimeError) as error:
+        # 3.9 の resolve() は symlink のループを RuntimeError にする (実測: 3.9.6。3.14.7 は
+        # 投げず、後の mkdtemp が OSError になる)
+        raise TreeError(f"一時ディレクトリの置き場を解決できない: {error}") from None
+    for ancestor in (base, *base.parents):
+        try:
+            same = os.path.samefile(ancestor, root)
+        except OSError:
+            # まだ無いディレクトリ。使えなければ mkdtemp が TreeError にする
+            continue
+        if same:
+            raise TreeError(f"一時ディレクトリの置き場がリポジトリの中にある: {base}")
     return base
 
 
@@ -340,11 +422,16 @@ def expanded_commit(root: Path, sha: str, env: dict) -> Iterator[Expanded]:
     ではなく。上流に渡す env と同じ値で決まるようにし、テストが置き場を差し替えられる
     ようにするため)。
 
-    git の呼び出しはすべて `-c core.hooksPath=<空のディレクトリ>` を付ける。`--no-checkout`
-    が止めるのは post-checkout だけで、`worktree add` 自体は `reference-transaction` を、
-    `read-tree` は `post-index-change` を起動する (実測: git 2.55.0)。hook は利用者の
-    リポジトリの設定で任意のコマンドになりうるので、展開の間はどの hook も起動させない。
-    後始末の `worktree remove` と `prune` は hook を起動しない (実測) が、同じ形で呼ぶ。
+    worktree は `worktree add --detach --no-checkout` で登録するだけで、index は作らない
+    (`read-tree` は呼ばない)。上流が worktree の中で呼ぶ git はコミット同士の
+    `git diff <base>...HEAD` だけで (spec の前提 17)、index も作業ツリーも読まない。index の
+    無い worktree でのその diff は通常の checkout と同一の出力で、`worktree remove --force`
+    も通る (実測: git 2.55.0)。
+
+    git の呼び出しはすべて `_QuietGit` を通す。`--no-checkout` が止めるのは post-checkout
+    だけで、`worktree add` 自体は `reference-transaction` を起動する (実測: git 2.55.0)。
+    hook は利用者のリポジトリの設定で任意のコマンドになりうるので、展開の間は起動させない。
+    後始末の `worktree remove` と `prune` は hook を起動しない (実測) が、同じ runner で呼ぶ。
     """
     base = _temp_base(env, root)
     try:
@@ -353,6 +440,7 @@ def expanded_commit(root: Path, sha: str, env: dict) -> Iterator[Expanded]:
         raise TreeError(f"一時ディレクトリを作れない: {error}") from None
     tree = tmp / "tree"
     hooks = tmp / "hooks"
+    git = _QuietGit(env, hooks)
     # `worktree add` が成功する前に失敗したときは登録が無いので、後始末で git を呼ばない。
     # 登録の無いパスへの `worktree remove` は失敗し、その fallback の `worktree prune` は
     # 利用者のリポジトリでディレクトリの見当たらない登録 (アンマウント中のボリューム等)
@@ -366,18 +454,10 @@ def expanded_commit(root: Path, sha: str, env: dict) -> Iterator[Expanded]:
             scratch.mkdir()
         except OSError as error:
             raise TreeError(f"一時ディレクトリの中を作れない: {error}") from None
-        proc = _git(
-            root,
-            ["worktree", "add", "--detach", "--no-checkout", str(tree), sha],
-            env,
-            hooks=hooks,
-        )
+        proc = git.run(root, ["worktree", "add", "--detach", "--no-checkout", str(tree), sha])
         if proc.returncode != 0:
             raise TreeError(f"git worktree add に失敗した (sha={sha!r})")
         registered = True
-        proc = _git(tree, ["read-tree", sha], env, hooks=hooks)
-        if proc.returncode != 0:
-            raise TreeError(f"git read-tree に失敗した (sha={sha!r})")
         materialize(root, sha, tree, env, hooks)
         for name in _SGCONFIG_NAMES:
             candidate = tree / name
@@ -398,7 +478,7 @@ def expanded_commit(root: Path, sha: str, env: dict) -> Iterator[Expanded]:
         yield Expanded(tree=tree, scratch=scratch)
     finally:
         if registered:
-            _discard_worktree(root, tree, env, hooks)
+            _discard_worktree(git, root, tree)
         shutil.rmtree(tmp, ignore_errors=True)
 
 
