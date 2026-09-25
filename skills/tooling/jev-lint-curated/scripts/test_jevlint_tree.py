@@ -2,10 +2,11 @@
 
 前半は `repo_root` / `resolve_commit` / `normalize_path` / `path_in_commit` と `TreeError`。
 後半は送る範囲の境界そのもので、`validate_tree_paths` / `materialize` / `expanded_commit` /
-`signals_as_exceptions` / `count_suffix` が対象。後半の fixture リポジトリには、checkout を
-経由すると中身が変わるもの (smudge filter、リポジトリの外を指す symlink、post-checkout hook)
-をわざと入れてあり、展開後のディスクがコミットの blob と同一であることを `git cat-file blob`
-との比較で見る。
+`signals_as_exceptions` / `count_suffix` が対象。後半の fixture リポジトリには、checkout や
+hook を経由すると中身が変わるもの (smudge filter、リポジトリの外を指す symlink、cwd に目印を
+置く 3 つの hook) をわざと入れてあり、展開後のディスクがコミットの blob と同一で、余分な
+ものが無く、リポジトリの root にも何も足されないことを見る。hook が本当に起動する状態かは
+陽性対照 (ラッパの `-c core.hooksPath` 無しで同じ git 操作をする) が確かめる。
 
 git を呼ぶテストはすべて `GIT_*` を落とした `os.environ` の写しを `env` として自前で渡す
 (production の `build_env` は Task 4 で追加されるため)。一時リポジトリごとに
@@ -22,7 +23,6 @@ from __future__ import annotations
 import contextlib
 import io
 import os
-import shlex
 import shutil
 import signal
 import subprocess
@@ -91,16 +91,16 @@ class GitRepo:
             ["git", "-C", str(self.path), "hash-object", "-w", "--stdin"], stdin=data
         ).decode("ascii").strip()
 
-    def mktree(self, entries: list) -> str:
+    def mktree(self, entries: list, missing: bool = False) -> str:
         """`(mode, type, sha, name)` の列から tree object を作り、その SHA を返す。
 
         作業ツリーを経由しないので、大文字小文字を区別しないファイルシステムでは
         作れない名前の組 (`A.py` と `a.py`) や `.GIT` を持つ tree もここで作れる。
+        `missing=True` は object store に無い SHA を指す項目を許す (partial clone の再現)。
         """
         lines = "".join(f"{mode} {otype} {sha}\t{name}\n" for mode, otype, sha, name in entries)
-        return run_bytes(
-            ["git", "-C", str(self.path), "mktree"], stdin=lines.encode("utf-8")
-        ).decode("ascii").strip()
+        args = ["git", "-C", str(self.path), "mktree"] + (["--missing"] if missing else [])
+        return run_bytes(args, stdin=lines.encode("utf-8")).decode("ascii").strip()
 
     def commit_tree(self, tree_sha: str) -> str:
         return self.git("commit-tree", tree_sha, "-m", "synthetic").strip()
@@ -349,14 +349,34 @@ class ValidateTreePathsTests(unittest.TestCase):
 
 FIVE_MB = 5 * 1024 * 1024
 
+# 40 桁の hex として well-formed だが object store に無い SHA。partial clone で blob だけが
+# 未取得の状態を `git mktree --missing` で再現するのに使う
+MISSING_SHA = "0123456789abcdef0123456789abcdef01234567"
+
+# 展開の間に利用者の hook が走ったことを示す目印。hook は自分の cwd に置くので、cwd が
+# worktree なら worktree の中に、リポジトリの root なら root に現れる。checkout 無しの
+# 操作でも hook は起動する: `worktree add --no-checkout` は reference-transaction を
+# (cwd = root)、`read-tree` は post-index-change を (cwd = worktree) 起動する (実測:
+# git 2.55.0)。post-checkout は checkout が走ったときだけ、cwd = 新しい worktree で起動する
+HOOK_NAMES = ("post-checkout", "post-index-change", "reference-transaction")
+
+
+def injected_marker(hook: str) -> str:
+    return f"INJECTED-{hook}.txt"
+
+
+def tree_entries(tree: Path) -> list:
+    """`tree` の下にある項目 (ファイルとディレクトリ、ドット始まりを含む) の相対パス。"""
+    return sorted(str(p.relative_to(tree)) for p in tree.rglob("*"))
+
 
 class ExpansionFixture:
-    """checkout を経由すると中身が変わるものを揃えたコミット。
+    """checkout や hook を経由すると中身が変わるものを揃えたコミット。
 
-    filter / symlink / hook のどれも、`materialize` が blob の生のバイトを書く限りは
-    ディスクに影響しない。逆に `worktree add` に checkout させると smudge が走り
-    (filtered.txt が大文字になる)、symlink が symlink として復元され、post-checkout の
-    目印が書かれる (実測: git 2.55.0)。
+    filter / symlink / hook のどれも、`materialize` が blob の生のバイトを書き、git の
+    呼び出しが hook を止めている限りはディスクに影響しない。逆に `worktree add` に
+    checkout させると smudge が走り (filtered.txt が大文字になる)、symlink が symlink
+    として復元され、post-checkout の目印が書かれる (実測: git 2.55.0)。
     """
 
     def __init__(self, test: unittest.TestCase):
@@ -375,12 +395,22 @@ class ExpansionFixture:
         (root / "big.bin").write_bytes(bytes(range(256)) * (FIVE_MB // 256))
         self.repo.config("filter.up.smudge", "tr a-z A-Z")
         self.repo.config("filter.up.clean", "cat")
-        self.marker = root / "HOOK_RAN"
-        hook = root / ".git" / "hooks" / "post-checkout"
-        hook.parent.mkdir(exist_ok=True)
-        hook.write_text(f"#!/bin/sh\ntouch {shlex.quote(str(self.marker))}\n", encoding="utf-8")
-        hook.chmod(0o755)
         self.sha = self.repo.commit()
+        # hook はコミットの後に置く。`git add` は post-index-change を、`git commit` は
+        # reference-transaction を起動するので、先に置くと fixture の組み立てで目印が付く。
+        # `core.hooksPath` を絶対パスで local 設定に入れるのは、開発機の global 設定に
+        # `core.hooksPath` があると `.git/hooks` が読まれず、hook のテストが何も見ずに
+        # 通るため (local は global より優先され、ラッパの `-c` は local より優先される。
+        # 実測)。hook が本当に起動する状態かは陽性対照のテストが確かめる
+        self.hooks_dir = root / ".git" / "hooks"
+        self.hooks_dir.mkdir(exist_ok=True)
+        for hook in HOOK_NAMES:
+            script = self.hooks_dir / hook
+            script.write_text(
+                f'#!/bin/sh\ntouch "$PWD/{injected_marker(hook)}"\n', encoding="utf-8"
+            )
+            script.chmod(0o755)
+        self.repo.config("core.hooksPath", str(self.hooks_dir))
         self.paths = [
             ".gitattributes",
             "big.bin",
@@ -391,6 +421,17 @@ class ExpansionFixture:
             "sgconfig.yml",
             "日本語 ファイル.py",
         ]
+
+    def expected_tree_entries(self) -> list:
+        """展開後の worktree にあるべき項目。コミットのパスから sgconfig を除き `.git` を足す。"""
+        entries = {".git"}
+        for path in self.paths:
+            if path == "sgconfig.yml":
+                continue
+            parts = path.split("/")
+            for depth in range(1, len(parts) + 1):
+                entries.add("/".join(parts[:depth]))
+        return sorted(entries)
 
 
 class MaterializeTests(unittest.TestCase):
@@ -471,6 +512,29 @@ class MaterializeTests(unittest.TestCase):
             jevlint_tree.materialize(self.repo.path, "deadbeef" * 5, self.dest, ENV)
         self.assertEqual([], list(self.dest.iterdir()))
 
+    def test_missing_blob_is_a_tree_error(self):
+        # partial clone では tree はあっても blob が未取得のことがある。`ls-tree -r` は
+        # 終了コード 0 で項目を返し、`cat-file --batch` が `<sha> missing` を返す (実測)。
+        # 無い blob を先頭に置き、何も書かれないことまで見る
+        blob = self.repo.hash_blob(b"x\n")
+        tree = self.repo.mktree(
+            [("100644", "blob", MISSING_SHA, "0.txt"), ("100644", "blob", blob, "a.txt")],
+            missing=True,
+        )
+        sha = self.repo.commit_tree(tree)
+        with self.assertRaises(jevlint_tree.TreeError) as cm:
+            jevlint_tree.materialize(self.repo.path, sha, self.dest, ENV)
+        self.assertIn(MISSING_SHA, str(cm.exception))
+        self.assertEqual([], list(self.dest.iterdir()))
+
+    def test_a_path_that_already_exists_in_dest_is_a_tree_error(self):
+        # `O_EXCL` の失敗を素の `FileExistsError` で抜けさせると Python は 1 で終わり、
+        # ラッパの「1 = finding あり」と衝突する
+        (self.dest / "plain.py").write_text("stale\n", encoding="utf-8")
+        with self.assertRaises(jevlint_tree.TreeError) as cm:
+            jevlint_tree.materialize(self.repo.path, self.fixture.sha, self.dest, ENV)
+        self.assertIn("plain.py", str(cm.exception))
+
 
 class ExpandedCommitTests(unittest.TestCase):
     def setUp(self):
@@ -484,9 +548,21 @@ class ExpandedCommitTests(unittest.TestCase):
         redirect = contextlib.redirect_stderr(self.stderr)
         redirect.__enter__()
         self.addCleanup(redirect.__exit__, None, None, None)
+        # 展開がリポジトリの root に何も足さないこと (hook の目印を含む) の対照
+        self.root_listing = sorted(os.listdir(self.repo.path))
 
     def _assert_torn_down(self, tmp: Path) -> None:
         self.assertFalse(tmp.exists(), f"一時ディレクトリが残っている: {tmp}")
+        self.assertEqual(1, self.repo.worktree_count(), "worktree の登録が残っている")
+
+    def _private_base(self) -> "tuple[Path, dict]":
+        """展開の置き場を専用のディレクトリにした env。抜けた後に空であることを見るため。"""
+        base = Path(tempfile.mkdtemp(prefix="jevlint-base-"))
+        self.addCleanup(lambda: shutil.rmtree(base, ignore_errors=True))
+        return base, dict(ENV, TMPDIR=str(base))
+
+    def _assert_torn_down_into(self, base: Path) -> None:
+        self.assertEqual([], os.listdir(base), "一時ディレクトリが残っている")
         self.assertEqual(1, self.repo.worktree_count(), "worktree の登録が残っている")
 
     def test_tree_holds_raw_blobs_and_scratch_is_a_sibling_outside_the_tree(self):
@@ -537,10 +613,31 @@ class ExpandedCommitTests(unittest.TestCase):
             pass
         self.assertEqual("", self.stderr.getvalue())
 
-    def test_post_checkout_hook_does_not_run(self):
+    def test_worktree_holds_exactly_the_commit_paths_minus_sgconfig_plus_dot_git(self):
+        # 「余分なものが無い」まで見る。cwd を worktree にして起動する hook
+        # (read-tree の post-index-change、checkout の post-checkout) の目印はここに現れる
+        with jevlint_tree.expanded_commit(self.repo.path, self.sha, ENV) as expanded:
+            self.assertEqual(self.fixture.expected_tree_entries(), tree_entries(expanded.tree))
+
+    def test_repository_root_is_untouched_by_the_expansion(self):
+        # cwd をリポジトリの root にして起動する hook (worktree add の
+        # reference-transaction) の目印はここに現れる
         with jevlint_tree.expanded_commit(self.repo.path, self.sha, ENV):
             pass
-        self.assertFalse(self.fixture.marker.exists())
+        self.assertEqual(self.root_listing, sorted(os.listdir(self.repo.path)))
+
+    def test_hooks_do_fire_when_git_runs_without_the_wrappers_hooks_path(self):
+        # 陽性対照。fixture の hook が本当に起動する状態でなければ、上の 2 テストは
+        # 何も見ずに緑になる。ラッパの `-c core.hooksPath` を付けずに同じ操作をすると
+        # 目印が付くことを、skip ではなく失敗で確かめる
+        self.repo.git("read-tree", self.sha)
+        self.assertIn(injected_marker("post-index-change"), os.listdir(self.repo.path))
+        control = Path(tempfile.mkdtemp(prefix="jevlint-control-")) / "wt"
+        self.addCleanup(lambda: shutil.rmtree(control.parent, ignore_errors=True))
+        self.repo.git("worktree", "add", "--detach", str(control), self.sha)
+        self.assertIn(injected_marker("reference-transaction"), os.listdir(self.repo.path))
+        self.assertIn(injected_marker("post-checkout"), os.listdir(control))
+        self.repo.git("worktree", "remove", "--force", str(control))
 
     def test_normal_exit_removes_the_worktree_and_the_temp_dir(self):
         with jevlint_tree.expanded_commit(self.repo.path, self.sha, ENV) as expanded:
@@ -621,12 +718,86 @@ class ExpandedCommitTests(unittest.TestCase):
         self.assertEqual(2, self.repo.worktree_count(), "無関係な登録が prune された")
 
     def test_temp_dir_follows_tmpdir_of_the_given_env(self):
-        base = Path(tempfile.mkdtemp(prefix="jevlint-base-"))
-        self.addCleanup(lambda: shutil.rmtree(base, ignore_errors=True))
-        env = dict(ENV, TMPDIR=str(base))
+        base, env = self._private_base()
         with jevlint_tree.expanded_commit(self.repo.path, self.sha, env) as expanded:
-            self.assertEqual(base, expanded.tree.parent.parent)
+            self.assertEqual(base.resolve(), expanded.tree.parent.parent)
         self.assertEqual([], list(base.iterdir()))
+
+    def test_empty_or_relative_tmpdir_falls_back_to_the_system_temp_dir(self):
+        # 空や相対の TMPDIR を mkdtemp にそのまま渡すと cwd の下に作られ、3.9 では返る
+        # パスも相対になる (実測: 3.9.6 は 'jevlint-xxx'、3.14.7 は cwd を前置した絶対
+        # パス)。相対のままだと worktree add は root から、read-tree と書き出しは cwd
+        # から解決して別の場所を指す
+        system = Path(tempfile.gettempdir()).resolve()
+        for value in ("", "rel"):
+            with self.subTest(TMPDIR=value):
+                env = dict(ENV, TMPDIR=value)
+                with jevlint_tree.expanded_commit(self.repo.path, self.sha, env) as expanded:
+                    self.assertTrue(expanded.tree.is_absolute())
+                    self.assertEqual(system, expanded.tree.parent.parent)
+                    self.assertNotIn(self.repo.path.resolve(), expanded.tree.parents)
+                self.assertFalse(Path("rel").exists(), "cwd の下に相対の置き場が作られた")
+
+    def test_tmpdir_inside_the_repository_is_refused_and_leaves_nothing_behind(self):
+        # 利用者の作業ツリーの中に worktree を作ると、走査対象に自分の展開が混ざる。
+        # fixture の root には sgconfig.yml があり、祖先の検査が先に拒否してしまうので、
+        # 置き場の検査だけが拒否できるよう sgconfig の無いリポジトリで見る
+        repo = GitRepo(self)
+        repo.write("a.py")
+        sha = repo.commit()
+        inside = repo.path / "tmpbase"
+        inside.mkdir()
+        listing = sorted(os.listdir(repo.path))
+        for value in (str(inside), str(repo.path)):
+            with self.subTest(TMPDIR=value):
+                env = dict(ENV, TMPDIR=value)
+                with self.assertRaises(jevlint_tree.TreeError) as cm:
+                    with jevlint_tree.expanded_commit(repo.path, sha, env):
+                        self.fail("リポジトリの中を置き場にした展開が通った")
+                self.assertIn("リポジトリの中", str(cm.exception))
+                self.assertEqual([], os.listdir(inside))
+                self.assertEqual(listing, sorted(os.listdir(repo.path)))
+                self.assertEqual(1, repo.worktree_count())
+
+    def test_missing_blob_during_expansion_is_a_tree_error_and_tears_down(self):
+        blob = self.repo.hash_blob(b"x\n")
+        tree = self.repo.mktree(
+            [("100644", "blob", MISSING_SHA, "0.txt"), ("100644", "blob", blob, "a.txt")],
+            missing=True,
+        )
+        sha = self.repo.commit_tree(tree)
+        base, env = self._private_base()
+        with self.assertRaises(jevlint_tree.TreeError) as cm:
+            with jevlint_tree.expanded_commit(self.repo.path, sha, env):
+                self.fail("blob の無いコミットの展開が通った")
+        self.assertIn(MISSING_SHA, str(cm.exception))
+        self._assert_torn_down_into(base)
+
+    def test_committed_sgconfig_directory_is_refused_and_tears_down(self):
+        # コミットに `sgconfig.yml/x` があると展開後の `sgconfig.yml` はディレクトリで、
+        # `unlink()` は macOS では PermissionError になる (実測)。ast-grep が読むのは
+        # ファイルなので、消す代わりに拒否する
+        blob = self.repo.hash_blob(b"x\n")
+        sub = self.repo.mktree([("100644", "blob", blob, "x")])
+        tree = self.repo.mktree(
+            [("100644", "blob", blob, "a.py"), ("040000", "tree", sub, "sgconfig.yml")]
+        )
+        sha = self.repo.commit_tree(tree)
+        base, env = self._private_base()
+        with self.assertRaises(jevlint_tree.TreeError) as cm:
+            with jevlint_tree.expanded_commit(self.repo.path, sha, env):
+                self.fail("sgconfig.yml がディレクトリのコミットの展開が通った")
+        self.assertIn("sgconfig.yml", str(cm.exception))
+        self._assert_torn_down_into(base)
+
+    def test_failing_worktree_add_is_a_tree_error_and_leaves_nothing_behind(self):
+        base, env = self._private_base()
+        with self.assertRaises(jevlint_tree.TreeError) as cm:
+            with jevlint_tree.expanded_commit(self.repo.path, "deadbeef" * 5, env):
+                self.fail("実在しない SHA の展開が通った")
+        self.assertIn("worktree add", str(cm.exception))
+        self._assert_torn_down_into(base)
+        self.assertEqual(self.root_listing, sorted(os.listdir(self.repo.path)))
 
     def test_unusable_tmpdir_is_a_tree_error_and_registers_nothing(self):
         base = Path(tempfile.mkdtemp(prefix="jevlint-base-"))
@@ -637,14 +808,21 @@ class ExpandedCommitTests(unittest.TestCase):
                 self.fail("存在しない TMPDIR で展開が通った")
         self.assertEqual(1, self.repo.worktree_count())
 
-    def test_tree_error_during_expansion_tears_down(self):
+    def test_tree_error_from_materialize_during_expansion_tears_down(self):
+        # `.GIT` は git 自身の read-tree が `invalid path` で拒む (実測: 終了コード 128)
+        # ので materialize の検査まで届かない。`A.py`/`a.py` は read-tree を通り (index は
+        # 大文字小文字を区別する)、materialize の検査で落ちる
         blob = self.repo.hash_blob(b"x\n")
-        tree = self.repo.mktree([("100644", "blob", blob, ".GIT")])
+        tree = self.repo.mktree(
+            [("100644", "blob", blob, "0.py"), ("100644", "blob", blob, "A.py"), ("100644", "blob", blob, "a.py")]
+        )
         sha = self.repo.commit_tree(tree)
-        with self.assertRaises(jevlint_tree.TreeError):
-            with jevlint_tree.expanded_commit(self.repo.path, sha, ENV):
-                self.fail("`.GIT` を持つコミットの展開が通った")
-        self.assertEqual(1, self.repo.worktree_count())
+        base, env = self._private_base()
+        with self.assertRaises(jevlint_tree.TreeError) as cm:
+            with jevlint_tree.expanded_commit(self.repo.path, sha, env):
+                self.fail("`A.py` と `a.py` を持つコミットの展開が通った")
+        self.assertIn("a.py", str(cm.exception))
+        self._assert_torn_down_into(base)
 
 
 class SignalsAsExceptionsTests(unittest.TestCase):
