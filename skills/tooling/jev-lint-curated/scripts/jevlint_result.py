@@ -240,14 +240,15 @@ def summarize(
 
     # 終了コード 3 のときは、指摘より先に「答えが無い」ことを言う (spec: 指摘だけを見て
     # 「全部揃った上での finding」と誤読させない)。N は stats.missing であって errors の
-    # 件数と合算しない。upstream の run.ts を実測すると errors には性質の違う 2 つが混じる:
-    # 質問そのものの失敗 (run.ts の askBatch の catch、537-556 行) はその batch の全 subject
-    # を answer: null にして必ず stats.missing へ回るが、finding が付いた後の explain
-    # フォローアップの失敗 (run.ts の explainFindings、707-713 行) は「finding は既に付いた
-    # ままレポートされる」ため stats.missing を動かさない。後者だけが起きた実行は
-    # missing 0 のまま errors が非 0 になり、この行は「0 件は答えが無い」を出す。それは
-    # 嘘ではない (答えが無い subject は実際に 0 件) ので、errors の件数と理由は別行 (上の
-    # 「エラー」) が担う。
+    # 件数と合算しない。upstream の run.ts には errors.push が 3 箇所あり、性質が違う:
+    # 質問そのものの失敗 (askBatch の catch、537-556 行) はその batch の全 subject を
+    # answer: null にして必ず stats.missing へ回る。一方、finding が既に付いた後の
+    # 追加の問い合わせの失敗である explainFindings の catch (707-713 行) と
+    # attributeFindings の catch (844-851 行) は、どちらも「finding は既に付いた
+    # ままレポートされる (fail open)」ため stats.missing を動かさない。後者の 2 つの
+    # どちらかだけが起きた実行は missing 0 のまま errors が非 0 になり、この行は
+    # 「0 件は答えが無い」を出す。それは嘘ではない (答えが無い subject は実際に 0 件)
+    # ので、errors の件数と理由は別行 (上の「エラー」) が担う。
     if outcome.code == 3:
         lines.append(f"{missing} 件は答えが無い")
 

@@ -173,8 +173,9 @@ class ClassifyTests(unittest.TestCase):
         self.assertIsNone(outcome.doc)
 
     def test_dry_run_false_dryrun_flag_is_code_2(self):
-        # dryRun が偽値なら「持てば」の条件を満たさない。真偽混同 (dryRun: 1 のような
-        # truthy) を通さないことも合わせて見る。
+        # dryRun が明示的に false なら「持てば」の条件を満たさない。truthy (1、"true"
+        # のような falsy でない値) を弾くことは別テスト
+        # (test_dry_run_truthy_int_flag_is_code_2 / _truthy_string_flag_is_code_2) が見る。
         outcome = jevlint_result.classify(
             0, '{"dryRun": false, "subjects": 5}', None, dry_run=True
         )
@@ -185,6 +186,23 @@ class ClassifyTests(unittest.TestCase):
         # 誤って通らないことを見る。
         outcome = jevlint_result.classify(
             0, '{"dryRun": true, "subjects": true}', None, dry_run=True
+        )
+        self.assertEqual(outcome.code, 2)
+
+    def test_dry_run_truthy_int_flag_is_code_2(self):
+        # dryRun: 1 は JSON 上 truthy だが `is not True` は真偽値そのものしか通さない。
+        # `not doc.get("dryRun")` のような「falsy かどうか」に緩めると、1 は falsy
+        # ではないので誤って通ってしまう (fix round 1、レビュー指摘)。
+        outcome = jevlint_result.classify(
+            0, '{"dryRun": 1, "subjects": 5}', None, dry_run=True
+        )
+        self.assertEqual(outcome.code, 2)
+
+    def test_dry_run_truthy_string_flag_is_code_2(self):
+        # 文字列 "true" も JSON 上 truthy だが、真偽値ではないので通らない
+        # (test_dry_run_truthy_int_flag_is_code_2 と同じ理由、fix round 1)。
+        outcome = jevlint_result.classify(
+            0, '{"dryRun": "true", "subjects": 5}', None, dry_run=True
         )
         self.assertEqual(outcome.code, 2)
 
@@ -223,6 +241,48 @@ class ClassifyTests(unittest.TestCase):
     def test_row6_findings_not_a_list_is_code_2(self):
         doc = _doc()
         doc["findings"] = {}
+        outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
+        self.assertEqual(outcome.code, 2)
+
+    def test_row6_stats_missing_key_entirely_is_code_2(self):
+        # stats.subjects だけでなく stats 自体が丸ごと無い場合も同じ経路で 2 になることを
+        # 見る (fix round 1、レビュー指摘の Minor 3)。
+        doc = _doc()
+        del doc["stats"]
+        outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
+        self.assertEqual(outcome.code, 2)
+
+    def test_row6_stats_not_a_dict_is_code_2(self):
+        # stats が dict でなければ、その下の subjects/missing のどちらを辿ろうとしても
+        # 「無い」と同じ扱いで 2 になる (fix round 1、レビュー指摘の Minor 3)。
+        doc = _doc()
+        doc["stats"] = "not a dict"
+        outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
+        self.assertEqual(outcome.code, 2)
+
+    def test_row6_errors_not_a_list_is_code_2(self):
+        # findings と対称に、errors も型違いなら 2 になることを見る
+        # (fix round 1、レビュー指摘の Minor 3)。
+        doc = _doc()
+        doc["errors"] = {}
+        outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
+        self.assertEqual(outcome.code, 2)
+
+    def test_row6_stats_missing_bool_is_code_2(self):
+        # bool ガード (_read_required の isinstance(node, bool) チェック) は dry-run 側の
+        # _dry_run_ok だけでなく非 dry-run 側でも効くことを見る。このテストが無いと
+        # jevlint_result.py の該当 2 行を削除してもテストが緑のまま通ってしまう
+        # (fix round 1、レビュー指摘の Important 1)。
+        doc = _doc()
+        doc["stats"]["missing"] = True
+        outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
+        self.assertEqual(outcome.code, 2)
+
+    def test_row6_stats_subjects_bool_is_code_2(self):
+        # test_row6_stats_missing_bool_is_code_2 と同じ理由 (fix round 1、Important 1)。
+        # stats.subjects 側でも bool を件数として誤って通さないことを見る。
+        doc = _doc()
+        doc["stats"]["subjects"] = False
         outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
         self.assertEqual(outcome.code, 2)
 

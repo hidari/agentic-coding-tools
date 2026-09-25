@@ -827,6 +827,8 @@ skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.UpstreamArgvTests.test_tail_is_fixed_part
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_dry_run_false_dryrun_flag_is_code_2
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_dry_run_subjects_bool_is_code_2
+skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_dry_run_truthy_int_flag_is_code_2
+skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_dry_run_truthy_string_flag_is_code_2
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_record_json_not_an_object_is_code_2
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_row10_findings_one_upstream_rc1_is_code_1
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_row11_findings_zero_upstream_rc0_is_code_0
@@ -836,11 +838,16 @@ skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_res
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_row3_stdout_not_json_is_code_2
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_row4_dry_run_with_subjects_is_code_0
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_row5_dry_run_without_subjects_is_code_2
+skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_row6_errors_not_a_list_is_code_2
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_row6_findings_not_a_list_is_code_2
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_row6_missing_errors_key_is_code_2
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_row6_missing_findings_key_is_code_2
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_row6_missing_stats_missing_key_is_code_2
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_row6_missing_stats_subjects_key_is_code_2
+skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_row6_stats_missing_bool_is_code_2
+skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_row6_stats_missing_key_entirely_is_code_2
+skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_row6_stats_not_a_dict_is_code_2
+skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_row6_stats_subjects_bool_is_code_2
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_row6_wrong_type_stats_missing_is_code_2
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_row7_record_text_none_is_code_2
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.ClassifyTests.test_row7_record_text_not_json_is_code_2
