@@ -769,6 +769,7 @@ skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.NormalizePathTests.test_rejects_a_dash_prefix_that_only_appears_after_normalization
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.NormalizePathTests.test_rejects_absolute_and_dotdot_and_dash
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.PathInCommitTests.test_empty_path_is_always_true
+skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.PathInCommitTests.test_git_call_failure_raises_instead_of_returning_false
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.PathInCommitTests.test_non_ascii_tracked_file_is_true
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.PathInCommitTests.test_nonexistent_name_is_false
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.PathInCommitTests.test_tracked_directory_is_true

@@ -82,7 +82,16 @@ def normalize_path(text: str) -> str:
 
 
 def path_in_commit(root: Path, sha: str, path: str, env: dict) -> bool:
-    """`path` (root 相対、`normalize_path` 済みの形) が `sha` のコミットに実在するか。"""
+    """`path` (root 相対、`normalize_path` 済みの形) が `sha` のコミットに実在するか。
+
+    git 呼び出し自体の失敗 (実在しない sha、partial clone で tree object が未取得、
+    object store の破損等) は「パスが無い」(`False`) に吸収せず `TreeError` にする。
+    実測: 40 桁 hex として well-formed だが実在しない sha を渡すと `git ls-tree` は
+    終了コード 128・`fatal: not a tree object` で失敗する。これは「パスが無い」
+    (終了コード 0・出力空) とは別の failure mode であり、区別しないと git 障害が
+    「対象パスがコミットに存在しない」という誤ったメッセージに化ける。
+    `repo_root` / `resolve_commit` と同じ「非 0 終了は TreeError」の形に揃える。
+    """
     if path == "":
         return True
     proc = subprocess.run(
@@ -90,6 +99,8 @@ def path_in_commit(root: Path, sha: str, path: str, env: dict) -> bool:
         env=env,
         capture_output=True,
     )
+    if proc.returncode != 0:
+        raise TreeError(f"git ls-tree の呼び出しに失敗した (sha={sha!r}, path={path!r})")
     # -z は区切りを NUL にするだけでなく、非 ASCII なファイル名を引用符で包む既定の
     # 挙動 (core.quotePath) も止める (実測)。存在しないパスは終了コード 0 のまま
     # 出力だけが空になるので、空かどうかだけを見ればよい

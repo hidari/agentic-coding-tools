@@ -247,6 +247,27 @@ class PathInCommitTests(unittest.TestCase):
             )
         )
 
+    def test_git_call_failure_raises_instead_of_returning_false(self):
+        # git ls-tree の呼び出し自体が失敗するケース (実在しない sha、partial clone で
+        # tree object が未取得、object store の破損等) を、`False` (= 「パスが
+        # コミットに無い」) へ吸収してはいけない。実測: 40 桁 hex として well-formed
+        # だが実在しない sha を渡すと `git ls-tree` は終了コード 128・`fatal: not a
+        # tree object` で失敗する。これは「パスが無い」(終了コード 0・出力空) とは
+        # 別の failure mode であり、区別せず False を返すと Task 6 で実際の git 障害が
+        # 「対象パスがコミットに存在しない」という誤ったメッセージに化ける
+        missing_sha = "deadbeef" * 5
+        with self.assertRaises(jevlint_tree.TreeError) as cm:
+            jevlint_tree.path_in_commit(self.repo.path, missing_sha, "root.txt", ENV)
+        message = str(cm.exception)
+        # メッセージは git 呼び出しの失敗そのものを名指す。「パスが無い」場合は
+        # そもそも例外を投げず False を返すだけなので、経路も文言も区別できる
+        self.assertIn(missing_sha, message)
+        self.assertIn("root.txt", message)
+        self.assertFalse(
+            jevlint_tree.path_in_commit(self.repo.path, self.sha, "nope.txt", ENV),
+            "パス不在の経路が例外を投げるようになっている",
+        )
+
 
 class RepoRootTests(unittest.TestCase):
     def test_subdirectory_cwd_still_resolves_the_root(self):
