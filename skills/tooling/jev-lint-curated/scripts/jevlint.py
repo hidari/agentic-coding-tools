@@ -34,8 +34,18 @@ compat の終了コードは次のとおり (これも上から順に判定す�
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import re
-from typing import NoReturn
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Callable, Mapping, NoReturn
+
+import jevlint_host
+import jevlint_result
+import jevlint_tree
 
 # 上流 (jev-lint) の pin はこの 1 箇所だけに置く。他のモジュールは呼び出し側から
 # 版の値を受け取り、自分では持たない。
@@ -192,3 +202,260 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     args = parser.parse_args(argv)
     _reject_dash_positionals(args)
     return args
+
+
+def _committed_paths(root: Path, sha: str, texts: list, env: dict) -> list:
+    """位置引数のパスを root 相対に正規化し、`sha` のコミットに無いものを拒否する。
+
+    起動したディレクトリは解釈に使わない (サブディレクトリから起動しても `sub/a.py` は
+    root の `sub/a.py`)。未追跡や未コミットのファイルもここで落ちる。
+    """
+    paths = []
+    for text in texts:
+        path = jevlint_tree.normalize_path(text)
+        if not jevlint_tree.path_in_commit(root, sha, path, env):
+            raise jevlint_tree.TreeError(
+                f"コミット {sha} に無いパス: {text!r} (上流へ送るのはコミット済みの中身だけ)"
+            )
+        paths.append(path)
+    return paths
+
+
+def _prepare_host(environ: Mapping[str, str], run_pnpm: "Callable | None") -> Path:
+    # 既定の runner は `prepare_host` 自身のもの (pnpm の stdout を stderr へ流す) に任せる。
+    # `subprocess.run` をそのまま渡すと、初回の取得で pnpm の進捗が要約の stdout に混ざる
+    if run_pnpm is None:
+        return jevlint_host.prepare_host(UPSTREAM_VERSION, environ)
+    return jevlint_host.prepare_host(UPSTREAM_VERSION, environ, run=run_pnpm)
+
+
+def _checked_node(host: Path, env: dict, run_upstream: Callable, which: Callable) -> str:
+    """起動に使う node を 1 度だけ解決し、host の jev-lint の `engines.node` を満たすか見る。
+
+    PATH は `env` (`build_env` が相対と空の要素を落としたもの) から取る。利用者の生の PATH
+    で解決すると、相対の要素がプロセスの cwd (消費側のリポジトリ) で解決され、そこに
+    コミットされた `node` を拾う。`path=None` は `os.environ` の PATH に戻るので、PATH が
+    無いときは空文字列を渡す (`shutil.which` は空の path で None を返す。実測: 3.9.6 と
+    3.14.7)。`node --version` は上流と同じ runner で起動し、cwd はラッパ所有の host にする
+    (消費側のリポジトリを子プロセスの cwd にする経路を増やさない)。
+    """
+    node = which("node", path=env.get("PATH", ""))
+    if not node:
+        raise jevlint_host.HostError("node が PATH の絶対パスの要素に見つからない")
+    try:
+        proc = run_upstream(
+            [node, "--version"],
+            cwd=str(host),
+            env=env,
+            stdout=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+        )
+    except OSError as error:
+        raise jevlint_host.HostError(f"node を起動できない: {node}: {error}") from None
+    if proc.returncode != 0:
+        raise jevlint_host.HostError(
+            f"node --version が失敗した (終了コード {proc.returncode}): {node}"
+        )
+    version = jevlint_host.parse_node_version(proc.stdout)
+    engines = jevlint_host.read_engines(host)
+    if not jevlint_host.engines_ok(engines, version):
+        shown = ".".join(str(part) for part in version)
+        raise jevlint_host.HostError(
+            f"node {shown} は jev-lint {UPSTREAM_VERSION} の engines.node ({engines}) を満たさない"
+        )
+    return node
+
+
+def _require_key(environ: Mapping[str, str]) -> None:
+    """キーの有無だけを見る。値はどのメッセージにも入れない。"""
+    status = jevlint_host.key_status(environ)
+    if status == "legacy-only":
+        raise jevlint_host.HostError(
+            "TYPESAFEAI_API_KEY だけがある。上流へ渡すのは TYPESAFE_API_KEY だけなので、"
+            "キーは TYPESAFE_API_KEY に入れること"
+        )
+    if status != "ok":
+        raise jevlint_host.HostError(
+            "TYPESAFE_API_KEY が無いか空白だけ。--dry-run 以外はキーが要る"
+        )
+
+
+def _json_out_target(text: str, cwd: Path, expanded: jevlint_tree.Expanded) -> Path:
+    """`--json-out` の保存先。main の `cwd` からの相対で解釈し、上流を起動する前に検査する。
+
+    上流の起動は課金されるので、書けない保存先で起動の後に失敗しないよう、親ディレクトリが
+    あることと保存先がディレクトリでないこともここで確かめる (権限までは見ない)。展開の
+    worktree と scratch の中は、抜けるときに消えるので
+    拒否する。包含は inode で見る。大文字小文字を区別しないファイルシステムでは、文字列の
+    比較は `.../Tree` と `.../tree` の包含を見落とす (`jevlint_tree._temp_base` と同じ理由)。
+    """
+    target = Path(text)
+    if not target.is_absolute():
+        target = cwd / target
+    target = target.resolve()
+    for ancestor in (target, *target.parents):
+        for inside in (expanded.tree, expanded.scratch):
+            try:
+                same = os.path.samefile(ancestor, inside)
+            except OSError:
+                # まだ無いパス。同じ inode を指しようがない
+                continue
+            if same:
+                raise UsageError(f"--json-out が展開した一時ディレクトリの中を指している: {text!r}")
+    if not target.parent.is_dir():
+        raise UsageError(f"--json-out の親ディレクトリが無い: {text!r}")
+    if target.is_dir():
+        raise UsageError(f"--json-out がディレクトリを指している: {text!r}")
+    return target
+
+
+def _read_record(record: "Path | None") -> "str | None":
+    """`--record` の記録。無いか読めなければ None にし、判定 (classify) で 2 にさせる。"""
+    if record is None:
+        return None
+    try:
+        return record.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return None
+
+
+def _save_json_out(target: Path, stdout: str, record_text: "str | None") -> None:
+    try:
+        target.write_text(stdout, encoding="utf-8")
+        if record_text is not None:
+            Path(f"{target}.record.json").write_text(record_text, encoding="utf-8")
+    except OSError as error:
+        raise UsageError(f"--json-out に書けない: {error}") from None
+
+
+def _run(
+    args: argparse.Namespace,
+    environ: Mapping[str, str],
+    cwd: Path,
+    run_pnpm: "Callable | None",
+    run_upstream: Callable,
+    which: Callable,
+) -> int:
+    if args.command not in ("check", "review"):
+        raise UsageError(f"{args.command} はまだ使えない")
+    thresholds = dict(parse_threshold(text) for text in args.threshold)
+
+    # ラッパ自身の git と `node --version` の env。キーを含まない
+    keyless_env = jevlint_host.build_env(environ, with_key=False)
+    root = jevlint_tree.repo_root(cwd, keyless_env)
+    sha = jevlint_tree.resolve_commit(root, args.commit or "HEAD", keyless_env)
+    base = None
+    if args.command == "review":
+        base = jevlint_tree.resolve_commit(root, args.base, keyless_env)
+    paths = _committed_paths(root, sha, args.paths, keyless_env)
+
+    host = _prepare_host(environ, run_pnpm)
+    node = _checked_node(host, keyless_env, run_upstream, which)
+    if not args.dry_run:
+        _require_key(environ)
+
+    with jevlint_tree.signals_as_exceptions():
+        with jevlint_tree.expanded_commit(root, sha, keyless_env) as expanded:
+            json_out = None
+            if args.json_out is not None:
+                json_out = _json_out_target(args.json_out, cwd, expanded)
+            config = expanded.scratch / "config.json"
+            config.write_text(json.dumps(build_config(thresholds)), encoding="utf-8")
+            record = None if args.dry_run else expanded.scratch / "record.json"
+            argv = jevlint_host.upstream_argv(
+                node,
+                host,
+                args.command,
+                base=base,
+                excludes=args.exclude,
+                # `.` は normalize_path で "" になる。上流へは空の引数ではなく `.` で渡す
+                paths=[path or "." for path in paths],
+                dry_run=args.dry_run,
+                record=record,
+                config=config,
+            )
+            # stderr は捕まえずに流す (上流の設定のエラーを利用者が読めるように)。stdout は
+            # 判定に使う JSON。node の出力は locale によらず UTF-8 なので明示して読む
+            proc = run_upstream(
+                argv,
+                cwd=str(expanded.tree),
+                env=jevlint_host.build_env(environ, with_key=not args.dry_run),
+                stdout=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+            )
+            record_text = _read_record(record)
+            outcome = jevlint_result.classify(
+                proc.returncode, proc.stdout, record_text, args.dry_run
+            )
+            if outcome.code == 2:
+                print(f"jevlint: 上流の結果を判定に使えない: {outcome.reason}", file=sys.stderr)
+                return 2
+            mbt_count = jevlint_tree.count_suffix(expanded.tree, paths, ".mbt")
+            print(
+                jevlint_result.summarize(
+                    outcome,
+                    sha=sha,
+                    version=UPSTREAM_VERSION,
+                    curated=CURATED,
+                    mbt_count=mbt_count,
+                    dry_run=args.dry_run,
+                )
+            )
+            if json_out is not None:
+                _save_json_out(json_out, proc.stdout, record_text)
+            return outcome.code
+
+
+def main(
+    argv: list[str],
+    *,
+    environ: "Mapping[str, str] | None" = None,
+    cwd: "Path | None" = None,
+    run_pnpm: "Callable | None" = None,
+    run_upstream: Callable = subprocess.run,
+    which: Callable = shutil.which,
+) -> int:
+    """check / review を実行し、終了コード (意味はこのモジュールの docstring) を返す。
+
+    段の順序は仕様である: 引数 → ref とパス (本体のリポジトリの git) → host の用意 (キー
+    無し) → node と engines → キー → コミットの展開 → 上流の起動 → 判定と要約。host の用意を
+    展開より先に置くのは、pnpm が走る時点で worktree (コミットされた `.npmrc` がありうる) を
+    まだ存在させないため。上流へ渡す env だけが、`--dry-run` でないときにキーを持つ。
+
+    stdout には要約だけを書く。エラーは stderr に 1 行で書き、2 を返す。判定が 2 のときは
+    要約も `--json-out` の保存もしない (stdout が JSON でないこともあるため)。例外は種類を
+    問わず 2 にする。捕まらない例外で Python が返す 1 は「finding あり」と衝突するため。
+    KeyboardInterrupt と SIGTERM / SIGHUP (`SignalInterrupt`) は Exception の外なので、
+    展開の後始末を済ませてからそのまま抜ける。
+
+    既知の限界: `review` の上流は worktree の中で `git diff <base>...HEAD` を呼び、その git は
+    利用者の git 設定で走る。コミットされた `.gitattributes` が選ぶ textconv の driver
+    (利用者の設定にあるコマンド) は、キーを含む上流の env で起動しうる。上流が
+    `--no-textconv` を付けない限りラッパの側では塞げない。
+
+    `environ` と `cwd` の None は、呼び出しの時点の `os.environ` と `Path.cwd()` を読む。
+    `run_pnpm` の None は `prepare_host` の既定の runner を使う。
+    """
+    try:
+        return _run(
+            parse_args(argv),
+            os.environ if environ is None else environ,
+            Path.cwd() if cwd is None else cwd,
+            run_pnpm,
+            run_upstream,
+            which,
+        )
+    except (UsageError, jevlint_tree.TreeError, jevlint_host.HostError) as error:
+        print(f"jevlint: {error}", file=sys.stderr)
+    except Exception as error:
+        print(
+            f"jevlint: 想定外のエラーで判定できない: {type(error).__name__}: {error}",
+            file=sys.stderr,
+        )
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
