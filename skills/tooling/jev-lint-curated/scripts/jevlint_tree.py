@@ -25,7 +25,9 @@
 
 `--no-lazy-fetch` は git 2.45.0 で入った global option で、これが要る最低の版
 (`_MIN_GIT_VERSION`。SKILL.md はここを指す)。古い git は `unknown option: --no-lazy-fetch`
-(終了コード 129) で全呼び出しが失敗し、`_run_git` が版の不足として `TreeError` にする。
+(終了コード 129) で全呼び出しが失敗し、`_run_git` が版の不足として `TreeError` にする。この
+文言の照合は C locale の英語に依る。git はメッセージを訳すので、ラッパは自分の git に
+`LC_ALL=C` を渡して読む (`_git_env`)。上流に渡す env はこの上書きを受けない。
 
 上流が worktree の中で自分で呼ぶ `git diff` は利用者の設定で走るので、コミットされた
 `.gitattributes` が選ぶ textconv の driver はそこで起動しうる。この限界はこのモジュールでは
@@ -105,19 +107,42 @@ _HOOK_EVENTS = (
 # ラッパ自身が呼ぶ全 git に付ける global option (`-C` の直後、サブコマンドの前)。
 # `--no-lazy-fetch` は git 2.45.0 から (出典: 上流の Documentation/RelNotes/2.45.0.txt の
 # 「"git --no-lazy-fetch cmd" allows to run "cmd" while disabling lazy fetching」。2.44.0 の
-# RelNotes には無い)。古い git は `unknown option: --no-lazy-fetch` と usage を stderr に
-# 出して終了コード 129 になる (知らない global option への応答の形は 2.55.0 と 2.50.1 で実測)
+# RelNotes には無い)。古い git は C locale では `unknown option: --no-lazy-fetch` と usage を
+# stderr に出して終了コード 129 になる (知らない global option への応答の形は 2.55.0 と 2.50.1
+# で実測)。この文言は訳される (de_DE: `Unbekannte Option:`、fr_FR: `option inconnue :`。
+# Homebrew の 2.55.0 で実測。Apple の 2.50.1 は訳を持たない) ので、照合は `_git_env` が
+# 固定する C locale の形にだけ合わせる
 _GLOBAL_OPTIONS = ("--no-lazy-fetch", "--no-replace-objects")
 _MIN_GIT_VERSION = "2.45.0"
 
 
-def _run_git(argv: list, env: dict, text: bool = False) -> "subprocess.CompletedProcess":
-    """git を起動する唯一の場所。global option を知らない古い git は版の不足として `TreeError`。
+def _git_env(env: dict) -> dict:
+    """ラッパ自身の git に渡す env。メッセージを C locale の英語に固定する。
 
-    非 0 なので呼び出し側はどのみち失敗にするが、その文言は「worktree add に失敗」のように
-    的を外す。ここで名指して fail closed にする。
+    git は `_()` で訳したメッセージを出し、`unknown option:` の照合が locale で外れる。
+    `LC_ALL=C` は `LANG` / `LC_*` / `LANGUAGE` を de に向けたままでも英語に戻す (実測:
+    Homebrew の 2.55.0)。`LANGUAGE` は gettext が C locale では無視するが、裁定に従って
+    落とす。上流に渡す env とは別で、こちらはラッパが読む出力のためだけの上書き。
+    `ls-tree -z` の出力 (非 ASCII のパスを含む) は locale で変わらない (実測: C / de_DE /
+    en_US で同一のバイト列)。
     """
-    proc = subprocess.run(argv, env=env, capture_output=True, text=text)
+    quiet = dict(env)
+    quiet.pop("LANGUAGE", None)
+    quiet["LC_ALL"] = "C"
+    return quiet
+
+
+def _run_git(argv: list, env: dict, text: bool = False) -> "subprocess.CompletedProcess":
+    """`subprocess.run` で git を起動する唯一の場所。古い git は版の不足として `TreeError`。
+
+    `_QuietGit.popen` だけは `cat-file --batch` のために `subprocess.Popen` を使うが、env は
+    同じ `_git_env` で、版の不足は `materialize` で先に走る `_ls_tree` (`run` 経由) が
+    名指す。非 0 なので呼び出し側はどのみち失敗にするが、その文言は「worktree add に
+    失敗」のように的を外す。ここで名指して fail closed にする。照合は C locale の
+    `unknown option: <名前>` に限る (usage の行にも option の名前は現れるので、名前だけの
+    照合は新しい git の無関係な 129 を「古い」と誤読する)。
+    """
+    proc = subprocess.run(argv, env=_git_env(env), capture_output=True, text=text)
     if proc.returncode == 129:
         stderr = proc.stderr if text else proc.stderr.decode("utf-8", "replace")
         for option in _GLOBAL_OPTIONS:
@@ -172,7 +197,10 @@ class _QuietGit:
         # stderr は継承する。PIPE にすると読み切るまで子が詰まりうるし、git の診断は
         # 利用者にそのまま見えてよい
         return subprocess.Popen(
-            self.argv(cwd, args), stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=self.env
+            self.argv(cwd, args),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            env=_git_env(self.env),
         )
 
 
@@ -420,13 +448,22 @@ def _reject_sgconfig_in_ancestors(tree: Path) -> None:
 
 
 def _discard_worktree(git: _QuietGit, root: Path, tree: Path) -> None:
-    # 後始末は元の例外を隠さないよう、どの段も失敗を投げない。`worktree remove --force`
-    # は worktree の `.git` ファイルが壊れていると終了コード 128 でディレクトリを残す
-    # (実測: git 2.55.0) ので、そのときはディレクトリを消してから登録を prune する
-    proc = git.run(root, ["worktree", "remove", "--force", str(tree)])
-    if proc.returncode != 0:
+    # 後始末は元の例外を隠さないよう、どの段も失敗を投げない。git の非 0 は見るだけ、
+    # `_run_git` が投げる TreeError (版の不足) もここで握る (展開の途中で git が変わる
+    # ことは無いが、finally の中で投げると元の例外を隠し一時ディレクトリの削除も飛ぶ)。
+    # `worktree remove --force` は worktree の `.git` ファイルが壊れていると終了コード 128
+    # でディレクトリを残す (実測: git 2.55.0) ので、そのときはディレクトリを消してから
+    # 登録を prune する
+    try:
+        removed = git.run(root, ["worktree", "remove", "--force", str(tree)]).returncode == 0
+    except TreeError:
+        removed = False
+    if not removed:
         shutil.rmtree(tree, ignore_errors=True)
-        git.run(root, ["worktree", "prune"])
+        try:
+            git.run(root, ["worktree", "prune"])
+        except TreeError:
+            pass
 
 
 def _temp_base(env: dict, root: Path) -> Path:

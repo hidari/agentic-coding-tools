@@ -365,7 +365,9 @@ class ReadonlyGitTests(unittest.TestCase):
         # 展開の外で使う runner は hook を止める `-c` を持たない。持つのは `--no-lazy-fetch`
         # と `--no-replace-objects` で、allow-list の `rev-parse` / `ls-tree` はそれと
         # 組み合わせてローカルの object を読むだけになる (lazy fetch が無ければ外部
-        # コマンドも ref の更新も無い。PartialCloneTests が目印と pack の数で実測)。
+        # コマンドも ref の更新も無い。PartialCloneTests の tree:0 のテストが、uploadpack の
+        # 目印が付かないことと pack の数で実測し、reference-transaction の目印が付かない
+        # ことも見る。後者は 2.55.0 でだけ lazy fetch が起動する hook で、版に依る)。
         # 誤って展開の中の操作に使われないよう、それ以外のサブコマンドを拒む
         repo = GitRepo(self)
         repo.write("a.py")
@@ -1032,6 +1034,18 @@ class PartialCloneFixture:
         )
         script.chmod(0o755)
         run(["git", "-C", str(self.client), "config", "remote.origin.uploadpack", str(script)])
+        # lazy fetch は git 2.55.0 では reference-transaction も起動する (実測: フラグ無しの
+        # cat-file --batch で 3 回) が、Apple の 2.50.1 では起動しない (実測)。版に依るので
+        # 陽性対照には使わず、展開の外の runner が ref を触っていないことの追加の観測に
+        # だけ使う (fetch が走ったかの pin は uploadpack の目印と pack の数)
+        client_hooks = self.path / "client-hooks"
+        client_hooks.mkdir()
+        hook = client_hooks / "reference-transaction"
+        hook.write_text(
+            f'#!/bin/sh\ntouch "$PWD/{injected_marker("reference-transaction")}"\n', encoding="utf-8"
+        )
+        hook.chmod(0o755)
+        run(["git", "-C", str(self.client), "config", "core.hooksPath", str(client_hooks)])
         self.hooks = self.path / "hooks"
         self.hooks.mkdir()
         self.blob = self.server.git("rev-parse", f"{self.sha}:d/a.txt").strip()
@@ -1041,6 +1055,9 @@ class PartialCloneFixture:
 
     def fetched(self) -> bool:
         return UPLOADPACK_MARKER in os.listdir(self.client)
+
+    def ref_hook_fired(self) -> bool:
+        return injected_marker("reference-transaction") in os.listdir(self.client)
 
 
 class PartialCloneTests(unittest.TestCase):
@@ -1057,6 +1074,17 @@ class PartialCloneTests(unittest.TestCase):
         self.assertTrue(fixture.fetched())
         self.assertGreater(fixture.packs(), before)
 
+    def test_fixture_tree_0_lazily_fetches_on_a_plain_ls_tree(self):
+        # tree:0 側の陽性対照。fetch が uploadpack より手前で壊れていても ls-tree は非 0 に
+        # なり、下の `assertRaises(TreeError)` は option 無しでも通ってしまう。素の
+        # ls-tree が取りに行けることを目印と pack の数で見て、その退化を防ぐ
+        fixture = PartialCloneFixture(self, "tree:0")
+        before = fixture.packs()
+        out = run(["git", "-C", str(fixture.client), "ls-tree", "-r", fixture.sha]).stdout
+        self.assertIn("d/a.txt", out)
+        self.assertTrue(fixture.fetched())
+        self.assertGreater(fixture.packs(), before)
+
     def test_materialize_on_a_blob_none_clone_raises_missing_and_does_not_fetch(self):
         fixture = PartialCloneFixture(self, "blob:none")
         dest = Path(tempfile.mkdtemp(prefix="jevlint-dest-"))
@@ -1066,18 +1094,21 @@ class PartialCloneTests(unittest.TestCase):
             jevlint_tree.materialize(fixture.client, fixture.sha, dest, ENV, fixture.hooks)
         self.assertIn("missing", str(cm.exception))
         self.assertFalse(fixture.fetched(), "lazy fetch が走った")
+        self.assertFalse(fixture.ref_hook_fired(), "ref が更新された")
         self.assertEqual(before, fixture.packs())
         self.assertEqual([], list(dest.iterdir()))
 
     def test_path_in_commit_on_a_tree_0_clone_raises_and_does_not_fetch(self):
         # tree:0 の clone にはコミットしか無い。ref の解決は通り、tree を読む ls-tree は
-        # 取りに行かずに失敗する
+        # 取りに行かずに失敗する。展開の外の runner は hook を止めないので、ref が
+        # 更新されていないことは reference-transaction の目印そのもので見える
         fixture = PartialCloneFixture(self, "tree:0")
         before = fixture.packs()
         self.assertEqual(fixture.sha, jevlint_tree.resolve_commit(fixture.client, "HEAD", ENV))
         with self.assertRaises(jevlint_tree.TreeError):
             jevlint_tree.path_in_commit(fixture.client, fixture.sha, "d/a.txt", ENV)
         self.assertFalse(fixture.fetched(), "lazy fetch が走った")
+        self.assertFalse(fixture.ref_hook_fired(), "ref が更新された")
         self.assertEqual(before, fixture.packs())
 
     def test_expanded_commit_on_a_blob_none_clone_raises_and_tears_down(self):
@@ -1090,6 +1121,7 @@ class PartialCloneTests(unittest.TestCase):
                 self.fail("blob の無い partial clone の展開が通った")
         self.assertIn("missing", str(cm.exception))
         self.assertFalse(fixture.fetched(), "lazy fetch が走った")
+        self.assertFalse(fixture.ref_hook_fired(), "ref が更新された")
         self.assertEqual(before, fixture.packs())
         self.assertEqual([], os.listdir(base))
         self.assertEqual(1, worktree_count(fixture.client))
@@ -1139,47 +1171,128 @@ class ReplaceRefTests(unittest.TestCase):
         self.assertEqual(self.one, jevlint_tree.resolve_commit(self.repo.path, self.one, ENV))
 
 
-class OldGitTests(unittest.TestCase):
-    def test_git_without_no_lazy_fetch_fails_closed_naming_the_minimum_version(self):
-        # このマシンの git (Homebrew の 2.55.0 と Apple の 2.50.1) はどちらも
-        # `--no-lazy-fetch` を知るので、知らない git は PATH の先頭に置いた shim で再現する。
-        # shim は本物の git が知らない global option に返す形 (`unknown option: <名前>` と
-        # usage を stderr に、終了コード 129。両方の git で実測) をそのまま返し、それ以外は
-        # 本物の git に exec する。subprocess は子の env の PATH で実行ファイルを探す (実測:
-        # 3.14.7 と 3.9.6)
+# 本物の git が知らない global option に返す応答を、locale ごとに写した shell 関数。1 行目と
+# 終了コード 129 は Homebrew の 2.55.0 で実測 (C: `unknown option: <名前>`、de_DE:
+# `Unbekannte Option: <名前>`)。`LC_ALL=C` は LANG / LANGUAGE を de に向けたままでも英語に
+# 戻す (実測)。usage の行は短縮してある (検出が見るのは 1 行目と終了コードだけ)
+OLD_GIT_RESPONSE = """\
+respond() {
+  case "${LC_ALL:-}" in
+    C|POSIX) printf '%s\\n' 'unknown option: --no-lazy-fetch' 'usage: git [-v | --version] [-h | --help]' >&2 ;;
+    *) case "${LC_ALL:-}:${LANG:-}:${LANGUAGE:-}" in
+         *de*) printf '%s\\n' 'Unbekannte Option: --no-lazy-fetch' 'Verwendung: git [-v | --version] [-h | --help]' >&2 ;;
+         *) printf '%s\\n' 'unknown option: --no-lazy-fetch' 'usage: git [-v | --version] [-h | --help]' >&2 ;;
+       esac ;;
+  esac
+  exit 129
+}
+"""
+
+GERMAN_LOCALE = {"LANG": "de_DE.UTF-8", "LC_ALL": "de_DE.UTF-8", "LANGUAGE": "de"}
+
+
+class GitShimMixin:
+    """PATH の先頭に置く `git` の shim を作る。
+
+    このマシンの git (Homebrew の 2.55.0 と Apple の 2.50.1) はどちらも `--no-lazy-fetch` を
+    知るので、知らない git は shim で再現する。shim は `body` の条件に当たれば
+    `OLD_GIT_RESPONSE` の応答を返し、それ以外は本物の git に exec する。subprocess は子の
+    env の PATH で実行ファイルを探す (実測: 3.14.7 と 3.9.6)。
+    """
+
+    def shim_env(self, body: str, extra: "dict | None" = None) -> dict:
         real_git = shutil.which("git", path=ENV["PATH"])
         self.assertIsNotNone(real_git)
-        shim_dir = Path(tempfile.mkdtemp(prefix="jevlint-oldgit-"))
+        shim_dir = Path(tempfile.mkdtemp(prefix="jevlint-gitshim-"))
         self.addCleanup(lambda: shutil.rmtree(shim_dir, ignore_errors=True))
         shim = shim_dir / "git"
         shim.write_text(
-            "#!/bin/sh\n"
-            'for arg in "$@"; do\n'
-            '  case "$arg" in\n'
-            "    --no-lazy-fetch)\n"
-            "      printf '%s\\n' 'unknown option: --no-lazy-fetch' 'usage: git [-v | --version] [-h | --help]' >&2\n"
-            "      exit 129 ;;\n"
-            "  esac\n"
-            "done\n"
-            f'exec {shlex.quote(real_git)} "$@"\n',
+            "#!/bin/sh\n" + OLD_GIT_RESPONSE + body + f'exec {shlex.quote(real_git)} "$@"\n',
             encoding="utf-8",
         )
         shim.chmod(0o755)
         env = dict(ENV, PATH=str(shim_dir) + os.pathsep + ENV["PATH"])
-        repo = GitRepo(self)
-        repo.write("a.py")
-        sha = repo.commit()
+        env.update(extra or {})
+        return env
+
+
+# `--no-lazy-fetch` を一切知らない git
+REJECT_NO_LAZY_FETCH = 'for arg in "$@"; do case "$arg" in --no-lazy-fetch) respond ;; esac; done\n'
+# 後始末のときだけ知らなくなる git (展開の途中で版が変わることは無いが、finally の中で
+# `TreeError` が出る経路を作る)
+REJECT_ONLY_TEARDOWN = 'case " $* " in *" worktree remove "*|*" worktree prune "*) respond ;; esac\n'
+
+
+class OldGitTests(GitShimMixin, unittest.TestCase):
+    def setUp(self):
+        self.repo = GitRepo(self)
+        self.repo.write("a.py")
+        self.sha = self.repo.commit()
+
+    def _assert_names_the_minimum_version(self, env: dict) -> None:
         with self.assertRaises(jevlint_tree.TreeError) as cm:
-            jevlint_tree.repo_root(repo.path, env)
+            jevlint_tree.repo_root(self.repo.path, env)
         self.assertIn("--no-lazy-fetch", str(cm.exception))
         # 最低の版は上流の RelNotes/2.45.0.txt が根拠 (2.44.0 の RelNotes には無い)。
         # 文言が要る版を名指すことを、定数ではなく literal で pin する
         self.assertIn("2.45.0", str(cm.exception))
         with self.assertRaises(jevlint_tree.TreeError) as cm:
-            with jevlint_tree.expanded_commit(repo.path, sha, env):
+            with jevlint_tree.expanded_commit(self.repo.path, self.sha, env):
                 self.fail("古い git で展開が通った")
         self.assertIn("2.45.0", str(cm.exception))
-        self.assertEqual(1, repo.worktree_count())
+        self.assertEqual(1, self.repo.worktree_count())
+
+    def test_git_without_no_lazy_fetch_fails_closed_naming_the_minimum_version(self):
+        self._assert_names_the_minimum_version(self.shim_env(REJECT_NO_LAZY_FETCH))
+
+    def test_old_git_is_named_even_when_the_users_locale_is_german(self):
+        # 利用者の locale が de_DE だと本物の git は `Unbekannte Option:` を返し、英語の
+        # 照合が外れて版を名指せない。ラッパは自分の git に LC_ALL=C を渡して C locale の
+        # 文言を読む。shim は本物と同じく LC_ALL=C のときだけ英語を返す
+        self._assert_names_the_minimum_version(self.shim_env(REJECT_NO_LAZY_FETCH, GERMAN_LOCALE))
+
+    def test_teardown_does_not_raise_when_git_refuses_the_options_midway(self):
+        # 後始末の `worktree remove` / `prune` が `_run_git` の TreeError になっても、
+        # 展開の結果は返り、一時ディレクトリは消える。消せなかった登録だけが残る
+        env = self.shim_env(REJECT_ONLY_TEARDOWN)
+        with jevlint_tree.expanded_commit(self.repo.path, self.sha, env) as expanded:
+            tmp = expanded.tree.parent
+            self.assertTrue((expanded.tree / "a.py").is_file())
+        self.assertFalse(tmp.exists(), "一時ディレクトリが残っている")
+        self.assertEqual(2, self.repo.worktree_count(), "shim が remove を拒んだはず")
+        self.repo.git("worktree", "prune")
+        self.assertEqual(1, self.repo.worktree_count())
+
+
+class GitLocaleTests(unittest.TestCase):
+    def test_wrapper_reads_git_messages_in_the_c_locale(self):
+        # ラッパが git の出力を照合するとき、文言は利用者の locale に依らず C locale の
+        # 英語でなければならない (CLAUDE.md: 判定に使う目印は ASCII に保つ)。本物の git で、
+        # de_DE の env を渡しても両方の runner に見える stderr が英語であることを見る。
+        # 対照は同じ env で直接叩いた git で、訳を持つ git (Homebrew の 2.55.0) なら
+        # `Schwerwiegend:` になり、持たない git (Apple の 2.50.1) なら英語のまま。後者では
+        # 訳が無いことを明示的に assert し、skip にはしない
+        repo = GitRepo(self)
+        repo.write("a.py")
+        repo.commit()
+        env = dict(ENV, **GERMAN_LOCALE)
+        args = ["ls-tree", "-z", "deadbeef" * 5, "--", "x"]
+        raw = subprocess.run(["git", "-C", str(repo.path), *args], env=env, capture_output=True)
+        self.assertEqual(128, raw.returncode)
+        translated = not raw.stderr.startswith(b"fatal:")
+        hooks = Path(tempfile.mkdtemp(prefix="jevlint-hooks-"))
+        self.addCleanup(lambda: shutil.rmtree(hooks, ignore_errors=True))
+        seen = {
+            "readonly": jevlint_tree._git_readonly(repo.path, args, env).stderr,
+            "quiet": jevlint_tree._QuietGit(env, hooks).run(repo.path, args).stderr,
+        }
+        for runner, stderr in seen.items():
+            with self.subTest(runner=runner):
+                self.assertTrue(stderr.startswith(b"fatal: not a tree object"), stderr)
+                if translated:
+                    self.assertNotEqual(raw.stderr, stderr)
+                else:
+                    self.assertEqual(raw.stderr, stderr, "この git は訳を持たないはず")
 
 
 class SignalsAsExceptionsTests(unittest.TestCase):
