@@ -24,6 +24,7 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -47,6 +48,12 @@ def run(args: list) -> "subprocess.CompletedProcess[str]":
 
 def run_bytes(args: list, stdin: bytes = b"") -> bytes:
     return subprocess.run(args, env=ENV, input=stdin, capture_output=True, check=True).stdout
+
+
+def worktree_count(repo: Path) -> int:
+    """`git worktree list --porcelain` に載る worktree の数 (本体を含む)。"""
+    lines = run(["git", "-C", str(repo), "worktree", "list", "--porcelain"]).stdout.splitlines()
+    return sum(1 for line in lines if line.startswith("worktree "))
 
 
 class GitRepo:
@@ -85,7 +92,14 @@ class GitRepo:
         return self.git("rev-parse", "HEAD").strip()
 
     def blob_bytes(self, sha: str, path: str) -> bytes:
-        return run_bytes(["git", "-C", str(self.path), "cat-file", "blob", f"{sha}:{path}"])
+        """コミットされた中身の基準。`refs/replace` の差し替えを追わない形で読む。
+
+        素の `git cat-file blob` は差し替え後の object を返すので (実測: git 2.55.0)、
+        それを基準にすると差し替えられた中身を書いても比較が通ってしまう。
+        """
+        return run_bytes(
+            ["git", "-C", str(self.path), "--no-replace-objects", "cat-file", "blob", f"{sha}:{path}"]
+        )
 
     def hash_blob(self, data: bytes) -> str:
         return run_bytes(
@@ -107,9 +121,7 @@ class GitRepo:
         return self.git("commit-tree", tree_sha, "-m", "synthetic").strip()
 
     def worktree_count(self) -> int:
-        """`git worktree list --porcelain` に載る worktree の数 (本体を含む)。"""
-        lines = self.git("worktree", "list", "--porcelain").splitlines()
-        return sum(1 for line in lines if line.startswith("worktree "))
+        return worktree_count(self.path)
 
     def knows_config_hooks(self) -> "tuple[bool, str, str]":
         """この git が設定で定義する hook (`hook.<name>.command` / `.event`) を知っているか。
@@ -349,9 +361,12 @@ class RepoRootTests(unittest.TestCase):
 
 
 class ReadonlyGitTests(unittest.TestCase):
-    def test_refuses_subcommands_that_can_run_hooks(self):
-        # 展開の外で使う runner は hook を止めるフラグを持たない。誤って展開の中の
-        # 操作に使われないよう、通せるサブコマンドを読み取り専用のものに限る
+    def test_refuses_subcommands_outside_the_readonly_allowlist(self):
+        # 展開の外で使う runner は hook を止める `-c` を持たない。持つのは `--no-lazy-fetch`
+        # と `--no-replace-objects` で、allow-list の `rev-parse` / `ls-tree` はそれと
+        # 組み合わせてローカルの object を読むだけになる (lazy fetch が無ければ外部
+        # コマンドも ref の更新も無い。PartialCloneTests が目印と pack の数で実測)。
+        # 誤って展開の中の操作に使われないよう、それ以外のサブコマンドを拒む
         repo = GitRepo(self)
         repo.write("a.py")
         sha = repo.commit()
@@ -575,8 +590,10 @@ class MaterializeTests(unittest.TestCase):
         self.assertEqual([], list(self.dest.iterdir()))
 
     def test_missing_blob_is_a_tree_error(self):
-        # partial clone では tree はあっても blob が未取得のことがある。`ls-tree -r` は
-        # 終了コード 0 で項目を返し、`cat-file --batch` が `<sha> missing` を返す (実測)。
+        # object store に無い blob を `mktree --missing` でローカルに再現する。`ls-tree -r`
+        # は終了コード 0 で項目を返し、`cat-file --batch` が `<sha> missing` を返す
+        # (実測)。本物の partial clone で同じ経路を通ることは PartialCloneTests が見る
+        # (そちらは lazy fetch を止めなければ `missing` にならず取りに行く)。
         # 無い blob を先頭に置き、何も書かれないことまで見る
         blob = self.repo.hash_blob(b"x\n")
         tree = self.repo.mktree(
@@ -973,6 +990,196 @@ class ExpandedCommitTests(unittest.TestCase):
                 self.fail("`A.py` と `a.py` を持つコミットの展開が通った")
         self.assertIn("a.py", str(cm.exception))
         self._assert_torn_down_into(base)
+
+
+UPLOADPACK_MARKER = "INJECTED-uploadpack.txt"
+
+
+class PartialCloneFixture:
+    """file:// の server から `--filter=<spec>` の partial clone を作る。
+
+    無い object を読むと git は promisor remote から取りに行く (lazy fetch)。file:// では
+    `remote.origin.uploadpack` のコマンドがローカルで、cwd = リポジトリの root で起動される
+    (実測: git 2.55.0)。目印を置いてから本物の upload-pack に exec するスクリプトをそこに
+    置き、fetch が走ったかを目印と `.git/objects/pack` の項目数で見る。
+    """
+
+    def __init__(self, test: unittest.TestCase, filter_spec: str):
+        self.server = GitRepo(test)
+        self.server.write("d/a.txt", "committed\n")
+        self.server.write("b.txt", "x\n")
+        self.sha = self.server.commit()
+        self.server.config("uploadpack.allowFilter", "true")
+        self.server.config("uploadpack.allowAnySHA1InWant", "true")
+        self.path = Path(tempfile.mkdtemp(prefix="jevlint-partial-"))
+        test.addCleanup(lambda: shutil.rmtree(self.path, ignore_errors=True))
+        self.client = self.path / "client"
+        run(
+            [
+                "git",
+                "clone",
+                "--quiet",
+                f"--filter={filter_spec}",
+                "--no-checkout",
+                f"file://{self.server.path}",
+                str(self.client),
+            ]
+        )
+        script = self.path / "uploadpack.sh"
+        script.write_text(
+            f'#!/bin/sh\ntouch "$PWD/{UPLOADPACK_MARKER}"\nexec git upload-pack "$@"\n',
+            encoding="utf-8",
+        )
+        script.chmod(0o755)
+        run(["git", "-C", str(self.client), "config", "remote.origin.uploadpack", str(script)])
+        self.hooks = self.path / "hooks"
+        self.hooks.mkdir()
+        self.blob = self.server.git("rev-parse", f"{self.sha}:d/a.txt").strip()
+
+    def packs(self) -> int:
+        return len(list((self.client / ".git" / "objects" / "pack").iterdir()))
+
+    def fetched(self) -> bool:
+        return UPLOADPACK_MARKER in os.listdir(self.client)
+
+
+class PartialCloneTests(unittest.TestCase):
+    def test_fixture_lazily_fetches_when_git_runs_without_the_wrappers_options(self):
+        # 陽性対照。この fixture が本当に lazy fetch する状態でなければ、下のテストは
+        # 何も見ずに緑になる。素の `cat-file --batch` は取りに行って目印を置き pack を増やす
+        fixture = PartialCloneFixture(self, "blob:none")
+        before = fixture.packs()
+        out = run_bytes(
+            ["git", "-C", str(fixture.client), "cat-file", "--batch"],
+            stdin=fixture.blob.encode("ascii") + b"\n",
+        )
+        self.assertIn(b"committed", out)
+        self.assertTrue(fixture.fetched())
+        self.assertGreater(fixture.packs(), before)
+
+    def test_materialize_on_a_blob_none_clone_raises_missing_and_does_not_fetch(self):
+        fixture = PartialCloneFixture(self, "blob:none")
+        dest = Path(tempfile.mkdtemp(prefix="jevlint-dest-"))
+        self.addCleanup(lambda: shutil.rmtree(dest, ignore_errors=True))
+        before = fixture.packs()
+        with self.assertRaises(jevlint_tree.TreeError) as cm:
+            jevlint_tree.materialize(fixture.client, fixture.sha, dest, ENV, fixture.hooks)
+        self.assertIn("missing", str(cm.exception))
+        self.assertFalse(fixture.fetched(), "lazy fetch が走った")
+        self.assertEqual(before, fixture.packs())
+        self.assertEqual([], list(dest.iterdir()))
+
+    def test_path_in_commit_on_a_tree_0_clone_raises_and_does_not_fetch(self):
+        # tree:0 の clone にはコミットしか無い。ref の解決は通り、tree を読む ls-tree は
+        # 取りに行かずに失敗する
+        fixture = PartialCloneFixture(self, "tree:0")
+        before = fixture.packs()
+        self.assertEqual(fixture.sha, jevlint_tree.resolve_commit(fixture.client, "HEAD", ENV))
+        with self.assertRaises(jevlint_tree.TreeError):
+            jevlint_tree.path_in_commit(fixture.client, fixture.sha, "d/a.txt", ENV)
+        self.assertFalse(fixture.fetched(), "lazy fetch が走った")
+        self.assertEqual(before, fixture.packs())
+
+    def test_expanded_commit_on_a_blob_none_clone_raises_and_tears_down(self):
+        fixture = PartialCloneFixture(self, "blob:none")
+        base = Path(tempfile.mkdtemp(prefix="jevlint-base-"))
+        self.addCleanup(lambda: shutil.rmtree(base, ignore_errors=True))
+        before = fixture.packs()
+        with self.assertRaises(jevlint_tree.TreeError) as cm:
+            with jevlint_tree.expanded_commit(fixture.client, fixture.sha, dict(ENV, TMPDIR=str(base))):
+                self.fail("blob の無い partial clone の展開が通った")
+        self.assertIn("missing", str(cm.exception))
+        self.assertFalse(fixture.fetched(), "lazy fetch が走った")
+        self.assertEqual(before, fixture.packs())
+        self.assertEqual([], os.listdir(base))
+        self.assertEqual(1, worktree_count(fixture.client))
+
+
+class ReplaceRefTests(unittest.TestCase):
+    """`git replace` (refs/replace) は object の読み出しを差し替える。
+
+    差し替え先はコミットから到達しない object でもよいので、追ったまま書くと「コミット済みの
+    中身だけを送る」が破れる。`--no-replace-objects` で差し替えを無視して読む。
+    """
+
+    def setUp(self):
+        self.repo = GitRepo(self)
+        self.repo.write("a.txt", "committed\n")
+        self.one = self.repo.commit("one")
+        self.blob_a = self.repo.git("rev-parse", f"{self.one}:a.txt").strip()
+        self.blob_b = self.repo.hash_blob(b"never committed\n")
+        self.repo.git("replace", self.blob_a, self.blob_b)
+        self.hooks = Path(tempfile.mkdtemp(prefix="jevlint-hooks-"))
+        self.addCleanup(lambda: shutil.rmtree(self.hooks, ignore_errors=True))
+
+    def test_plain_git_follows_the_replacement_so_the_reference_must_not(self):
+        # 陽性対照: 素の cat-file は差し替え後の中身を返す。比較の基準 (`blob_bytes`) は
+        # `--no-replace-objects` で取る
+        plain = run_bytes(["git", "-C", str(self.repo.path), "cat-file", "blob", f"{self.one}:a.txt"])
+        self.assertEqual(b"never committed\n", plain)
+        self.assertEqual(b"committed\n", self.repo.blob_bytes(self.one, "a.txt"))
+
+    def test_materialize_writes_the_committed_bytes_not_the_replacement(self):
+        dest = Path(tempfile.mkdtemp(prefix="jevlint-dest-"))
+        self.addCleanup(lambda: shutil.rmtree(dest, ignore_errors=True))
+        jevlint_tree.materialize(self.repo.path, self.one, dest, ENV, self.hooks)
+        self.assertEqual(b"committed\n", (dest / "a.txt").read_bytes())
+        self.assertEqual(self.repo.blob_bytes(self.one, "a.txt"), (dest / "a.txt").read_bytes())
+
+    def test_path_in_commit_ignores_a_replaced_commit(self):
+        # コミット自体の差し替えは ls-tree の見る tree を変える (実測: 素の ls-tree は
+        # 差し替え先のコミットにしか無いパスを見つける)。rev-parse は名前の解決なので変わらない
+        self.repo.write("only-in-two.txt", "y\n")
+        two = self.repo.commit("two")
+        self.repo.git("replace", self.one, two)
+        plain = run(["git", "-C", str(self.repo.path), "ls-tree", self.one, "--", "only-in-two.txt"]).stdout
+        self.assertIn("only-in-two.txt", plain)
+        self.assertFalse(jevlint_tree.path_in_commit(self.repo.path, self.one, "only-in-two.txt", ENV))
+        self.assertTrue(jevlint_tree.path_in_commit(self.repo.path, self.one, "a.txt", ENV))
+        self.assertEqual(self.one, jevlint_tree.resolve_commit(self.repo.path, self.one, ENV))
+
+
+class OldGitTests(unittest.TestCase):
+    def test_git_without_no_lazy_fetch_fails_closed_naming_the_minimum_version(self):
+        # このマシンの git (Homebrew の 2.55.0 と Apple の 2.50.1) はどちらも
+        # `--no-lazy-fetch` を知るので、知らない git は PATH の先頭に置いた shim で再現する。
+        # shim は本物の git が知らない global option に返す形 (`unknown option: <名前>` と
+        # usage を stderr に、終了コード 129。両方の git で実測) をそのまま返し、それ以外は
+        # 本物の git に exec する。subprocess は子の env の PATH で実行ファイルを探す (実測:
+        # 3.14.7 と 3.9.6)
+        real_git = shutil.which("git", path=ENV["PATH"])
+        self.assertIsNotNone(real_git)
+        shim_dir = Path(tempfile.mkdtemp(prefix="jevlint-oldgit-"))
+        self.addCleanup(lambda: shutil.rmtree(shim_dir, ignore_errors=True))
+        shim = shim_dir / "git"
+        shim.write_text(
+            "#!/bin/sh\n"
+            'for arg in "$@"; do\n'
+            '  case "$arg" in\n'
+            "    --no-lazy-fetch)\n"
+            "      printf '%s\\n' 'unknown option: --no-lazy-fetch' 'usage: git [-v | --version] [-h | --help]' >&2\n"
+            "      exit 129 ;;\n"
+            "  esac\n"
+            "done\n"
+            f'exec {shlex.quote(real_git)} "$@"\n',
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+        env = dict(ENV, PATH=str(shim_dir) + os.pathsep + ENV["PATH"])
+        repo = GitRepo(self)
+        repo.write("a.py")
+        sha = repo.commit()
+        with self.assertRaises(jevlint_tree.TreeError) as cm:
+            jevlint_tree.repo_root(repo.path, env)
+        self.assertIn("--no-lazy-fetch", str(cm.exception))
+        # 最低の版は上流の RelNotes/2.45.0.txt が根拠 (2.44.0 の RelNotes には無い)。
+        # 文言が要る版を名指すことを、定数ではなく literal で pin する
+        self.assertIn("2.45.0", str(cm.exception))
+        with self.assertRaises(jevlint_tree.TreeError) as cm:
+            with jevlint_tree.expanded_commit(repo.path, sha, env):
+                self.fail("古い git で展開が通った")
+        self.assertIn("2.45.0", str(cm.exception))
+        self.assertEqual(1, repo.worktree_count())
 
 
 class SignalsAsExceptionsTests(unittest.TestCase):

@@ -10,11 +10,26 @@
 環境の driver で走らせ、symlink を symlink として復元し、hook を起動する (spec の前提 16)。
 `worktree add --no-checkout` は worktree を登録するだけでファイルを書かず、index も作らない
 (`read-tree` は呼ばない。上流が worktree の中で呼ぶ git はコミット同士の diff だけで、index
-を読まない)。ディスクへ書く経路は `git cat-file --batch` が返す blob の生のバイトだけになり、
-ディスクの中身がコミットの blob と同一であることが構造で保証される。ただし checkout を
-伴わなくても hook は起動する (`worktree add --no-checkout` は `reference-transaction` を
-起動する。実測: git 2.55.0) ので、展開の間の git はすべて `_QuietGit` を通し、hook
-ディレクトリの hook・設定で定義する hook・fsmonitor の 3 経路を止める。
+を読まない)。ディスクへ書く経路は `git cat-file --batch` が返す blob の生のバイトだけになる。
+ディスクの中身がコミットの blob と同一になるのは次の 3 つを git の呼び出しごとに満たす
+ときで、どれも `_QuietGit` / `_git_readonly` が argv で付ける (実測: git 2.55.0):
+
+- `--no-replace-objects`: `refs/replace` の差し替えを追わない。差し替え先はコミットから
+  到達しない object でもよく、素の `cat-file` は差し替え後の中身を返す
+- `--no-lazy-fetch`: partial clone で無い object を promisor remote から取りに行かず、
+  `missing` か非 0 で失敗する。取りに行くと利用者の `remote.<name>.uploadpack` のコマンドが
+  cwd = root で起動し、hook を止めていても pack が増える
+- hook を起動しない: checkout を伴わなくても `worktree add --no-checkout` は
+  `reference-transaction` を起動する。hook ディレクトリ・設定で定義する hook・fsmonitor の
+  3 経路を止める
+
+`--no-lazy-fetch` は git 2.45.0 で入った global option で、これが要る最低の版
+(`_MIN_GIT_VERSION`。SKILL.md はここを指す)。古い git は `unknown option: --no-lazy-fetch`
+(終了コード 129) で全呼び出しが失敗し、`_run_git` が版の不足として `TreeError` にする。
+
+上流が worktree の中で自分で呼ぶ `git diff` は利用者の設定で走るので、コミットされた
+`.gitattributes` が選ぶ textconv の driver はそこで起動しうる。この限界はこのモジュールでは
+扱わず、Task 6 / 8 が文書化する。
 
 このモジュールは他の jevlint* モジュールを import しない。依存は入口 (`jevlint.py`)
 から下流へ一方向に流し、循環を作らないため。git を呼ぶ関数はすべて `env` を引数で
@@ -87,6 +102,32 @@ _HOOK_EVENTS = (
 )
 
 
+# ラッパ自身が呼ぶ全 git に付ける global option (`-C` の直後、サブコマンドの前)。
+# `--no-lazy-fetch` は git 2.45.0 から (出典: 上流の Documentation/RelNotes/2.45.0.txt の
+# 「"git --no-lazy-fetch cmd" allows to run "cmd" while disabling lazy fetching」。2.44.0 の
+# RelNotes には無い)。古い git は `unknown option: --no-lazy-fetch` と usage を stderr に
+# 出して終了コード 129 になる (知らない global option への応答の形は 2.55.0 と 2.50.1 で実測)
+_GLOBAL_OPTIONS = ("--no-lazy-fetch", "--no-replace-objects")
+_MIN_GIT_VERSION = "2.45.0"
+
+
+def _run_git(argv: list, env: dict, text: bool = False) -> "subprocess.CompletedProcess":
+    """git を起動する唯一の場所。global option を知らない古い git は版の不足として `TreeError`。
+
+    非 0 なので呼び出し側はどのみち失敗にするが、その文言は「worktree add に失敗」のように
+    的を外す。ここで名指して fail closed にする。
+    """
+    proc = subprocess.run(argv, env=env, capture_output=True, text=text)
+    if proc.returncode == 129:
+        stderr = proc.stderr if text else proc.stderr.decode("utf-8", "replace")
+        for option in _GLOBAL_OPTIONS:
+            if f"unknown option: {option}" in stderr:
+                raise TreeError(
+                    f"この git は {option} を知らない。git {_MIN_GIT_VERSION} 以上が要る"
+                )
+    return proc
+
+
 class _QuietGit:
     """展開の間の git。呼び出しごとに利用者の hook を止めるフラグを必ず付ける。
 
@@ -103,6 +144,11 @@ class _QuietGit:
       cat-file、worktree remove / prune) と上流のコミット同士の diff は問い合わせない
       (実測: 問い合わせたのは対照の `git status` だけ)。予防のために止める
 
+    加えて `_GLOBAL_OPTIONS` (`--no-lazy-fetch` と `--no-replace-objects`) を付ける。hook を
+    止めても、partial clone で無い object を読めば lazy fetch が利用者の uploadpack の
+    コマンドを起動して pack を増やし、`refs/replace` があればコミットに無い中身を読む
+    (どちらも実測: git 2.55.0)。
+
     `expanded_commit` と `materialize` はこのクラス経由でしか git を呼ばない。hook を
     止めないコマンドは展開の外だけで使える形 (`_git_readonly`) にして、展開の中に新しい
     呼び出しを書くときフラグを忘れられないようにしている。
@@ -116,11 +162,11 @@ class _QuietGit:
         self.flags = flags
 
     def argv(self, cwd: Path, args: list) -> list:
-        return ["git", "-C", str(cwd), *self.flags, *args]
+        return ["git", "-C", str(cwd), *_GLOBAL_OPTIONS, *self.flags, *args]
 
     def run(self, cwd: Path, args: list) -> "subprocess.CompletedProcess[bytes]":
         """終了コードの判定は呼び出し側が行う。"""
-        return subprocess.run(self.argv(cwd, args), env=self.env, capture_output=True)
+        return _run_git(self.argv(cwd, args), self.env)
 
     def popen(self, cwd: Path, args: list) -> "subprocess.Popen[bytes]":
         # stderr は継承する。PIPE にすると読み切るまで子が詰まりうるし、git の診断は
@@ -130,9 +176,11 @@ class _QuietGit:
         )
 
 
-# 展開の外 (ref の解決とパスの検査) だけで使う読み取り専用の git。hook を止めるフラグを
-# 持たないので、通せるサブコマンドを hook の event を持たないものに限る。展開の中で
-# 誤って使うと ValueError で止まる
+# 展開の外 (ref の解決とパスの検査) だけで使う読み取り専用の git。hook を止める `-c` は
+# 持たず、`_GLOBAL_OPTIONS` だけを付ける。allow-list の 2 つはそれと組み合わせてローカルの
+# object を読むだけになる。lazy fetch を止めないと `ls-tree` は partial clone で取りに行き、
+# 利用者の uploadpack のコマンドを起動し、`reference-transaction` まで起動する (実測:
+# git 2.55.0、tree:0 の clone)。展開の中で誤って使うと ValueError で止まる
 _READONLY_SUBCOMMANDS = ("rev-parse", "ls-tree")
 
 
@@ -141,7 +189,7 @@ def _git_readonly(
 ) -> "subprocess.CompletedProcess":
     if not args or args[0] not in _READONLY_SUBCOMMANDS:
         raise ValueError(f"展開の外で使える git は {_READONLY_SUBCOMMANDS} のみ: {args!r}")
-    return subprocess.run(["git", "-C", str(cwd), *args], env=env, capture_output=True, text=text)
+    return _run_git(["git", "-C", str(cwd), *_GLOBAL_OPTIONS, *args], env, text)
 
 
 def repo_root(cwd: Path, env: dict) -> Path:
@@ -309,7 +357,10 @@ def materialize(root: Path, sha: str, dest: Path, env: dict, hooks: Path) -> int
     そのパスを明示すると上流がリンク先 (リポジトリの外を含む) を読んで送るため。
 
     `hooks` は `core.hooksPath` に渡す空のディレクトリ。ここで呼ぶ `ls-tree` と `cat-file`
-    は hook を起動しない (実測: git 2.55.0) が、展開の中の git はすべて `_QuietGit` で呼ぶ。
+    も `_QuietGit` で呼ぶ。lazy fetch を止めなければどちらも partial clone で無い object を
+    取りに行き、利用者の uploadpack のコマンドを起動し、hook を止めていなければ
+    `reference-transaction` も起動する (実測: git 2.55.0)。止めれば `cat-file --batch` は
+    `<sha> missing` を返し、`_read_batch_blob` が `TreeError` にする。
 
     パスの検査は書き始める前に全件に対して通す (途中まで書いてから止めない)。書き出しは
     `O_EXCL` で行い、同じパスが既にあれば失敗させる。production では空の worktree に
@@ -424,9 +475,10 @@ def expanded_commit(root: Path, sha: str, env: dict) -> Iterator[Expanded]:
 
     worktree は `worktree add --detach --no-checkout` で登録するだけで、index は作らない
     (`read-tree` は呼ばない)。上流が worktree の中で呼ぶ git はコミット同士の
-    `git diff <base>...HEAD` だけで (spec の前提 17)、index も作業ツリーも読まない。index の
-    無い worktree でのその diff は通常の checkout と同一の出力で、`worktree remove --force`
-    も通る (実測: git 2.55.0)。
+    `git diff <base>...HEAD` だけで (spec の前提 17)、index は読まない (作業ツリーからは
+    コミット済みの `.gitattributes` を diff の属性として読む)。index の無い worktree での
+    その diff は通常の checkout と同一の出力で、`worktree remove --force` も通る (実測:
+    git 2.55.0)。
 
     git の呼び出しはすべて `_QuietGit` を通す。`--no-checkout` が止めるのは post-checkout
     だけで、`worktree add` 自体は `reference-transaction` を起動する (実測: git 2.55.0)。
