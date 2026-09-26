@@ -569,7 +569,7 @@ class CheckDiff(unittest.TestCase):
         write(root, rel, text)
         git(root, "add", "-A")
 
-    # --- 1: 新規 Issue ディレクトリの名前違反 ---------------------------------
+    # --- 新規 Issue ディレクトリの名前違反 ---------------------------------
 
     def test_new_issue_directory_with_legacy_name_is_flagged(self):
         with TemporaryDirectory() as tmp:
@@ -612,7 +612,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertIn("Issue ディレクトリ: 0 個", out)
 
-    # --- 2: 追加行の数字記法 ---------------------------------------------------
+    # --- 追加行の数字記法 ---------------------------------------------------
 
     def test_added_line_with_a_bare_reference_is_flagged(self):
         with TemporaryDirectory() as tmp:
@@ -624,7 +624,7 @@ class CheckDiff(unittest.TestCase):
         self.assertIn("notes.md:1:", err)
         self.assertIn("違反 1 件", out)
 
-    # --- 3: --base 指定時の range ----------------------------------------------
+    # --- --base 指定時の range ----------------------------------------------
 
     def test_base_ref_sees_only_the_branch_side(self):
         # three-dot にしないと base 側だけにあるコミットが差分へ混ざる (実測)
@@ -653,7 +653,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertIn("追加行: 0 行", out)
 
-    # --- 4: フェンス内の追加行は免除 -------------------------------------------
+    # --- フェンス内の追加行は免除 -------------------------------------------
 
     def test_added_line_inside_a_fence_is_exempt(self):
         with TemporaryDirectory() as tmp:
@@ -664,7 +664,7 @@ class CheckDiff(unittest.TestCase):
             rc, out, err = run(["--check-diff", "--root", str(root)])
         self.assertEqual(rc, 0, err)
 
-    # --- 5: 既存行は報告しない (ratchet) ---------------------------------------
+    # --- 既存行は報告しない (ratchet) ---------------------------------------
 
     def test_pre_existing_violation_on_an_untouched_line_is_not_reported(self):
         with TemporaryDirectory() as tmp:
@@ -689,7 +689,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("notes.md:1:", err)
 
-    # --- 6: 番号の重複は全体で見る ---------------------------------------------
+    # --- 番号の重複は全体で見る ---------------------------------------------
 
     def test_duplicate_number_is_seen_across_the_whole_tree(self):
         # 増分でも全体を見る規則。緩めると同じ番号の Issue が静かに 2 つできる
@@ -713,7 +713,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("番号 8 が重複している", err)
 
-    # --- 7: base の閉じ忘れフェンス -------------------------------------------
+    # --- base の閉じ忘れフェンス -------------------------------------------
 
     def test_unclosed_fence_in_base_does_not_turn_the_increment_green(self):
         # base のフェンスが開きっぱなしだと、追加行の違反は「フェンス内」として消え、
@@ -741,7 +741,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("閉じていない", err)
 
-    # --- 8: partial staging ---------------------------------------------------
+    # --- partial staging ---------------------------------------------------
 
     def test_unstaged_violation_is_not_reported(self):
         # index を走査しないと、worktree の未 stage 違反で偽陽性になる
@@ -771,7 +771,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("doc.md:2:", err)
 
-    # --- 9: 非 ASCII のパス ---------------------------------------------------
+    # --- 非 ASCII のパス ---------------------------------------------------
 
     def test_violation_under_a_non_ascii_directory_is_found(self):
         # diff のヘッダは非 ASCII パスを C クォートする。ヘッダでパスを対応付ける実装だと
@@ -795,7 +795,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("docs/issues/50_日本語のタイトル:", err)
 
-    # --- 10: rename ------------------------------------------------------------
+    # --- rename ------------------------------------------------------------
 
     def test_rename_into_a_bad_name_is_flagged_regardless_of_rename_detection(self):
         # --diff-filter=A は rename 検出下で空になる。マシンの git 設定で検査結果が
@@ -954,7 +954,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertIn("追加行: 0 行", out)
 
-    # --- 11: submodule ----------------------------------------------------------
+    # --- submodule ----------------------------------------------------------
 
     def test_submodule_entry_does_not_raise(self):
         # gitlink は diff に hunk 付きで出るが blob を持たないので内容取得が失敗する。
