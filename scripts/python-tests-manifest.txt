@@ -35,6 +35,7 @@ plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_leak_guard_
 plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_leak_guard_denylist.py::test_check_leak_guard_denylist.LineNumbering.test_crlf_does_not_shift_the_number
 plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_leak_guard_denylist.py::test_check_leak_guard_denylist.LineNumbering.test_trailing_newline_does_not_add_a_line
 plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_leak_guard_denylist.py::test_check_leak_guard_denylist.Redaction.test_check_text_does_not_print_the_source_path
+plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_leak_guard_denylist.py::test_check_leak_guard_denylist.Redaction.test_empty_check_text_is_rejected_before_the_env_skip
 plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_leak_guard_denylist.py::test_check_leak_guard_denylist.Redaction.test_entry_position_is_the_list_file_line_number
 plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_leak_guard_denylist.py::test_check_leak_guard_denylist.Redaction.test_extra_arguments_are_not_echoed
 plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_leak_guard_denylist.py::test_check_leak_guard_denylist.Redaction.test_findings_carry_coordinates_only
@@ -130,6 +131,7 @@ plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_i
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ArgumentSurface.test_base_without_check_diff_is_rejected
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ArgumentSurface.test_check_and_check_diff_are_mutually_exclusive
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ArgumentSurface.test_no_mode_is_rejected
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ArgumentSurface.test_value_options_reject_empty_values
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ArgumentSurface.test_value_options_reject_repeats
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckDiff.test_added_line_inside_a_fence_is_exempt
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckDiff.test_added_line_with_a_bare_reference_is_flagged

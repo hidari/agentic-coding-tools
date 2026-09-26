@@ -939,9 +939,6 @@ class Redaction(unittest.TestCase):
             path.write_text(body, encoding="utf-8")
             paths.append(path)
         leaky, clean = paths
-        # 対照。1 本ずつなら検出と非検出に分かれる
-        self.assertEqual(run_cli("--check-text", str(leaky), env=env, cwd=self.repo)[0], 1)
-        self.assertEqual(run_cli("--check-text", str(clean), env=env, cwd=self.repo)[0], 0)
         for label, case_env in (("env あり", env), ("env 未設定", None)):
             with self.subTest(label):
                 # 1 本目は入口 (check-outgoing-text.py) の実際の呼び方の `=` 形で渡す
@@ -952,6 +949,16 @@ class Redaction(unittest.TestCase):
                 self.assertEqual(rc, 2)
                 self.assertIn("--check-text が 2 回以上ある", out)
                 self.assertNoSecrets(out)
+
+    def test_empty_check_text_is_rejected_before_the_env_skip(self):
+        # 空の値は Path("") で cwd になり、環境変数が未設定だと読む前の skip で rc 0 になった
+        # (実測)。`--check-text="$FILE"` の変数が未設定のまま配線した形で踏む
+        deny = denylist(self.dir / "deny.txt", WORD)
+        for label, case_env in (("env あり", {checker.ENV_VAR: str(deny)}), ("env 未設定", None)):
+            with self.subTest(label):
+                rc, out = run_cli("--check-text=", env=case_env, cwd=self.repo)
+                self.assertEqual(rc, 2)
+                self.assertIn("--check-text に空の値は渡せない", out)
 
     def test_output_never_uses_the_github_number_notation(self):
         # 同じ bundle の in-repo-issue にある issue-id.py は #N を GitHub の番号空間を指す

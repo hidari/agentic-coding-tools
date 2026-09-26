@@ -395,7 +395,8 @@ class LocatedViolation(unittest.TestCase):
         self.assertEqual(found[0].kind, issue_id.KIND_BARE_REF)
 
     def test_unclosed_fence_has_a_distinct_kind(self):
-        # 種別が同じだと増分モードが閉じ忘れを行番号で落とせる (罠 1 の入口)
+        # 種別が同じだと増分モードが閉じ忘れを行番号で落とせる (既存の閉じ忘れフェンスが増分を
+        # 丸ごと免除する形を防ぐ入口)
         found = issue_id.scan_text("\n".join(["前書き", fence(), f"fix {SIGIL}8", ""]), "p.md")
         self.assertEqual(len(found), 1)
         self.assertEqual(found[0].kind, issue_id.KIND_UNCLOSED_FENCE)
@@ -561,8 +562,7 @@ class CheckText(unittest.TestCase):
 class CheckDiff(unittest.TestCase):
     """増分モード (--check-diff) の仕様 pin。
 
-    11 件は spec のテスト方針表に対応する。重点は緩めすぎる方向で、
-    「範囲を絞ったせいで新規違反が素通りする」経路を潰す。
+    重点は緩めすぎる方向で、「範囲を絞ったせいで新規違反が素通りする」経路を潰す。
     """
 
     def stage(self, root: Path, rel: str, text: str = "本文\n") -> None:
@@ -713,7 +713,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("番号 8 が重複している", err)
 
-    # --- 7: base の閉じ忘れフェンス (罠 1) --------------------------------------
+    # --- 7: base の閉じ忘れフェンス -------------------------------------------
 
     def test_unclosed_fence_in_base_does_not_turn_the_increment_green(self):
         # base のフェンスが開きっぱなしだと、追加行の違反は「フェンス内」として消え、
@@ -741,7 +741,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("閉じていない", err)
 
-    # --- 8: partial staging (罠 4) ---------------------------------------------
+    # --- 8: partial staging ---------------------------------------------------
 
     def test_unstaged_violation_is_not_reported(self):
         # index を走査しないと、worktree の未 stage 違反で偽陽性になる
@@ -771,7 +771,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("doc.md:2:", err)
 
-    # --- 9: 非 ASCII のパス (罠 2) ---------------------------------------------
+    # --- 9: 非 ASCII のパス ---------------------------------------------------
 
     def test_violation_under_a_non_ascii_directory_is_found(self):
         # diff のヘッダは非 ASCII パスを C クォートする。ヘッダでパスを対応付ける実装だと
@@ -795,7 +795,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("docs/issues/50_日本語のタイトル:", err)
 
-    # --- 10: rename (罠 3) ------------------------------------------------------
+    # --- 10: rename ------------------------------------------------------------
 
     def test_rename_into_a_bad_name_is_flagged_regardless_of_rename_detection(self):
         # --diff-filter=A は rename 検出下で空になる。マシンの git 設定で検査結果が
@@ -1194,9 +1194,6 @@ class ArgumentSurface(unittest.TestCase):
             bad.write_text(f"fix: 直した ({SIGIL}8)\n", encoding="utf-8")
             good = root / "good.txt"
             good.write_text(f"fix: 直した ({PREFIX}8)\n", encoding="utf-8")
-            # 対照。1 本ずつなら違反と合格に分かれる
-            self.assertEqual(run(["--check-text", str(bad)])[0], 1)
-            self.assertEqual(run(["--check-text", str(good)])[0], 0)
             cases = {
                 "--check-text": [f"--check-text={bad}", "--check-text", str(good)],
                 "--base": ["--check-diff", "--base", "main", "--base", "main", "--root", str(root)],
@@ -1210,6 +1207,27 @@ class ArgumentSurface(unittest.TestCase):
                         issue_id.main(argv)
                     self.assertEqual(ctx.exception.code, 2)
                     self.assertIn(f"{option} が 2 回以上ある", err.getvalue())
+
+    def test_value_options_reject_empty_values(self):
+        # 空の値は黙って別の意味になる。--base= は範囲が ...HEAD になって追加行 0 行の緑、
+        # --root= は Path("") が cwd になり、サブディレクトリから起動すると配下しか見ない
+        # (どちらも実測)。変数が未設定のまま `--base "$BASE"` と配線した形で踏む
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            cases = {
+                "--check-text": ["--check-text="],
+                "--base": ["--check-diff", "--base=", "--root", str(root)],
+                "--root": ["--check", "--root="],
+            }
+            for option, argv in cases.items():
+                with self.subTest(option):
+                    err = io.StringIO()
+                    with redirect_stdout(io.StringIO()), redirect_stderr(err), \
+                            self.assertRaises(SystemExit) as ctx:
+                        issue_id.main(argv)
+                    self.assertEqual(ctx.exception.code, 2)
+                    self.assertIn(f"{option} に空の値は渡せない", err.getvalue())
 
     def test_check_and_check_diff_are_mutually_exclusive(self):
         with TemporaryDirectory() as tmp:

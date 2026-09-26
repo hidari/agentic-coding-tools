@@ -294,13 +294,15 @@ def _diff_records(root: Path, rng: str, *filters: str) -> list[tuple[str, str | 
 
     -M を明示するのは rename 検出を diff.renames の設定から切り離すためで、既定に任せると
     マシンの設定で検査結果が変わる (実測: 設定を off にしても -M があれば R100 が出る)。
-    罠 3 で --diff-filter=AR にしたのは症状への対処で、-M が原因への対処にあたる。
+    既存の Issue ディレクトリを違反名へ rename すると R になって --diff-filter=A から漏れる。
+    --diff-filter=AR にしたのはその症状への対処で、-M が原因 (rename 検出が設定に依存する
+    こと) への対処にあたる。
 
     旧パスが要るのは「名前が変わったのか、位置だけ変わったのか」を分けるため。Issue を
     docs/issues 直下から closed/ へ移す操作は名前を変えないので、名前検査の対象にできない。
 
     -z を使うのは _ls_tree と同じ理由で、既定出力は非 ASCII を含むパスを C クォートする
-    (実測)。-z の --name-status は 種別とパスを NUL で区切って並べ、R と C だけ
+    (実測)。-z の --name-status は種別とパスを NUL で区切って並べ、R と C だけ
     種別・旧パス・新パスの 3 要素になる (実測)
     """
     out = _git(root, "diff", rng, "-M", *filters, "-z", "--name-status")
@@ -669,16 +671,20 @@ def run_check_text(source: str) -> int:
     return 1 if violations else 0
 
 
-class _StoreOnce(argparse.Action):
-    """値を 1 つ取る option の 2 回目を usage error (exit 2) にする。
+class _StoreOnceNonEmpty(argparse.Action):
+    """値を 1 つ取る option の、2 回目と空の値を usage error (exit 2) にする。
 
     argparse の既定の store は後勝ちで、`--check-text A --check-text B` は A を黙って捨てて
     B だけを見る (違反を含む A の後ろに違反の無い B を足すと exit 0 になった。実測)。
-    `--base` と `--root` の繰り返しも、意図と違う範囲やリポジトリを緑にする。1 回目かどうかを
-    既定値の None との比較で見るので、default を持つ option には使えない。
+    `--base` と `--root` の繰り返しも、意図と違う範囲やリポジトリを緑にする。空の値も黙って
+    別の意味になる。`--base=` は範囲が `...HEAD` になって追加行 0 行の緑、`--root=` は
+    Path("") が cwd になる (どちらも実測)。1 回目かどうかを既定値の None との比較で見るので、
+    default を持つ option には使えない。
     """
 
     def __call__(self, parser, namespace, values, option_string=None):
+        if not values:
+            parser.error(f"{option_string} に空の値は渡せない")
         if getattr(namespace, self.dest) is not None:
             parser.error(f"{option_string} が 2 回以上ある。1 回だけ渡すこと")
         setattr(namespace, self.dest, values)
@@ -698,19 +704,19 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument(
         "--check-text",
         metavar="PATH",
-        action=_StoreOnce,
+        action=_StoreOnceNonEmpty,
         help="テキスト 1 本を走査する (- で標準入力)",
     )
     parser.add_argument(
         "--base",
         metavar="REF",
-        action=_StoreOnce,
+        action=_StoreOnceNonEmpty,
         help="--check-diff の基準 ref (既定: index と HEAD の差分)",
     )
     parser.add_argument(
         "--root",
         metavar="PATH",
-        action=_StoreOnce,
+        action=_StoreOnceNonEmpty,
         help="リポジトリの root (既定: git rev-parse --show-toplevel)",
     )
     args = parser.parse_args(argv)

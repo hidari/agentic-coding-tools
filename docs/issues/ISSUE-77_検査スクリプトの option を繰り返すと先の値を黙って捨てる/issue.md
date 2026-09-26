@@ -10,13 +10,17 @@ status: open
 
 `issue-id.py` の `--base` と `--root` も同じ形で、`--base` の繰り返しは意図と違う範囲を緑にする。
 
-同じ形は `scripts/check-issue-closure.py` の `--root` と、対話的に使う道具 (windows-vm-verification の winvm.py、macos-vm-verification の macvm.py、markdown-to-pdf の render.py、jev-lint-curated の jevlint.py) にもある。前者は pre-commit も CI も `--root` を渡さず、後者は結果が使う人の目に見えるので、この Issue の範囲外とする。
+空の値も同じ種類の取り違えになる。`issue-id.py` の `--base=` は範囲が `...HEAD` になって追加行 0 行の緑、`--root=` は cwd になる。層 2 の `--check-text=` は、環境変数が未設定だと読む前の skip で 0 になる (どれも 2026-09-27 に実測)。`--base "$BASE"` のように、変数が未設定のまま配線した形で踏む。
+
+範囲はスクリプト単位で層 2 と `issue-id.py` に絞り、その中の値を取る option はそろえて塞ぐ。同じ形は `scripts/check-issue-closure.py` の `--root` と、対話的に使う道具 (windows-vm-verification の winvm.py、macos-vm-verification の macvm.py、markdown-to-pdf の render.py、jev-lint-curated の jevlint.py) にもある。前者はこのリポジトリ専用の検査で配布されず、`--root` を渡す呼び出し元も無い。後者は結果が使う人の目に見える。どちらもこの Issue の範囲外とする。
 
 ## タスク
 
 - [ ] 層 2 の `--check-text` の繰り返しを、受け付けの段で終了コード 2 にする。どちらのパスも印字しない。終了コードの表に行を足す
 - [ ] `issue-id.py` の `--check-text`・`--base`・`--root` の繰り返しを、終了コード 2 にする
+- [ ] 上の option の空の値も、受け付けの段で終了コード 2 にする
 - [ ] ISSUE-68 の項目 2 にある繰り返しの注意を、直した後の事実に合わせる
+- [ ] 触った `issue-id.py` で、ISSUE-68 の項目 8 にある `allow_abbrev` の説明の誤りを直す
 
 ## 関連
 

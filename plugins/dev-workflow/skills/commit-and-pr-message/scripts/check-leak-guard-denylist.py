@@ -24,7 +24,7 @@
 | index が指す object を読めない / cat-file の出力が欠ける    | 2         |
 | `--check-text` の対象を読めない                            | 2         |
 | 余分な引数を渡された                                       | 2         |
-| `--check-text` を 2 回以上渡した                           | 2         |
+| `--check-text` を 2 回以上渡した / 空の値を渡した           | 2         |
 | 上記以外の失敗                                             | 2         |
 | 禁止語を検出した                                           | 1         |
 | 検出 0 件                                                  | 0         |
@@ -770,16 +770,20 @@ def _tolerate_unencodable_stdout() -> None:
         reconfigure(errors="backslashreplace")
 
 
-class _StoreOnce(argparse.Action):
-    """値を 1 つ取る option の 2 回目を usage error (rc 2) にする。
+class _StoreOnceNonEmpty(argparse.Action):
+    """値を 1 つ取る option の、2 回目と空の値を usage error (rc 2) にする。
 
     argparse の既定の store は後勝ちで、`--check-text A --check-text B` は A を黙って捨てて
-    B だけを見る (禁止語を含む A の後ろに無害な B を足すと rc 0 になった。実測)。文面には
-    option 名だけを入れ、値 (= パス) は印字しない。1 回目かどうかを既定値の None との比較で
-    見るので、default を持つ option には使えない。
+    B だけを見る (禁止語を含む A の後ろに無害な B を足すと rc 0 になった。実測)。空の値は
+    Path("") で cwd になり、環境変数が未設定だと読む前の skip で rc 0 になった (実測)。
+    どちらも受け付けの段で止めるので、skip より前に効く。文面には option 名だけを入れ、
+    値 (= パス) は印字しない。1 回目かどうかを既定値の None との比較で見るので、default を
+    持つ option には使えない。
     """
 
     def __call__(self, parser, namespace, values, option_string=None):
+        if not values:
+            parser.error(f"{option_string} に空の値は渡せない")
         if getattr(namespace, self.dest) is not None:
             parser.error(f"{option_string} が 2 回以上ある。1 回だけ渡すこと")
         setattr(namespace, self.dest, values)
@@ -800,7 +804,10 @@ def main(argv: list[str] | None = None, *, env=None) -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true", help="追跡ファイルを走査する")
     mode.add_argument(
-        "--check-text", metavar="PATH", action=_StoreOnce, help="テキスト 1 本を走査する"
+        "--check-text",
+        metavar="PATH",
+        action=_StoreOnceNonEmpty,
+        help="テキスト 1 本を走査する",
     )
     # parse_args ではなく parse_known_args を使う。argparse の
     # `error: unrecognized arguments: <argv 全部>` は余分な引数をそのまま stderr へ出すので、
