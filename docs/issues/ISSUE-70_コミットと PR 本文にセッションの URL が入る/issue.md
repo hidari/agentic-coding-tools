@@ -40,7 +40,9 @@ Claude Code は、cloud と Remote Control のセッションでコミットや 
 - [ ] commit-msg の検査を入れる。検出すべき例と許可すべき例の両方をテストに置き、squash の本文の途中に並ぶ形も検出すべき例に含める。変異注入で検査を外すと赤になることを確かめる
 - [ ] `commit-and-pr-message` のフッタの記述 (A.1、C.1、フッタの既定の表、落とし穴の表) を裁定と矛盾しない形に直す。commit-msg の検査と同じ変更で入れる
 - [ ] 送る前の検査で止めるかを決め、止めるなら書き直しの規定 (harness の行を黙って落とさない) と揃える
-- [ ] dotfiles 側で `sessionUrl: false` が入ったあと、起動し直した Remote Control のセッションで、reminder にセッションの URL の指示が出ないこと、実際のコミットと PR に付かないことを確かめる。設定が起動時にしか読まれない可能性があるので、起動し直す前の観測を根拠にしない
+- [ ] dotfiles 側で `sessionUrl: false` が入ったあと、Remote Control のセッションで、reminder にセッションの URL の指示が出ないこと、実際のコミットと PR に付かないことを確かめる。起動し直さなくてよい
+  - `sessionUrl` の変更は起動中のセッションにも反映される。2026-09-25 に、読まれている settings のファイルへ `sessionUrl: false` を書き足した約30秒後、起動中のセッションの reminder が付けない側へ切り替わった (実測)。ただしこの観測は reminder だけで、実際のコミットと PR は見ていないので、このタスクの確認の代わりにはならない
+  - 逆に、読まれる settings が一時的に `sessionUrl` を持たない版になった間は、reminder が付ける側へ戻った。dotfiles の作業ツリーで pre-commit の stash や `gh pr merge --delete-branch` の checkout が走った間である (dotfiles 側の報告)。観測はその間を避ける。この間に作るコミットと PR には harness の指示で付きうるので、決めたことの backstop が要る場面の1つでもある
 
 ## 関連
 
