@@ -38,6 +38,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -281,20 +282,15 @@ def _require_key(environ: Mapping[str, str]) -> None:
         )
 
 
-def _json_out_target(text: str, cwd: Path, expanded: jevlint_tree.Expanded) -> Path:
-    """`--json-out` の保存先。main の `cwd` からの相対で解釈し、上流を起動する前に検査する。
+def _check_out_path(path: Path, shown: str, expanded: jevlint_tree.Expanded) -> None:
+    """保存先 1 つを、symlink を解決した先で検査する。`shown` は利用者が書いた形のパス。
 
-    上流の起動は課金されるので、書けない保存先で起動の後に失敗しないよう、親ディレクトリが
-    あることと保存先がディレクトリでないこともここで確かめる (権限までは見ない)。展開の
-    worktree と scratch の中は、抜けるときに消えるので
-    拒否する。包含は inode で見る。大文字小文字を区別しないファイルシステムでは、文字列の
-    比較は `.../Tree` と `.../tree` の包含を見落とす (`jevlint_tree._temp_base` と同じ理由)。
+    展開の worktree と scratch の中は、抜けるときに消えるので拒否する。包含は inode で
+    見る。大文字小文字を区別しないファイルシステムでは、文字列の比較は `.../Tree` と
+    `.../tree` の包含を見落とす (`jevlint_tree._temp_base` と同じ理由)。
     """
-    target = Path(text)
-    if not target.is_absolute():
-        target = cwd / target
-    target = target.resolve()
-    for ancestor in (target, *target.parents):
+    resolved = path.resolve()
+    for ancestor in (resolved, *resolved.parents):
         for inside in (expanded.tree, expanded.scratch):
             try:
                 same = os.path.samefile(ancestor, inside)
@@ -302,12 +298,33 @@ def _json_out_target(text: str, cwd: Path, expanded: jevlint_tree.Expanded) -> P
                 # まだ無いパス。同じ inode を指しようがない
                 continue
             if same:
-                raise UsageError(f"--json-out が展開した一時ディレクトリの中を指している: {text!r}")
-    if not target.parent.is_dir():
-        raise UsageError(f"--json-out の親ディレクトリが無い: {text!r}")
-    if target.is_dir():
-        raise UsageError(f"--json-out がディレクトリを指している: {text!r}")
-    return target
+                raise UsageError(f"--json-out の保存先が展開した一時ディレクトリの中にある: {shown!r}")
+    if not resolved.parent.is_dir():
+        raise UsageError(f"--json-out の保存先の親ディレクトリが無い: {shown!r}")
+    if resolved.is_dir():
+        raise UsageError(f"--json-out の保存先がディレクトリ: {shown!r}")
+
+
+def _json_out_targets(
+    text: str, cwd: Path, expanded: jevlint_tree.Expanded, *, record: bool
+) -> "tuple[Path, Path | None]":
+    """`--json-out` の保存先 (JSON と、`record` のときは記録) を、上流を起動する前に検査する。
+
+    `<path>` は main の `cwd` からの相対で解釈する。記録は `<path>.record.json` で、名前は
+    利用者が書いたパスから作る (`<path>` が symlink でも、その解決先の名前からは作らない)。
+    上流の起動は課金されるので、書けない保存先で起動の後に失敗しないよう、どちらの保存先も
+    親ディレクトリがあることとディレクトリでないことをここで確かめる (権限までは見ない)。
+    `--dry-run` は記録を書かないので、記録の保存先は見ない。
+    """
+    given = Path(text)
+    if not given.is_absolute():
+        given = cwd / given
+    _check_out_path(given, text, expanded)
+    if not record:
+        return given, None
+    record_path = Path(f"{given}.record.json")
+    _check_out_path(record_path, f"{text}.record.json", expanded)
+    return given, record_path
 
 
 def _read_record(record: "Path | None") -> "str | None":
@@ -320,11 +337,14 @@ def _read_record(record: "Path | None") -> "str | None":
         return None
 
 
-def _save_json_out(target: Path, stdout: str, record_text: "str | None") -> None:
+def _save_json_out(
+    targets: "tuple[Path, Path | None]", stdout: str, record_text: "str | None"
+) -> None:
+    json_path, record_path = targets
     try:
-        target.write_text(stdout, encoding="utf-8")
-        if record_text is not None:
-            Path(f"{target}.record.json").write_text(record_text, encoding="utf-8")
+        json_path.write_text(stdout, encoding="utf-8")
+        if record_path is not None:
+            record_path.write_text(record_text, encoding="utf-8")
     except OSError as error:
         raise UsageError(f"--json-out に書けない: {error}") from None
 
@@ -359,7 +379,9 @@ def _run(
         with jevlint_tree.expanded_commit(root, sha, keyless_env) as expanded:
             json_out = None
             if args.json_out is not None:
-                json_out = _json_out_target(args.json_out, cwd, expanded)
+                json_out = _json_out_targets(
+                    args.json_out, cwd, expanded, record=not args.dry_run
+                )
             config = expanded.scratch / "config.json"
             config.write_text(json.dumps(build_config(thresholds)), encoding="utf-8")
             record = None if args.dry_run else expanded.scratch / "record.json"
@@ -427,8 +449,12 @@ def main(
     stdout には要約だけを書く。エラーは stderr に 1 行で書き、2 を返す。判定が 2 のときは
     要約も `--json-out` の保存もしない (stdout が JSON でないこともあるため)。例外は種類を
     問わず 2 にする。捕まらない例外で Python が返す 1 は「finding あり」と衝突するため。
-    KeyboardInterrupt と SIGTERM / SIGHUP (`SignalInterrupt`) は Exception の外なので、
-    展開の後始末を済ませてからそのまま抜ける。
+
+    SIGTERM / SIGHUP は展開の間だけ `SignalInterrupt` に変わり、展開の後始末を済ませてから
+    ここで 128 + シグナル番号 (シェルの慣例) を返す。素通しにできないのは、捕まえない
+    KeyboardInterrupt の派生で Python 3.9.6 は 1 で終わるため (素の KeyboardInterrupt は
+    SIGINT で終わる。3.14.7 はどちらも SIGINT。実測)。Ctrl-C の KeyboardInterrupt は捕まえず、
+    後始末の後に Python の既定 (SIGINT で終わる) に任せる。
 
     既知の限界: `review` の上流は worktree の中で `git diff <base>...HEAD` を呼び、その git は
     利用者の git 設定で走る。コミットされた `.gitattributes` が選ぶ textconv の driver
@@ -447,6 +473,10 @@ def main(
             run_upstream,
             which,
         )
+    except jevlint_tree.SignalInterrupt as interrupt:
+        name = signal.Signals(interrupt.signum).name
+        print(f"jevlint: {name} を受けて中断した", file=sys.stderr)
+        return 128 + interrupt.signum
     except (UsageError, jevlint_tree.TreeError, jevlint_host.HostError) as error:
         print(f"jevlint: {error}", file=sys.stderr)
     except Exception as error:

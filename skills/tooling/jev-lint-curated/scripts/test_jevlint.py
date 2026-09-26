@@ -30,7 +30,9 @@ import contextlib
 import io
 import json
 import os
+import shlex
 import shutil
+import signal
 import tempfile
 import types
 import unittest
@@ -345,6 +347,8 @@ class _MainTestCase(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(base, ignore_errors=True))
         self.addCleanup(os.chdir, os.getcwd())
         os.chdir(base)
+        self.base = base
+        self.git_log = base / "git.log"
         self.tmpdir = base / "tmp"
         self.cache = base / "cache"
         self.home = base / "home"
@@ -398,6 +402,49 @@ class _MainTestCase(unittest.TestCase):
         self.assertEqual(self.repo.worktree_count(), 1)
         self.assertEqual(list(self.tmpdir.iterdir()), [])
 
+    def install_git_shim(self) -> None:
+        """environ の PATH の先頭に、argv と env を記録してから本物の git へ exec する shim を置く。
+
+        記録されるのは main() が起動する git (ラッパ自身の git) だけ。fixture の GitRepo と
+        偽物が数える worktree は `os.environ` の PATH で本物の git を直接起動する。
+        `keyed()` はこの後に呼ぶ (PATH を写すため)。
+        """
+        real = shutil.which("git", path=os.environ["PATH"])
+        self.assertTrue(real and os.path.isabs(real), real)
+        shim_dir = self.base / "git-shim"
+        shim_dir.mkdir()
+        shim = shim_dir / "git"
+        log = shlex.quote(str(self.git_log))
+        shim.write_text(
+            "#!/bin/sh\n"
+            f"{{ printf '%s\\n' \"--- git $*\"; env; }} >> {log}\n"
+            f'exec {shlex.quote(real)} "$@"\n',
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+        self.environ["PATH"] = f"{shim_dir}{os.pathsep}{self.environ['PATH']}"
+
+    def git_calls(self) -> list:
+        """shim が記録した呼び出しを `(" <argv> ", env の全文)` の列で返す。
+
+        argv は前後に空白を付けて返すので、`" worktree " in argv` のようにサブコマンドの
+        名前を語として探せる。
+        """
+        if not self.git_log.exists():
+            return []
+        text = self.git_log.read_text(encoding="utf-8", errors="replace")
+        calls = []
+        for chunk in text.split("--- git ")[1:]:
+            argv, _, env = chunk.partition("\n")
+            calls.append((f" {argv} ", env))
+        return calls
+
+    def assert_git_ran_without_expansion(self):
+        calls = self.git_calls()
+        # 対照: shim は main() の git を記録している (ref の解決は展開より前に走る)
+        self.assertTrue(any(" rev-parse " in argv for argv, _ in calls), calls)
+        self.assertFalse([argv for argv, _ in calls if " worktree " in argv])
+
 
 class MainOrderTests(_MainTestCase):
     def test_host_is_prepared_without_key_before_the_worktree_exists(self):
@@ -435,6 +482,23 @@ class MainKeyTests(_MainTestCase):
         self.assertNotIn("TYPESAFE_API_KEY", self.upstream.version_calls[0]["env"])
         self.assertNotIn("TYPESAFE_API_KEY", self.pnpm.calls[0]["env"])
 
+    def test_wrapper_git_never_sees_the_key(self):
+        self.install_git_shim()
+        code, _, _ = self.run_main(["check", "sub/file.py"], environ=self.keyed())
+        self.assertEqual(code, 0)
+        calls = self.git_calls()
+        # 対照: ref の解決、パスの検査、展開 (登録・書き出し・後始末) の git がすべて shim を
+        # 通っており、記録した env はラッパが組み立てたもの
+        for sub in (" rev-parse ", " ls-tree ", " worktree ", " cat-file "):
+            self.assertTrue(any(sub in argv for argv, _ in calls), sub)
+        for argv, env in calls:
+            with self.subTest(argv=argv):
+                self.assertIn("GIT_NO_LAZY_FETCH=1", env.splitlines())
+                self.assertNotIn(SENTINEL, env)
+                self.assertNotIn("TYPESAFE_API_KEY", env)
+        # 対照: 同じ実行で上流にはキーが渡っている
+        self.assertEqual(self.upstream.calls[0]["env"]["TYPESAFE_API_KEY"], SENTINEL)
+
     def test_dry_run_passes_no_key_to_the_upstream(self):
         environ = self.keyed()
         code, out, err = self.run_main(["check", "--dry-run", "sub/file.py"], environ=environ)
@@ -459,6 +523,7 @@ class MainKeyTests(_MainTestCase):
         )
 
     def test_missing_or_blank_key_is_2_before_the_expansion(self):
+        self.install_git_shim()
         for value in (None, "", "  \t "):
             with self.subTest(value=value):
                 environ = dict(self.environ) if value is None else self.keyed(value)
@@ -467,9 +532,11 @@ class MainKeyTests(_MainTestCase):
                 self.assertEqual(out, "")
                 self.assertIn("TYPESAFE_API_KEY", err)
                 self.assertEqual(self.upstream.calls, [])
+                self.assert_git_ran_without_expansion()
                 self.assert_cleaned_up()
 
     def test_legacy_only_key_is_2_and_names_the_variable_to_use(self):
+        self.install_git_shim()
         environ = dict(self.environ, TYPESAFEAI_API_KEY=SENTINEL)
         code, out, err = self.run_main(["check", "sub/file.py"], environ=environ)
         self.assertEqual(code, 2)
@@ -478,6 +545,7 @@ class MainKeyTests(_MainTestCase):
         self.assertIn("TYPESAFE_API_KEY", err)
         self.assertNotIn(SENTINEL, err)
         self.assertEqual(self.upstream.calls, [])
+        self.assert_git_ran_without_expansion()
         self.assert_cleaned_up()
 
 
@@ -601,6 +669,7 @@ class MainWorktreeTests(_MainTestCase):
 
 class MainRejectionTests(_MainTestCase):
     def test_usage_errors_are_2_before_touching_git_or_the_host(self):
+        self.install_git_shim()
         for argv in (
             ["check"],
             ["check", "--threshold", "go/var-name-describes-value=0.5", "sub/file.py"],
@@ -611,7 +680,12 @@ class MainRejectionTests(_MainTestCase):
                 self.assertEqual(code, 2)
                 self.assertEqual(out, "")
                 self.assertTrue(err)
+                self.assertEqual(self.git_calls(), [])
                 self.assertEqual(self.pnpm.calls, [])
+        # 対照: 同じ shim の下で、正しい引数なら main() の git が記録される
+        code, _, _ = self.run_main(["check", "--dry-run", "sub/file.py"])
+        self.assertEqual(code, 0)
+        self.assertTrue(self.git_calls())
 
     def test_path_missing_from_the_commit_is_2_before_the_host(self):
         self.repo.write("untracked.py", "untracked = 1\n")
@@ -641,7 +715,7 @@ class MainRejectionTests(_MainTestCase):
         self.assertEqual(argv[2 : argv.index("--json")], ["review", "--base", self.sha, "--dry-run"])
         self.assertEqual(call["files"]["sub/file.py"], b"value = 2\n")
 
-    def test_node_missing_from_the_absolute_path_elements_is_2(self):
+    def test_unresolvable_node_is_2_before_any_node_process(self):
         code, out, err = self.run_main(
             ["check", "--dry-run", "sub/file.py"], which=lambda name, path=None: None
         )
@@ -678,6 +752,37 @@ class MainCleanupTests(_MainTestCase):
             self.run_main(["check", "--dry-run", "sub/file.py"], upstream=upstream)
         self.assertEqual(upstream.calls[0]["worktrees"], 2)
         self.assert_cleaned_up()
+
+    def test_sigterm_during_the_upstream_cleans_up_and_exits_128_plus_signum(self):
+        upstream = self.fake_upstream(stdout=json.dumps(DRY_DOC))
+        previous = signal.getsignal(signal.SIGTERM)
+
+        def terminate(argv, **kwargs):
+            result = upstream(argv, **kwargs)
+            if list(argv[1:]) == ["--version"]:
+                return result
+            # ハンドラが無いまま SIGTERM を送るとテストの runner ごと終わるので、送る前に
+            # main() が置いたハンドラを確かめる。無ければ例外にして 2 で赤くする
+            current = signal.getsignal(signal.SIGTERM)
+            if current is previous or not callable(current):
+                raise AssertionError("SIGTERM のハンドラが置かれていない")
+            os.kill(os.getpid(), signal.SIGTERM)
+            raise AssertionError("SIGTERM が例外として届いていない")
+
+        try:
+            code, out, err = self.run_main(
+                ["check", "--dry-run", "sub/file.py"], upstream=terminate
+            )
+        except jevlint_tree.SignalInterrupt:
+            # KeyboardInterrupt の派生なので、素通しにすると unittest は実行全体を止める
+            self.fail("SignalInterrupt が main() の外へ漏れた")
+        self.assertEqual(code, 128 + signal.SIGTERM)
+        self.assertEqual(out, "")
+        self.assertIn("SIGTERM", err)
+        # 対照: シグナルは worktree が登録された状態で上流の起動の中に届いた
+        self.assertEqual(upstream.calls[0]["worktrees"], 2)
+        self.assert_cleaned_up()
+        self.assertIs(signal.getsignal(signal.SIGTERM), previous)
 
 
 class MainResultTests(_MainTestCase):
@@ -771,47 +876,92 @@ class MainResultTests(_MainTestCase):
         self.assertEqual(self.upstream.calls, [])
         self.assert_cleaned_up()
 
+    def test_unwritable_record_path_is_2_before_the_upstream_unless_dry_run(self):
+        (self.repo.path / "out.json.record.json").mkdir()
+        code, out, err = self.run_main(
+            ["check", "--json-out", "out.json", "sub/file.py"], environ=self.keyed()
+        )
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("out.json.record.json", err)
+        self.assertEqual(self.upstream.calls, [])
+        self.assert_cleaned_up()
+        # dry-run は記録を書かないので、記録の置き場は検査しない
+        code, _, _ = self.run_main(["check", "--dry-run", "--json-out", "out.json", "sub/file.py"])
+        self.assertEqual(code, 0)
+        self.assertTrue((self.repo.path / "out.json").is_file())
 
-class JsonOutTargetTests(unittest.TestCase):
-    """`--json-out` の保存先の検査。展開の一時ディレクトリの名前は予測できないので、
-    main() を通さず合成した `Expanded` で見る。"""
+
+class JsonOutTargetsTests(unittest.TestCase):
+    """`--json-out` の保存先 (JSON と `<path>.record.json`) の検査。展開の一時ディレクトリの
+    名前は予測できないので、main() を通さず合成した `Expanded` で見る。
+
+    包含の拒否を見るケースは、どれも親ディレクトリが実在する形にしてある (親が無いことの
+    拒否が先に当たると、包含の検査を外しても赤くならない)。
+    """
 
     def setUp(self):
         base = Path(tempfile.mkdtemp(prefix="jevlint-json-out-")).resolve()
         self.addCleanup(lambda: shutil.rmtree(base, ignore_errors=True))
+        self.base = base
         self.cwd = base / "cwd"
         self.expanded = jevlint_tree.Expanded(
             tree=base / "expansion" / "tree", scratch=base / "expansion" / "scratch"
         )
-        for directory in (self.cwd, self.expanded.tree, self.expanded.scratch):
+        for directory in (self.cwd, self.expanded.tree / "sub", self.expanded.scratch):
             directory.mkdir(parents=True)
 
-    def target(self, text: str) -> Path:
-        return jevlint._json_out_target(text, self.cwd, self.expanded)
+    def targets(self, text: str, record: bool = True) -> tuple:
+        return jevlint._json_out_targets(text, self.cwd, self.expanded, record=record)
+
+    def link(self, name: str, to: Path) -> None:
+        (self.cwd / name).symlink_to(to)
 
     def test_relative_path_resolves_against_cwd(self):
-        self.assertEqual(self.target("out.json"), self.cwd / "out.json")
+        self.assertEqual(
+            self.targets("out.json"), (self.cwd / "out.json", self.cwd / "out.json.record.json")
+        )
 
     def test_absolute_path_outside_the_expansion_is_kept(self):
-        path = self.cwd.parent / "elsewhere.json"
-        self.assertEqual(self.target(str(path)), path)
+        path = self.base / "elsewhere.json"
+        self.assertEqual(self.targets(str(path), record=False), (path, None))
+
+    def test_record_name_follows_the_path_as_given_not_a_symlink_target(self):
+        (self.base / "real").mkdir()
+        self.link("link.json", self.base / "real" / "data.json")
+        self.assertEqual(
+            self.targets("link.json"),
+            (self.cwd / "link.json", self.cwd / "link.json.record.json"),
+        )
 
     def test_rejects_paths_inside_the_expansion(self):
+        self.link("into-tree", self.expanded.tree)
+        self.link("dangling.json", self.expanded.tree / "out.json")
         for text in (
             str(self.expanded.tree / "out.json"),
-            str(self.expanded.tree / "not-yet" / "out.json"),
+            str(self.expanded.tree / "sub" / "out.json"),
             str(self.expanded.scratch / "out.json"),
             "../expansion/tree/out.json",
+            "into-tree/out.json",
+            "dangling.json",
         ):
             with self.subTest(text=text):
                 with self.assertRaises(jevlint.UsageError):
-                    self.target(text)
+                    self.targets(text, record=False)
+
+    def test_rejects_a_record_path_inside_the_expansion(self):
+        self.link("out.json.record.json", self.expanded.scratch / "record.json")
+        with self.assertRaises(jevlint.UsageError):
+            self.targets("out.json")
+        # dry-run は記録を書かないので、その置き場を見ない
+        self.assertEqual(self.targets("out.json", record=False), (self.cwd / "out.json", None))
 
     def test_rejects_targets_that_cannot_be_written_as_a_file(self):
-        for text in ("missing/out.json", "."):
-            with self.subTest(text=text):
+        (self.cwd / "taken.json.record.json").mkdir()
+        for text, record in (("missing/out.json", False), (".", False), ("taken.json", True)):
+            with self.subTest(text=text, record=record):
                 with self.assertRaises(jevlint.UsageError):
-                    self.target(text)
+                    self.targets(text, record=record)
 
 
 class Py39SourceTests(unittest.TestCase):
