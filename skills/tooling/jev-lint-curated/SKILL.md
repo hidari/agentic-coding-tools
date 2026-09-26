@@ -1,11 +1,12 @@
 ---
 name: jev-lint-curated
-description: pin した版の jev-lint を、このリポジトリ向けに厳選した rule だけで check / review / compat 実行したいときに使う。rule の新規作成や cutoff の較正、一般の jev-lint 運用は上流の skill jev-lint を使うこと。
+description: pin した版の jev-lint を、複数のコードベースの実測から選んで固定した rule の一覧だけで check / review / compat 実行したいときに使う。rule の新規作成や cutoff の較正、一般の jev-lint 運用は上流の skill jev-lint を使うこと。
 ---
 
 # jev-lint 厳選ラッパ
 
-pin した版の jev-lint を、このリポジトリ向けに厳選した rule の一覧だけで動かす薄いラッパ。
+pin した版の jev-lint を、複数のコードベースの実測から選んで固定した rule の一覧だけで動かす薄いラッパ。
+一覧はどの消費側リポジトリでも変えられず、消費側が調整できるのは対象のパス、`--exclude`、厳選した rule に限った `--threshold` の値だけである。
 版と厳選した rule の一覧は `scripts/jevlint.py` が唯一の場所として持ち、check・review・compat の 3 つのサブコマンドを提供する。
 
 ## いつ使うか
@@ -21,6 +22,7 @@ python3 -E -s "${CLAUDE_SKILL_DIR}/scripts/jevlint.py" <サブコマンド> ...
 ```
 
 `-E` を使うのは、消費側リポジトリにコミットされた Claude Code のプロジェクト設定の `env` が `PYTHONPATH` などをこのラッパ自身のプロセスへ注入しうるためである。
+`-s` は利用者の site-packages をこのラッパのプロセスから外す。
 `-I` は使わない。Python 3.11 以降 `-I` は `-P` を含意し、スクリプトのディレクトリが `sys.path` から落ちて兄弟モジュール (`jevlint_tree` など) の import が壊れる。
 
 ## エージェントが自分で実行してよい範囲
@@ -31,7 +33,7 @@ python3 -E -s "${CLAUDE_SKILL_DIR}/scripts/jevlint.py" <サブコマンド> ...
 - `review --dry-run --base <ref> [<path>...]`
 - `compat <版>`
 
-これ以外 (`--dry-run` を付けない `check` / `review`) はコードの中身を上流へ送るため、キーを持つユーザーが `!` で実行する。エージェントはキーを読む・表示する・export する・ユーザーに尋ねる、いずれも行わない。分類器がエージェント側でのキー取り扱いを止めるので、それを回避しようともしないこと。
+これ以外 (`--dry-run` を付けない `check` / `review`) はコードの中身を上流へ送るため、キーを持つユーザーが `!` で実行する。エージェントはキーを読む・表示する・export する・ユーザーに尋ねる、いずれも行わない。この境界はラッパの外側にある裁定なので、迂回する手段を探さないこと (環境によっては分類器がエージェント側のキー取り扱いを止めることもあるが、それを前提にはしない)。
 
 ユーザーに促す形は次のプレースホルダで示し、保管庫のパスやアカウント名のような個人の値は書かない。
 

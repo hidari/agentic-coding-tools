@@ -43,7 +43,7 @@ component を持つパッケージ。skill と agent は `<plugin 名>:<componen
 | `skills/meta/session-handoff` | セッションの作業状態を引き継ぎ書 <リポルート>/.cache/handoff.md に書き出す。hook (handoff-sentinel) の通知がこの skill を名指ししたとき、またはユーザーが手動で依頼したとき (「引き継ぎ書いて」「handoff して」「セッション切り替えたい」等) に使う。何を検知して通知するかは hook 側が持ち、ここでは数えない。書き出した引き継ぎ書を次のセッションへ載せるのは対になる SessionStart hook の責務で、hook が配線されていない環境では自動注入は起きない。このスキルは書き出しと案内までを持つ。 |
 | `skills/tooling/chrome-devtools-debugger` | 公式 chrome-devtools-mcp plugin の skill 群で収集したデバッグ結果を、標準化された日本語レポート (docs/debug-reports/) へ整形・機密マスクするレイヤー。ネットワーク/コンソール/パフォーマンス/UI の調査結果を既知エラーパターンに対応づけ、優先度付きでレポート化する際に使用する。 |
 | `skills/tooling/herdr` | "Control herdr from inside it. Manage workspaces and tabs, split panes, spawn agents, read output, and wait for state changes — all via CLI commands that talk to the running herdr instance over a local unix socket. Use when running inside herdr (HERDR_ENV=1)." |
-| `skills/tooling/jev-lint-curated` | pin した版の jev-lint を、このリポジトリ向けに厳選した rule だけで check / review / compat 実行したいときに使う。rule の新規作成や cutoff の較正、一般の jev-lint 運用は上流の skill jev-lint を使うこと。 |
+| `skills/tooling/jev-lint-curated` | pin した版の jev-lint を、複数のコードベースの実測から選んで固定した rule の一覧だけで check / review / compat 実行したいときに使う。rule の新規作成や cutoff の較正、一般の jev-lint 運用は上流の skill jev-lint を使うこと。 |
 | `skills/tooling/markdown-to-pdf` | Use when Markdown ファイルを整形して PDF 化したいとき。日本語ビジネス文書・技術ドキュメント・契約書ドラフト・計画書などを uv 経由のスタンドアロン Python スクリプト (render.py) で PDF に変換する。表組み・シンタックスハイライト・ヘッダー/フッター・ページ番号を含む整形済み PDF が必要なケース全般で使用する。 |
 
 ## 構造の規約
