@@ -779,7 +779,7 @@ class EnvironmentIsolation(unittest.TestCase):
     # 汚染された親環境から起動したときに緑であることを見る 1 件。テストの中で
     # `GIT_INDEX_FILE` を立て直しても `setUpModule` より後になるので、実際の形
     # (hook から継承した状態で始まる) を作れない。子プロセスで測るのはそのため
-    INHERITED = f"{Path(__file__).stem}.SectionScope.test_identifiers_outside_the_section_are_not_read"
+    SUBPROCESS_TEST_ID = f"{Path(__file__).stem}.SectionScope.test_identifiers_outside_the_section_are_not_read"
 
     def test_a_polluted_parent_environment_does_not_reach_the_in_process_call(self):
         # 行動の pin。状態だけを見ると「環境は消毒されているが production が別経路で
@@ -787,7 +787,7 @@ class EnvironmentIsolation(unittest.TestCase):
         sentinel = self.seeded_index()
         before = sentinel.read_bytes()
         proc = subprocess.run(
-            [sys.executable, "-m", "unittest", "-v", self.INHERITED],
+            [sys.executable, "-m", "unittest", "-v", self.SUBPROCESS_TEST_ID],
             cwd=str(ROOT / "scripts"),
             capture_output=True,
             text=True,

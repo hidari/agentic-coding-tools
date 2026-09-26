@@ -302,8 +302,8 @@ def read_links(lines: list[str] | None) -> tuple[str | None, list[str]]:
     """frontmatter の parent と children を返す。切り出せていなければ (None, [])。"""
     if lines is None:
         return None, []
-    children = _read_key(lines, "children")
-    return _read_key(lines, "parent"), split_children(children) if children else []
+    raw_children = _read_key(lines, "children")
+    return _read_key(lines, "parent"), split_children(raw_children) if raw_children else []
 
 
 def unreadable_link_keys(lines: list[str] | None) -> list[str]:
