@@ -24,8 +24,9 @@ check / review の終了コードは、上流の終了コード自体を使わ�
 
 compat の終了コードは次のとおり (これも上から順に判定する)。
 
-    2: 版の文字列が不正、host の用意に失敗、`rules --json` の起動または出力の解釈に失敗、
-       のいずれかで検査そのものができなかった
+    2: 版の文字列が不正、host の用意に失敗、一時ディレクトリの祖先に sgconfig がある、
+       `rules --json` の起動または出力の解釈に失敗、といった、検査そのものができなかった
+       場合すべて
     1: 厳選した rule が新しい版か pin した版に無い、kind が変わった、生成した設定で上流が
        異常終了した、手元の node が `engines` を満たさないか `engines` が無いか `>=N` の形で
        ない、のいずれか
@@ -187,9 +188,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _reject_dash_positionals(args: argparse.Namespace) -> None:
-    # argparse は `--` の後ろに来た値をオプションとして解釈しないため、`-x` のような
-    # 値がそのまま位置引数に入ってしまう。上流や git への引き渡しでオプションと
-    # 誤認されないよう、ここで明示的に拒否する (`--` の有無を問わない一律の検査)。
+    # argparse は `--` の後ろに来た `-x` のような値をオプションとして解釈せず、位置引数に
+    # 入れる。`-` 始まりの拒否の canonical はここではない。パスは `jevlint_tree.normalize_path`
+    # (正規化した後の形で見るので `./-x` も拒否する)、版は `parse_version` (数字の形しか
+    # 通さない) が持つ。この関数は git や host に触れる前の引数の段で止めるための写しで、
+    # 生の文字列の先頭しか見ない
     for name in ("paths", "version"):
         value = getattr(args, name, None)
         if value is None:
@@ -223,14 +226,6 @@ def _committed_paths(root: Path, sha: str, texts: list, env: dict) -> list:
             )
         paths.append(path)
     return paths
-
-
-def _prepare_host(version: str, environ: Mapping[str, str], run_pnpm: "Callable | None") -> Path:
-    # 既定の runner は `prepare_host` 自身のもの (pnpm の stdout を stderr へ流す) に任せる。
-    # `subprocess.run` をそのまま渡すと、初回の取得で pnpm の進捗が要約の stdout に混ざる
-    if run_pnpm is None:
-        return jevlint_host.prepare_host(version, environ)
-    return jevlint_host.prepare_host(version, environ, run=run_pnpm)
 
 
 def _local_node(host: Path, env: dict, run_upstream: Callable, which: Callable) -> tuple:
@@ -293,20 +288,12 @@ def _require_key(environ: Mapping[str, str]) -> None:
 def _check_out_path(path: Path, shown: str, expanded: jevlint_tree.Expanded) -> None:
     """保存先 1 つを、symlink を解決した先で検査する。`shown` は利用者が書いた形のパス。
 
-    展開の worktree と scratch の中は、抜けるときに消えるので拒否する。包含は inode で
-    見る。大文字小文字を区別しないファイルシステムでは、文字列の比較は `.../Tree` と
-    `.../tree` の包含を見落とす (`jevlint_tree._temp_base` と同じ理由)。
+    展開の worktree と scratch の中は、抜けるときに消えるので拒否する。包含の判定は
+    `jevlint_tree.is_inside` (inode で見る) に任せる。
     """
     resolved = path.resolve()
-    for ancestor in (resolved, *resolved.parents):
-        for inside in (expanded.tree, expanded.scratch):
-            try:
-                same = os.path.samefile(ancestor, inside)
-            except OSError:
-                # まだ無いパス。同じ inode を指しようがない
-                continue
-            if same:
-                raise UsageError(f"--json-out の保存先が展開した一時ディレクトリの中にある: {shown!r}")
+    if any(jevlint_tree.is_inside(resolved, inside) for inside in (expanded.tree, expanded.scratch)):
+        raise UsageError(f"--json-out の保存先が展開した一時ディレクトリの中にある: {shown!r}")
     if not resolved.parent.is_dir():
         raise UsageError(f"--json-out の保存先の親ディレクトリが無い: {shown!r}")
     if resolved.is_dir():
@@ -361,7 +348,7 @@ def _run(
     args: argparse.Namespace,
     environ: Mapping[str, str],
     cwd: Path,
-    run_pnpm: "Callable | None",
+    run_pnpm: Callable,
     run_upstream: Callable,
     which: Callable,
 ) -> int:
@@ -378,7 +365,7 @@ def _run(
         base = jevlint_tree.resolve_commit(root, args.base, keyless_env)
     paths = _committed_paths(root, sha, args.paths, keyless_env)
 
-    host = _prepare_host(UPSTREAM_VERSION, environ, run_pnpm)
+    host = jevlint_host.prepare_host(UPSTREAM_VERSION, environ, run=run_pnpm)
     node = _checked_node(host, keyless_env, run_upstream, which)
     if not args.dry_run:
         _require_key(environ)
@@ -444,17 +431,13 @@ _COMPAT_THRESHOLD = 0.5
 
 
 def _compat_scratch(env: dict) -> "tempfile.TemporaryDirectory":
-    """compat の一時ディレクトリ。置き場は `env` の `TMPDIR` (絶対パスのときだけ) で決める。
+    """compat の一時ディレクトリ。置き場は展開と同じ規則 (`jevlint_tree.tmpdir_from_env`) で決める。
 
-    `jevlint_tree._temp_base` と同じく、上流に渡す env と同じ値で置き場が決まるようにし、
-    テストが置き場を差し替えられるようにする。相対の値をそのまま渡すと cwd の下に作られ、3.9
-    では返るパスも相対になる (`_temp_base` の実測)。compat はリポジトリを使わないので、置き場が
-    リポジトリの中かどうかは見ない。
+    compat はリポジトリを使わないので、置き場がリポジトリの中かどうかは見ない。
     """
-    candidate = env.get("TMPDIR", "")
-    base = candidate if candidate and os.path.isabs(candidate) else None
+    base = jevlint_tree.tmpdir_from_env(env)
     try:
-        return tempfile.TemporaryDirectory(prefix="jevlint-compat-", dir=base)
+        return tempfile.TemporaryDirectory(prefix="jevlint-compat-", dir=str(base))
     except OSError as error:
         raise jevlint_host.HostError(f"一時ディレクトリを作れない: {error}") from None
 
@@ -465,12 +448,12 @@ def _rules_table(
     """host の jev-lint の `rules --json --no-config` を表にする。
 
     argv は `upstream_argv` で組まない。あちらは `--config` を含む固定の末尾を必ず足し、
-    `--no-config` と `--config` は後勝ちなので (spec の前提 5)、表が設定の影響を受ける。cwd は
+    `--no-config` と `--config` は後勝ちなので、表が設定の影響を受ける。cwd は
     空の一時ディレクトリで、利用者の `.jev-lint/rules/` を拾わない。終了コードが 0 でなければ
     表を使わない: 上流は rule の読み込みにエラーがあると JSON を出しつつ 2 を返す
     (`src/cli/cmd-rules.ts`)。欠けた表で比べると、読めなかった rule を「消えた」と取り違える。
     """
-    argv = [node, str(host / "node_modules/jev-lint/dist/cli.js"), "rules", "--json", "--no-config"]
+    argv = [node, str(jevlint_host.cli_path(host)), "rules", "--json", "--no-config"]
     try:
         proc = run_upstream(
             argv, cwd=str(cwd), env=env, stdout=subprocess.PIPE, text=True, encoding="utf-8"
@@ -568,27 +551,31 @@ def _engines_line(host: Path, node_version: tuple) -> "tuple[bool, str]":
 def _run_compat(
     version_text: str,
     environ: Mapping[str, str],
-    run_pnpm: "Callable | None",
+    run_pnpm: Callable,
     run_upstream: Callable,
     which: Callable,
 ) -> int:
     """pin した版と `version_text` の版を比べ、報告を stdout に書いて終了コードを返す。
 
-    段の順序: 版の検査 → 両方の版の host の用意 → node の解決 → 両方の版の `rules --json` と
-    比較 → 引数の版に設定を読ませる → 引数の版の engines。どの子プロセスの env もキーを含まない
-    (pnpm は `install_env`、node と上流は `build_env(with_key=False)`)。検査不能 (例外) の
-    ときは stdout に何も書かない。報告は最後にまとめて書く。
+    段の順序: 版の検査 → 両方の版の host の用意 → node の解決 → 一時ディレクトリの祖先の
+    sgconfig の検査 → 両方の版の `rules --json` と比較 → 引数の版に設定を読ませる → 引数の版の
+    engines。どの子プロセスの env もキーを含まない (pnpm は `install_env`、node と上流は
+    `build_env(with_key=False)`)。検査不能 (例外) のときは stdout に何も書かない。報告は最後に
+    まとめて書く。
     """
     version = parse_version(version_text)
     env = jevlint_host.build_env(environ, with_key=False)
-    pinned_host = _prepare_host(UPSTREAM_VERSION, environ, run_pnpm)
-    host = _prepare_host(version, environ, run_pnpm)
+    pinned_host = jevlint_host.prepare_host(UPSTREAM_VERSION, environ, run=run_pnpm)
+    host = jevlint_host.prepare_host(version, environ, run=run_pnpm)
     node, node_version = _local_node(pinned_host, env, run_upstream, which)
     with _compat_scratch(env) as scratch_name:
         scratch = Path(scratch_name)
         empty, tree = scratch / "empty", scratch / "tree"
         empty.mkdir()
         tree.mkdir()
+        # 設定の読み込みは `tree` を cwd にして上流の `check --dry-run` を起動し、上流は
+        # ast-grep を起動する。check / review の展開と同じく、祖先の sgconfig を先に拒否する
+        jevlint_tree.reject_sgconfig_in_ancestors(tree)
         old = _rules_table(node, pinned_host, UPSTREAM_VERSION, empty, env, run_upstream)
         new = _rules_table(node, host, version, empty, env, run_upstream)
         report = jevlint_compat.compare(
@@ -614,7 +601,7 @@ def main(
     *,
     environ: "Mapping[str, str] | None" = None,
     cwd: "Path | None" = None,
-    run_pnpm: "Callable | None" = None,
+    run_pnpm: Callable = jevlint_host.default_run,
     run_upstream: Callable = subprocess.run,
     which: Callable = shutil.which,
 ) -> int:
@@ -643,7 +630,7 @@ def main(
     `--no-textconv` を付けない限りラッパの側では塞げない。
 
     `environ` と `cwd` の None は、呼び出しの時点の `os.environ` と `Path.cwd()` を読む。
-    `run_pnpm` の None は `prepare_host` の既定の runner を使う。
+    `run_pnpm` の既定は `jevlint_host.default_run` (pnpm の進捗を要約の stdout に混ぜない)。
     """
     try:
         return _run(

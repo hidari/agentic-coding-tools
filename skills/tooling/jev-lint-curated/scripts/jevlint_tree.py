@@ -3,11 +3,11 @@
 `jevlint.py` (入口) の下流モジュールの 1 つ。前半は `--commit` / `--base` を本体の
 リポジトリの SHA に固定し、対象のパスがそのコミットに実在するかを確かめる。後半は
 そのコミットを checkout を伴わない worktree へ展開する。上流に送ってよいのはコミット
-済みの中身だけというユーザー裁定を、手順ではなく構造で守るのがこの後半の役目である。
+済みの中身だけという制約を、手順ではなく構造で守るのがこの後半の役目である。
 
 展開が checkout を使わない理由: `git worktree add` / `checkout` / `archive` は追跡された
 `.gitattributes` の `filter=` が選ぶ smudge (git-crypt の平文化、git-lfs の取得) を利用者の
-環境の driver で走らせ、symlink を symlink として復元し、hook を起動する (spec の前提 16)。
+環境の driver で走らせ、symlink を symlink として復元し、hook を起動する。
 `worktree add --no-checkout` は worktree を登録するだけでファイルを書かず、index も作らない
 (`read-tree` は呼ばない。上流が worktree の中で呼ぶ git はコミット同士の diff だけで、index
 を読まない)。ディスクへ書く経路は `git cat-file --batch` が返す blob の生のバイトだけになる。
@@ -23,15 +23,16 @@
   `reference-transaction` を起動する。hook ディレクトリ・設定で定義する hook・fsmonitor の
   3 経路を止める
 
-`--no-lazy-fetch` は git 2.45.0 で入った global option で、これが要る最低の版
-(`_MIN_GIT_VERSION`。SKILL.md はここを指す)。古い git は `unknown option: --no-lazy-fetch`
-(終了コード 129) で全呼び出しが失敗し、`_run_git` が版の不足として `TreeError` にする。この
-文言の照合は C locale の英語に依る。git はメッセージを訳すので、ラッパは自分の git に
-`LC_ALL=C` を渡して読む (`_git_env`)。上流に渡す env はこの上書きを受けない。
+`--no-lazy-fetch` は後から入った global option で、これが入った版が要る最低の版になる
+(`_MIN_GIT_VERSION` が持つ。SKILL.md はここを指す)。古い git は
+`unknown option: --no-lazy-fetch` (終了コード 129) で全呼び出しが失敗し、`_run_git` が
+版の不足として `TreeError` にする。この文言の照合は C locale の英語に依る。git は
+メッセージを訳すので、ラッパは自分の git に `LC_ALL=C` を渡して読む (`_git_env`)。上流に
+渡す env はこの上書きを受けない。
 
 上流が worktree の中で自分で呼ぶ `git diff` は利用者の設定で走るので、コミットされた
 `.gitattributes` が選ぶ textconv の driver はそこで起動しうる。この限界はこのモジュールでは
-扱わず、Task 6 / 8 が文書化する。
+扱わず、`jevlint.py` の `main` の docstring (SKILL.md が指す先) が文書化する。
 
 このモジュールは他の jevlint* モジュールを import しない。依存は入口 (`jevlint.py`)
 から下流へ一方向に流し、循環を作らないため。git を呼ぶ関数はすべて `env` を引数で
@@ -68,7 +69,7 @@ class SignalInterrupt(KeyboardInterrupt):
         self.signum = signum
 
 
-# githooks(5) が列挙する hook の名前。出典はこのマシンの `git help githooks` (git 2.55.0、
+# githooks(5) が列挙する hook の名前。出典は `git help githooks` (Homebrew の git 2.55.0、
 # 28 件)。設定で定義する hook (`hook.<name>.command` + `hook.<name>.event`) は
 # `core.hooksPath` では止まらず `hook.<event>.enabled=false` で止まる (実測) ので、観測した
 # event に限らず全 event を止める。新しい版の git が event を足したらここにも足す
@@ -105,13 +106,13 @@ _HOOK_EVENTS = (
 
 
 # ラッパ自身が呼ぶ全 git に付ける global option (`-C` の直後、サブコマンドの前)。
-# `--no-lazy-fetch` は git 2.45.0 から (出典: 上流の Documentation/RelNotes/2.45.0.txt の
-# 「"git --no-lazy-fetch cmd" allows to run "cmd" while disabling lazy fetching」。2.44.0 の
-# RelNotes には無い)。古い git は C locale では `unknown option: --no-lazy-fetch` と usage を
-# stderr に出して終了コード 129 になる (知らない global option への応答の形は 2.55.0 と 2.50.1
-# で実測)。この文言は訳される (de_DE: `Unbekannte Option:`、fr_FR: `option inconnue :`。
-# Homebrew の 2.55.0 で実測。Apple の 2.50.1 は訳を持たない) ので、照合は `_git_env` が
-# 固定する C locale の形にだけ合わせる
+# `--no-lazy-fetch` が入った版を `_MIN_GIT_VERSION` に置く (出典: 上流の
+# Documentation/RelNotes/2.45.0.txt の「"git --no-lazy-fetch cmd" allows to run "cmd" while
+# disabling lazy fetching」。2.44.0 の RelNotes には無い)。古い git は C locale では
+# `unknown option: --no-lazy-fetch` と usage を stderr に出して終了コード 129 になる (知らない
+# global option への応答の形は 2.55.0 と 2.50.1 で実測)。この文言は訳される (de_DE:
+# `Unbekannte Option:`、fr_FR: `option inconnue :`。Homebrew の 2.55.0 で実測。Apple の
+# 2.50.1 は訳を持たない) ので、照合は `_git_env` が固定する C locale の形にだけ合わせる
 _GLOBAL_OPTIONS = ("--no-lazy-fetch", "--no-replace-objects")
 _MIN_GIT_VERSION = "2.45.0"
 
@@ -121,8 +122,9 @@ def _git_env(env: dict) -> dict:
 
     git は `_()` で訳したメッセージを出し、`unknown option:` の照合が locale で外れる。
     `LC_ALL=C` は `LANG` / `LC_*` / `LANGUAGE` を de に向けたままでも英語に戻す (実測:
-    Homebrew の 2.55.0)。`LANGUAGE` は gettext が C locale では無視するが、裁定に従って
-    落とす。上流に渡す env とは別で、こちらはラッパが読む出力のためだけの上書き。
+    Homebrew の 2.55.0)。`LANGUAGE` は gettext が C locale では無視するが、ラッパが読む
+    出力に利用者の言語設定を残さないため落とす。上流に渡す env とは別で、こちらはラッパが
+    読む出力のためだけの上書き。
     `ls-tree -z` の出力 (非 ASCII のパスを含む) は locale で変わらない (実測: C / de_DE /
     en_US で同一のバイト列)。
     """
@@ -259,8 +261,9 @@ def normalize_path(text: str) -> str:
     通常のファイル名まで拒否してしまう。
 
     `-` の判定は正規化した後の結果に対して行う。`./-x` のように正規化前は `.`
-    始まりでも、結果は `-x` になり Task 6 で argv の 1 トークンとしてそのまま
-    上流へ渡るため、判定を生の入力に対して行うと素通りする。
+    始まりでも、結果は `-x` になり、呼び出し側 (`jevlint.py` の argv の組み立て) が
+    argv の 1 トークンとしてそのまま上流へ渡すため、判定を生の入力に対して行うと
+    素通りする。
     """
     if text.startswith("/"):
         raise TreeError(f"絶対パスは受け付けない: {text!r}")
@@ -436,11 +439,16 @@ class Expanded:
 _SGCONFIG_NAMES = ("sgconfig.yml", "sgconfig.yaml")
 
 
-def _reject_sgconfig_in_ancestors(tree: Path) -> None:
-    # ast-grep は cwd と親ディレクトリから sgconfig を探して動的ライブラリを読み込む
-    # (spec の前提 15)。上流を起動する子プロセスの cwd は解決済みの形 (macOS では
-    # `/var` が `/private/var`) になるので、与えられた形と解決した形の両方の祖先を見る
-    ancestors = set(tree.parents) | set(tree.resolve().parents)
+def reject_sgconfig_in_ancestors(path: Path) -> None:
+    """`path` を cwd にして上流を起動する前に、その祖先の sgconfig を拒否する。
+
+    上流は ast-grep を起動し、ast-grep は cwd と親ディレクトリから sgconfig を探して、
+    `customLanguages` の動的ライブラリを読み込む。共有の一時ディレクトリには別の利用者も
+    ファイルを置けるので、キーを使わない起動でも利用者の権限で任意のコードが走りうる。
+    上流を起動する子プロセスの cwd は解決済みの形 (macOS では `/var` が `/private/var`) に
+    なるので、与えられた形と解決した形の両方の祖先を見る。
+    """
+    ancestors = set(path.parents) | set(path.resolve().parents)
     for ancestor in ancestors:
         for name in _SGCONFIG_NAMES:
             if (ancestor / name).exists():
@@ -453,52 +461,74 @@ def _discard_worktree(git: _QuietGit, root: Path, tree: Path) -> None:
     # ことは無いが、finally の中で投げると元の例外を隠し一時ディレクトリの削除も飛ぶ)。
     # `worktree remove --force` は worktree の `.git` ファイルが壊れていると終了コード 128
     # でディレクトリを残す (実測: git 2.55.0) ので、そのときはディレクトリを消してから
-    # 登録を prune する
+    # 登録を prune する。prune も通らなければ利用者のリポジトリに登録が残るので、黙って
+    # 残さず、残った worktree と消し方を stderr に 1 行で告げる
     try:
         removed = git.run(root, ["worktree", "remove", "--force", str(tree)]).returncode == 0
     except TreeError:
         removed = False
-    if not removed:
-        shutil.rmtree(tree, ignore_errors=True)
-        try:
-            git.run(root, ["worktree", "prune"])
-        except TreeError:
-            pass
+    if removed:
+        return
+    shutil.rmtree(tree, ignore_errors=True)
+    try:
+        pruned = git.run(root, ["worktree", "prune"]).returncode == 0
+    except TreeError:
+        pruned = False
+    if not pruned:
+        print(
+            f"worktree の登録を消せなかった: {tree} (本体のリポジトリで `git worktree prune` を"
+            "実行すると消える)",
+            file=sys.stderr,
+        )
 
 
-def _temp_base(env: dict, root: Path) -> Path:
-    """一時ディレクトリの置き場を決める。
+def tmpdir_from_env(env: dict) -> Path:
+    """一時ディレクトリの置き場を、解決した形で返す。解決できなければ `TreeError`。
 
     `env` の `TMPDIR` が空でない絶対パスならそれ、それ以外は `tempfile.gettempdir()`。
-    空や相対の値を `mkdtemp(dir=...)` にそのまま渡すと cwd の下に作られ、3.9 では返る
-    パスも相対になる (実測: 3.9.6 は `'jevlint-xxx'`、3.14.7 は cwd を前置した絶対パス)。
-    相対のままだと `worktree add` は `-C root` の root から、書き出しは cwd から解決して
-    別の場所を指す。
-
-    解決した置き場がリポジトリの root の中なら拒否する。利用者の作業ツリーの中に
-    worktree を作ると、走査対象に自分の展開が混ざるため。包含は inode で見る。大文字
-    小文字を区別しないファイルシステムでは `resolve()` が与えられた表記の大文字小文字を
-    保つので (実測: APFS)、文字列の比較は `.../Repo` と `.../repo/sub` の包含を見落とす。
+    `os.environ` ではなく `env` から読むのは、上流に渡す env と同じ値で置き場が決まるように
+    し、テストが置き場を差し替えられるようにするため。空や相対の値を `mkdtemp(dir=...)` に
+    そのまま渡すと cwd の下に作られ、3.9 では返るパスも相対になる (実測: 3.9.6 は
+    `'jevlint-xxx'`、3.14.7 は cwd を前置した絶対パス)。相対のままだと `worktree add` は
+    `-C root` の root から、書き出しは cwd から解決して別の場所を指す。
     """
     candidate = env.get("TMPDIR", "")
     try:
         if candidate and os.path.isabs(candidate):
-            base = Path(candidate).resolve()
-        else:
-            # gettempdir は候補が 1 つも使えないと FileNotFoundError を投げる
-            base = Path(tempfile.gettempdir()).resolve()
+            return Path(candidate).resolve()
+        # gettempdir は候補が 1 つも使えないと FileNotFoundError を投げる
+        return Path(tempfile.gettempdir()).resolve()
     except (OSError, RuntimeError) as error:
         # 3.9 の resolve() は symlink のループを RuntimeError にする (実測: 3.9.6。3.14.7 は
         # 投げず、後の mkdtemp が OSError になる)
         raise TreeError(f"一時ディレクトリの置き場を解決できない: {error}") from None
-    for ancestor in (base, *base.parents):
+
+
+def is_inside(path: Path, directory: Path) -> bool:
+    """`path` (解決した形で渡す) が `directory` そのものか、その下にあるか。
+
+    包含は inode で見る。大文字小文字を区別しないファイルシステムでは `resolve()` が
+    与えられた表記の大文字小文字を保つので (実測: APFS)、文字列の比較は `.../Repo` と
+    `.../repo/sub` の包含を見落とす。まだ無い祖先は同じ inode を指しようがないので飛ばす。
+    """
+    for ancestor in (path, *path.parents):
         try:
-            same = os.path.samefile(ancestor, root)
+            if os.path.samefile(ancestor, directory):
+                return True
         except OSError:
-            # まだ無いディレクトリ。使えなければ mkdtemp が TreeError にする
             continue
-        if same:
-            raise TreeError(f"一時ディレクトリの置き場がリポジトリの中にある: {base}")
+    return False
+
+
+def _temp_base(env: dict, root: Path) -> Path:
+    """展開の一時ディレクトリの置き場を決める (`tmpdir_from_env`)。
+
+    置き場がリポジトリの root の中なら拒否する。利用者の作業ツリーの中に worktree を作ると、
+    走査対象に自分の展開が混ざるため。まだ無い置き場は `mkdtemp` が `TreeError` にする。
+    """
+    base = tmpdir_from_env(env)
+    if is_inside(base, root):
+        raise TreeError(f"一時ディレクトリの置き場がリポジトリの中にある: {base}")
     return base
 
 
@@ -506,13 +536,11 @@ def _temp_base(env: dict, root: Path) -> Path:
 def expanded_commit(root: Path, sha: str, env: dict) -> Iterator[Expanded]:
     """`sha` を一時ディレクトリの worktree へ checkout 無しで展開し、抜けるときに消す。
 
-    一時ディレクトリの置き場は `env` の `TMPDIR` から `_temp_base` が決める (`os.environ`
-    ではなく。上流に渡す env と同じ値で決まるようにし、テストが置き場を差し替えられる
-    ようにするため)。
+    一時ディレクトリの置き場は `env` の `TMPDIR` から `_temp_base` が決める。
 
     worktree は `worktree add --detach --no-checkout` で登録するだけで、index は作らない
     (`read-tree` は呼ばない)。上流が worktree の中で呼ぶ git はコミット同士の
-    `git diff <base>...HEAD` だけで (spec の前提 17)、index は読まない (作業ツリーからは
+    `git diff <base>...HEAD` だけで、index は読まない (作業ツリーからは
     コミット済みの `.gitattributes` を diff の属性として読む)。index の無い worktree での
     その diff は通常の checkout と同一の出力で、`worktree remove --force` も通る (実測:
     git 2.55.0)。
@@ -536,7 +564,7 @@ def expanded_commit(root: Path, sha: str, env: dict) -> Iterator[Expanded]:
     # まで消してしまう
     registered = False
     try:
-        _reject_sgconfig_in_ancestors(tree)
+        reject_sgconfig_in_ancestors(tree)
         scratch = tmp / "scratch"
         try:
             hooks.mkdir()

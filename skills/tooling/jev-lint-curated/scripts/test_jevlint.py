@@ -54,9 +54,18 @@ HERE = Path(__file__).resolve().parent
 
 
 class CuratedTests(unittest.TestCase):
-    def test_membership_and_no_duplicates(self):
+    def test_no_duplicates_count_and_every_language_uses_the_typescript_ids(self):
         self.assertEqual(len(jevlint.CURATED), len(set(jevlint.CURATED)))
         self.assertEqual(len(jevlint.CURATED), 27)
+        # 一覧を再掲せずに中身を見る: typescript は厳選の id を全部持つので、どの言語の id も
+        # その部分集合になる。どこか 1 項目の綴りが崩れると (typescript 側でも) 包含が崩れる
+        ids: dict[str, set] = {}
+        for item in jevlint.CURATED:
+            lang, _, rule_id = item.partition("/")
+            ids.setdefault(lang, set()).add(rule_id)
+        for lang, lang_ids in ids.items():
+            with self.subTest(lang=lang):
+                self.assertLessEqual(lang_ids, ids["typescript"])
 
     def test_per_language_counts(self):
         by_lang: dict[str, int] = {}
@@ -277,10 +286,10 @@ class _FakePnpm:
                 "npmrc": (where / ".npmrc").exists(),
             }
         )
-        package = where / "node_modules" / "jev-lint"
-        (package / "dist").mkdir(parents=True)
-        (package / "dist" / "cli.js").write_text("// fake cli\n", encoding="utf-8")
-        (package / "package.json").write_text(
+        cli = jevlint_host.cli_path(where)
+        cli.parent.mkdir(parents=True)
+        cli.write_text("// fake cli\n", encoding="utf-8")
+        jevlint_host.package_json_path(where).write_text(
             json.dumps({"version": jevlint.UPSTREAM_VERSION, "engines": {"node": ">=24"}}),
             encoding="utf-8",
         )
@@ -292,7 +301,7 @@ class _FakeUpstream:
 
     上流の起動では、呼ばれた時点の worktree の数、cwd の下のファイル (worktree の `.git` を
     除く) の中身、`--config` の中身を記録する。`raises` があれば記録してから投げ、無ければ
-    `--record` の置き場へ `record` を書いてから `stdout` を返す。
+    `--record` の置き場へ `record` を書いてから `stdout` と `returncode` を返す。
     """
 
     def __init__(
@@ -301,12 +310,14 @@ class _FakeUpstream:
         *,
         stdout: str = "",
         record: "str | None" = None,
+        returncode: int = 0,
         node_version: str = "v24.18.0\n",
         raises: "BaseException | None" = None,
     ):
         self.repo = repo
         self.stdout = stdout
         self.record = record
+        self.returncode = returncode
         self.node_version = node_version
         self.raises = raises
         self.version_calls: list = []
@@ -331,7 +342,7 @@ class _FakeUpstream:
             raise self.raises
         if "--record" in argv and self.record is not None:
             Path(argv[argv.index("--record") + 1]).write_text(self.record, encoding="utf-8")
-        return types.SimpleNamespace(returncode=0, stdout=self.stdout)
+        return types.SimpleNamespace(returncode=self.returncode, stdout=self.stdout)
 
 
 class _MainTestCase(unittest.TestCase):
@@ -720,6 +731,30 @@ class MainRejectionTests(_MainTestCase):
         self.assertEqual(argv[2 : argv.index("--json")], ["review", "--base", self.sha, "--dry-run"])
         self.assertEqual(call["files"]["sub/file.py"], b"value = 2\n")
 
+    def test_path_with_no_absolute_element_is_2_before_any_git(self):
+        # 相対と空の要素を落として何も残らない PATH を "" で渡すと、ラッパ自身の最初の git は
+        # プロセスの cwd (setUp で base に移してある) の `./git` として起動される。起動されれば
+        # 目印を残す `git` をそこに置き、終了コードではなく目印の有無で見る (どちらでも 2 になる)。
+        # 起動された git の PATH も空なので、目印は外部コマンドではなく shell の redirect で作る
+        marker = self.base / "rogue-git-ran"
+        rogue = self.base / "git"
+        rogue.write_text(f"#!/bin/sh\n: > {shlex.quote(str(marker))}\nexit 1\n", encoding="utf-8")
+        rogue.chmod(0o755)
+        for value in ("", "relbin"):
+            with self.subTest(PATH=value):
+                code, out, err = self.run_main(
+                    ["check", "--dry-run", "sub/file.py"], environ=dict(self.environ, PATH=value)
+                )
+                self.assertFalse(marker.exists(), "cwd の ./git が起動された")
+                self.assertEqual(code, 2)
+                self.assertEqual(out, "")
+                self.assertIn("PATH", err)
+                self.assertEqual(self.pnpm.calls, [])
+        # 対照: 同じ目印の git を置いたまま、絶対パスの要素がある PATH なら本物の git で通る
+        code, _, _ = self.run_main(["check", "--dry-run", "sub/file.py"])
+        self.assertEqual(code, 0)
+        self.assertFalse(marker.exists())
+
     def test_unresolvable_node_is_2_before_any_node_process(self):
         code, out, err = self.run_main(
             ["check", "--dry-run", "sub/file.py"], which=lambda name, path=None: None
@@ -832,6 +867,34 @@ class MainResultTests(_MainTestCase):
         self.assertFalse((self.repo.path / "out.json").exists())
         self.assert_cleaned_up()
 
+    def test_upstream_exit_outside_0_1_3_is_2_even_with_a_well_formed_result(self):
+        # 上流が途中で終わりつつ形の揃った JSON と記録を残しても、終了コードが 0/1/3 以外なら
+        # 判定に使わない。文書と記録は判定の後段をすべて通る形 (CLEAN_DOC と RECORD) にする
+        upstream = self.fake_upstream(
+            stdout=json.dumps(CLEAN_DOC), record=json.dumps(RECORD), returncode=2
+        )
+        code, out, err = self.run_main(
+            ["check", "--json-out", "out.json", "sub/file.py"],
+            environ=self.keyed(),
+            upstream=upstream,
+        )
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("終了コード", err)
+        target = self.repo.path / "out.json"
+        self.assertFalse(target.exists())
+        self.assertFalse(Path(f"{target}.record.json").exists())
+        self.assert_cleaned_up()
+        # 対照: 同じ文書と記録で上流が 0 で終われば 0 で、`--json-out` にも書く
+        upstream = self.fake_upstream(stdout=json.dumps(CLEAN_DOC), record=json.dumps(RECORD))
+        code, _, _ = self.run_main(
+            ["check", "--json-out", "out.json", "sub/file.py"],
+            environ=self.keyed(),
+            upstream=upstream,
+        )
+        self.assertEqual(code, 0)
+        self.assertTrue(target.is_file())
+
     def test_missing_record_is_2(self):
         code, out, err = self.run_with(CLEAN_DOC, record=None)
         self.assertEqual(code, 2)
@@ -940,13 +1003,15 @@ class _FakeCompatPnpm:
         if version in self.fail:
             return types.SimpleNamespace(returncode=1)
         spec = self.versions[version]
-        package = Path(cwd) / "node_modules" / "jev-lint"
-        (package / "dist").mkdir(parents=True)
-        (package / "dist" / "cli.js").write_text("// fake cli\n", encoding="utf-8")
+        cli = jevlint_host.cli_path(Path(cwd))
+        cli.parent.mkdir(parents=True)
+        cli.write_text("// fake cli\n", encoding="utf-8")
         manifest: dict = {"version": version}
         if spec["engines"] is not None:
             manifest["engines"] = {"node": spec["engines"]}
-        (package / "package.json").write_text(json.dumps(manifest), encoding="utf-8")
+        package_json = jevlint_host.package_json_path(Path(cwd))
+        package_json.write_text(json.dumps(manifest), encoding="utf-8")
+        package = package_json.parent
         for key, (_, _, text) in spec["rules"].items():
             path = package / "rules" / key / "rule.yml"
             path.parent.mkdir(parents=True)
@@ -1276,6 +1341,26 @@ class MainCompatTests(_CompatTestCase):
                 self.assertTrue(err.startswith("jevlint: "), err)
                 self.assertEqual(self.upstream.check_calls, [])
                 self.assert_cleaned_up()
+
+    def test_sgconfig_above_the_scratch_is_2_before_any_config_is_loaded(self):
+        # 設定の読み込みは一時ディレクトリの `tree` を cwd にして上流を起動し、上流は ast-grep を
+        # 起動する。ast-grep は cwd の祖先の sgconfig を読むので、共有の置き場の上に別の利用者が
+        # 置いた sgconfig.yml があれば、上流を起動する前に止める
+        shared = self.base / "shared"
+        (shared / "tmp").mkdir(parents=True)
+        (shared / "sgconfig.yml").write_text("ruleDirs: []\n", encoding="utf-8")
+        self.environ["TMPDIR"] = str(shared / "tmp")
+        code, out, err = self.run_compat()
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn(str(shared / "sgconfig.yml"), err)
+        self.assertEqual(self.upstream.check_calls, [])
+        self.assertEqual(list((shared / "tmp").iterdir()), [])
+        # 対照: 同じ置き場から sgconfig.yml を除けば、同じ組み立てで設定を 2 通り読ませる
+        (shared / "sgconfig.yml").unlink()
+        code, _, _ = self.run_compat()
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.upstream.check_calls), 2)
 
     def test_malformed_version_is_2_before_any_child_process(self):
         for version in ("latest", "0.7", "v0.7.0"):

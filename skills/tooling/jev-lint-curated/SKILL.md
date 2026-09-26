@@ -18,11 +18,12 @@ rule の新規作成や cutoff の較正、一般の jev-lint 運用は上流の
 ## 呼び出しの形
 
 ```
-python3 -E -s "${CLAUDE_SKILL_DIR}/scripts/jevlint.py" <サブコマンド> ...
+python3 -E -s -B "${CLAUDE_SKILL_DIR}/scripts/jevlint.py" <サブコマンド> ...
 ```
 
 `-E` を使うのは、消費側リポジトリにコミットされた Claude Code のプロジェクト設定の `env` が `PYTHONPATH` などをこのラッパ自身のプロセスへ注入しうるためである。
 `-s` は利用者の site-packages をこのラッパのプロセスから外す。
+`-B` は、`-E` が `PYTHONDONTWRITEBYTECODE` も無視するため、兄弟モジュールの import のたびに skill の置き場へ `scripts/__pycache__/` が書かれるのを止める (実測: Python 3.14.7)。
 `-I` は使わない。Python 3.11 以降 `-I` は `-P` を含意し、スクリプトのディレクトリが `sys.path` から落ちて兄弟モジュール (`jevlint_tree` など) の import が壊れる。
 
 ## エージェントが自分で実行してよい範囲
@@ -38,7 +39,7 @@ python3 -E -s "${CLAUDE_SKILL_DIR}/scripts/jevlint.py" <サブコマンド> ...
 ユーザーに促す形は次のプレースホルダで示し、保管庫のパスやアカウント名のような個人の値は書かない。
 
 ```
-! TYPESAFE_API_KEY="$(<キーを取り出すコマンド>)" python3 -E -s "${CLAUDE_SKILL_DIR}/scripts/jevlint.py" check <path>
+! TYPESAFE_API_KEY="$(<キーを取り出すコマンド>)" python3 -E -s -B "${CLAUDE_SKILL_DIR}/scripts/jevlint.py" check <path>
 ```
 
 キーはこの 1 回の起動にだけ渡り、export はしない。
@@ -56,6 +57,7 @@ pnpm は host (上流本体) を取得するときだけに要る。起動その
 - `review` の上流は worktree の中で自分の `git diff` を利用者の git 設定で呼ぶため、コミットされた `.gitattributes` が選ぶ textconv の driver がキーを含む env で起動しうる。この限界はラッパの側では塞げない (詳細は `scripts/jevlint.py` の `main` の docstring)
 - `--exclude` は判定する対象を絞るだけで、paired の arm が読む慣例のテストディレクトリの抜粋 (指定したパスの外にあってもよい) には効かない
 - 上流の env に proxy の変数は渡さない
+- host の取得の段では `NODE_OPTIONS` なども効かない (落とす変数と、proxy のように残す変数の理由は `scripts/jevlint_host.py` の `install_env` の docstring)
 - Claude Code のプロジェクト設定の `env` は、プロジェクトの hooks と同じ信頼度で扱う。相対な `PATH` / `XDG_CACHE_HOME` / `HOME` はラッパが弾き、host の取得の段ではパッケージマネージャの設定変数も落とすが、信頼したプロジェクトが絶対パスの値で仕込む経路までは防げない
 - MoonBit 向けの rule は一覧に載っているが、parser が無いので走らない (別 Issue で扱う)
 - submodule の中身は書き出さない
@@ -76,4 +78,4 @@ finding は人かエージェントが判断する候補であって断定では
 
 ## 後始末
 
-実行が SIGKILL で止まると worktree の登録が残ることがある。本体のリポジトリで `git worktree prune` を実行して消す。
+実行が中断されると worktree の登録が残ることがある。後始末の git が失敗して残したときは、ラッパが stderr でそう告げる。どちらも本体のリポジトリで `git worktree prune` を実行して消す。

@@ -1,7 +1,7 @@
 """jev-lint 厳選ラッパの結果判定と要約。
 
 `jevlint.py` (入口) の下流モジュールの 1 つ。上流の終了コードは判定に使わない
-(spec 前提 7、12: 上流は `errors` があって finding が 0 件のときだけ 3 を返し、それ以外は
+(上流は `errors` があって finding が 0 件のときだけ 3 を返し、それ以外は
 `blocks()` が finding と `--fail-on` から 1 か 0 を決める。HTTP 402 のような途中終了は
 上流が 0/1/3 以外を返すこともある)。判定は上流の `--json` の stdout と `--record` の記録
 だけから行う (spec の「結果の要約と終了コード」節)。終了コードの意味そのものは
@@ -12,7 +12,7 @@
 下流へ一方向に流し、循環と pin の二重管理を防ぐため)。
 
 `classify` と `summarize` はどちらも print しない。利用者への出力 (stdout に要約、stderr に
-上流の stderr をそのまま流す) は呼び出し側 (Task 6 の `main()`) の責務であり、このモジュールは
+上流の stderr をそのまま流す) は呼び出し側 (`jevlint.py` の `main`) の責務であり、このモジュールは
 判定と文字列の組み立てだけを持つ。
 """
 
@@ -88,12 +88,12 @@ def _dry_run_ok(doc: dict) -> bool:
 def classify(rc: int, stdout: str, record_text: "str | None", dry_run: bool) -> Outcome:
     """upstream の rc / stdout / `--record` の中身から判定する。
 
-    spec (`ISSUE-65-spec.md` の「結果の要約と終了コード」節) の 2〜9 行目を上から順に
-    判定する。1 行目 (引数・事前検査・host の用意・コミットの展開のエラー) は呼び出し側の
-    責務で、この関数を呼ぶ前に別の例外 (`UsageError` / `HostError` / `TreeError`) として
-    上がっている前提であり、ここでは扱わない。`--dry-run` のときは判定がここで止まり
-    0 か 2 にしかならない (dry-run の応答は `findings` や `stats.missing` を持たない
-    別の形の文書なので、3・1 の判定は行われない)。
+    判定順は `jevlint.py` のモジュール docstring (終了コードの canonical) に従い、上から順に
+    判定する。そこに挙げたもののうち、引数・事前検査・host の用意・コミットの展開の
+    エラーは呼び出し側の責務で、この関数を呼ぶ前に別の例外 (`UsageError` / `HostError` /
+    `TreeError`) として上がっている前提であり、ここでは扱わない。`--dry-run` のときは
+    判定がここで止まり 0 か 2 にしかならない (dry-run の応答は `findings` や
+    `stats.missing` を持たない別の形の文書なので、3・1 の判定は行われない)。
     """
     if rc not in (0, 1, 3):
         return Outcome(2, f"上流の終了コードが 0/1/3 のいずれでもない: {rc}", None, None)
@@ -132,10 +132,9 @@ def classify(rc: int, stdout: str, record_text: "str | None", dry_run: bool) -> 
     errors = required["errors"]
     findings = required["findings"]
 
-    # 上流の rc はここでは使わない (行 12 の前提: 不完全でなければ findings の有無だけで
-    # 1 か 0 を決める。上流が rc 3 を返していても、こちらの判定で不完全でなければ 3 に
-    # しない)。missing または errors があれば「答えが揃っていない」を finding の有無より
-    # 先に判定する。
+    # 上流の rc はここでは使わない。不完全でなければ findings の有無だけで 1 か 0 を決め、
+    # 上流が rc 3 を返していても、こちらの判定で不完全でなければ 3 にしない。missing または
+    # errors があれば「答えが揃っていない」を finding の有無より先に判定する。
     if missing >= 1 or errors:
         return Outcome(
             3,
@@ -241,11 +240,10 @@ def summarize(
     # 終了コード 3 のときは、指摘より先に「答えが無い」ことを言う (spec: 指摘だけを見て
     # 「全部揃った上での finding」と誤読させない)。N は stats.missing であって errors の
     # 件数と合算しない。upstream の run.ts には errors.push が 3 箇所あり、性質が違う:
-    # 質問そのものの失敗 (askBatch の catch、537-556 行) はその batch の全 subject を
-    # answer: null にして必ず stats.missing へ回る。一方、finding が既に付いた後の
-    # 追加の問い合わせの失敗である explainFindings の catch (707-713 行) と
-    # attributeFindings の catch (844-851 行) は、どちらも「finding は既に付いた
-    # ままレポートされる (fail open)」ため stats.missing を動かさない。後者の 2 つの
+    # 質問そのものの失敗 (askBatch の catch) はその batch の全 subject を answer: null に
+    # して必ず stats.missing へ回る。一方、finding が既に付いた後の追加の問い合わせの失敗で
+    # ある explainFindings の catch と attributeFindings の catch は、どちらも「finding は
+    # 既に付いたままレポートされる (fail open)」ため stats.missing を動かさない。後者の 2 つの
     # どちらかだけが起きた実行は missing 0 のまま errors が非 0 になり、この行は
     # 「0 件は答えが無い」を出す。それは嘘ではない (答えが無い subject は実際に 0 件)
     # ので、errors の件数と理由は別行 (上の「エラー」) が担う。

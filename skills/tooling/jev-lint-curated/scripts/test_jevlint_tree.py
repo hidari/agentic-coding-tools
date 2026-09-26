@@ -10,7 +10,8 @@ hook を経由すると中身が変わるもの (smudge filter、リポジトリ
 操作をする) が系統ごとに確かめる。
 
 git を呼ぶテストはすべて `GIT_*` を落とした `os.environ` の写しを `env` として自前で渡す
-(production の `build_env` は Task 4 で追加されるため)。一時リポジトリごとに
+(env の組み立ては `jevlint_host.build_env` にあるが、jevlint_tree とこのテストは
+jevlint_host に依存しない。依存は入口から下流への一方向)。一時リポジトリごとに
 `user.name` / `user.email` / `commit.gpgsign=false` をリポジトリ設定へ入れて、開発機の
 グローバルな git 設定 (実名や署名設定) の影響を受けないようにする。
 
@@ -35,8 +36,9 @@ from unittest import mock
 
 import jevlint_tree
 
-# `GIT_*` を落とした環境。production の env 組み立て (`build_env`, Task 4) はまだ無いので、
-# その呼び出し側の責務をここで自前に再現する。git は `commit -a` 等のとき hook へ
+# `GIT_*` を落とした環境。jevlint_tree とこのテストは jevlint_host に依存しない (依存は
+# 入口から下流への一方向) ので、`jevlint_host.build_env` を使わず env を自前で組み立てる。
+# git は `commit -a` 等のとき hook へ
 # `GIT_INDEX_FILE` を渡すことがあり、継承したままだと fixture ではなく呼び出し元
 # リポジトリの index を書き換えうる (scripts/test_check_related_refs.py の実測と同じ理由)。
 ENV = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
@@ -174,8 +176,8 @@ class NormalizePathTests(unittest.TestCase):
     def test_rejects_a_dash_prefix_that_only_appears_after_normalization(self):
         # `-` の判定は正規化前の生の文字列ではなく、正規化した結果に対して行う必要が
         # ある。生の文字列だけを見ると `./-x` は先頭が `.` なので素通りしてしまうが、
-        # 正規化後は `-x` になり、Task 6 で argv へそのまま渡すとオプションと
-        # 誤認されうる (このテストを足す前の実装はここを通していなかった: 実測)
+        # 正規化後は `-x` になり、呼び出し側 (`jevlint.py` の argv の組み立て) がそのまま
+        # 渡すとオプションと誤認されうる
         for text in ("./-x", ".//-x"):
             with self.subTest(text=text):
                 with self.assertRaises(jevlint_tree.TreeError):
@@ -334,8 +336,9 @@ class PathInCommitTests(unittest.TestCase):
         # コミットに無い」) へ吸収してはいけない。実測: 40 桁 hex として well-formed
         # だが実在しない sha を渡すと `git ls-tree` は終了コード 128・`fatal: not a
         # tree object` で失敗する。これは「パスが無い」(終了コード 0・出力空) とは
-        # 別の failure mode であり、区別せず False を返すと Task 6 で実際の git 障害が
-        # 「対象パスがコミットに存在しない」という誤ったメッセージに化ける
+        # 別の failure mode であり、区別せず False を返すと、呼び出し側 (`jevlint.py` の
+        # パスの検査) で実際の git 障害が「対象パスがコミットに存在しない」という誤った
+        # メッセージに化ける
         missing_sha = "deadbeef" * 5
         with self.assertRaises(jevlint_tree.TreeError) as cm:
             jevlint_tree.path_in_commit(self.repo.path, missing_sha, "root.txt", ENV)
@@ -746,7 +749,7 @@ class ExpandedCommitTests(unittest.TestCase):
             self.assertNotIn(config_marker("post-checkout"), in_control, evidence)
 
     def test_commit_to_commit_diff_in_the_expanded_tree_matches_the_repository(self):
-        # 上流が worktree の中で呼ぶ git は `git diff <base>...HEAD` だけ (spec の前提 17)。
+        # 上流が worktree の中で呼ぶ git は `git diff <base>...HEAD` だけ。
         # 展開は read-tree を使わず worktree に index を持たせないが、コミット同士の diff
         # は index も作業ツリーも読まないので、リポジトリ本体で取った diff と一致する
         base_sha = self.sha
@@ -816,6 +819,8 @@ class ExpandedCommitTests(unittest.TestCase):
             tmp = expanded.tree.parent
             (expanded.tree / ".git").write_text("garbage\n", encoding="utf-8")
         self._assert_torn_down(tmp)
+        # prune で登録が消えたので、残った登録を告げる行は出ない
+        self.assertNotIn("git worktree prune", self.stderr.getvalue())
 
     def test_rejects_when_an_ancestor_of_the_tree_holds_sgconfig(self):
         # ast-grep は cwd の祖先も探すので、一時ディレクトリの置き場そのものが
@@ -861,8 +866,8 @@ class ExpandedCommitTests(unittest.TestCase):
     def test_empty_or_relative_tmpdir_falls_back_to_the_system_temp_dir(self):
         # 空や相対の TMPDIR を mkdtemp にそのまま渡すと cwd の下に作られ、3.9 では返る
         # パスも相対になる (実測: 3.9.6 は 'jevlint-xxx'、3.14.7 は cwd を前置した絶対
-        # パス)。相対のままだと worktree add は root から、read-tree と書き出しは cwd
-        # から解決して別の場所を指す
+        # パス)。相対のままだと worktree add は root から、書き出しは cwd から解決して
+        # 別の場所を指す
         system = Path(tempfile.gettempdir()).resolve()
         for value in ("", "rel"):
             with self.subTest(TMPDIR=value):
@@ -978,9 +983,8 @@ class ExpandedCommitTests(unittest.TestCase):
         self.assertEqual(1, self.repo.worktree_count())
 
     def test_tree_error_from_materialize_during_expansion_tears_down(self):
-        # `.GIT` は git 自身の read-tree が `invalid path` で拒む (実測: 終了コード 128)
-        # ので materialize の検査まで届かない。`A.py`/`a.py` は read-tree を通り (index は
-        # 大文字小文字を区別する)、materialize の検査で落ちる
+        # `A.py`/`a.py` は worktree add を通り (展開は read-tree を呼ばず index を作らない)、
+        # 書き出しの前の validate_tree_paths で落ちる
         blob = self.repo.hash_blob(b"x\n")
         tree = self.repo.mktree(
             [("100644", "blob", blob, "0.py"), ("100644", "blob", blob, "A.py"), ("100644", "blob", blob, "a.py")]
@@ -991,6 +995,22 @@ class ExpandedCommitTests(unittest.TestCase):
             with jevlint_tree.expanded_commit(self.repo.path, sha, env):
                 self.fail("`A.py` と `a.py` を持つコミットの展開が通った")
         self.assertIn("a.py", str(cm.exception))
+        self._assert_torn_down_into(base)
+
+    def test_dot_git_blob_at_the_root_is_refused_after_worktree_add_and_tears_down(self):
+        # 大文字小文字を区別しないファイルシステムでは、ルートの `.GIT` の blob が worktree の
+        # `.git` (gitdir を指すファイル) を上書きしうる。worktree add はこのコミットを通すので、
+        # 拒むのは書き出しの前の validate_tree_paths。文言でそれを見る (worktree add で落ちれば
+        # 「worktree add に失敗」、書き出しで落ちれば「書き出しに失敗」になる)
+        blob = self.repo.hash_blob(b"x\n")
+        tree = self.repo.mktree([("100644", "blob", blob, ".GIT"), ("100644", "blob", blob, "a.py")])
+        sha = self.repo.commit_tree(tree)
+        base, env = self._private_base()
+        with self.assertRaises(jevlint_tree.TreeError) as cm:
+            with jevlint_tree.expanded_commit(self.repo.path, sha, env):
+                self.fail("ルートに `.GIT` を持つコミットの展開が通った")
+        self.assertIn("'.git' の成分", str(cm.exception))
+        self.assertIn(".GIT", str(cm.exception))
         self._assert_torn_down_into(base)
 
 
@@ -1194,8 +1214,8 @@ GERMAN_LOCALE = {"LANG": "de_DE.UTF-8", "LC_ALL": "de_DE.UTF-8", "LANGUAGE": "de
 class GitShimMixin:
     """PATH の先頭に置く `git` の shim を作る。
 
-    このマシンの git (Homebrew の 2.55.0 と Apple の 2.50.1) はどちらも `--no-lazy-fetch` を
-    知るので、知らない git は shim で再現する。shim は `body` の条件に当たれば
+    Homebrew の git 2.55.0 と Apple の git 2.50.1 はどちらも `--no-lazy-fetch` を知る
+    (実測) ので、知らない git は shim で再現する。shim は `body` の条件に当たれば
     `OLD_GIT_RESPONSE` の応答を返し、それ以外は本物の git に exec する。subprocess は子の
     env の PATH で実行ファイルを探す (実測: 3.14.7 と 3.9.6)。
     """
@@ -1221,6 +1241,8 @@ REJECT_NO_LAZY_FETCH = 'for arg in "$@"; do case "$arg" in --no-lazy-fetch) resp
 # 後始末のときだけ知らなくなる git (展開の途中で版が変わることは無いが、finally の中で
 # `TreeError` が出る経路を作る)
 REJECT_ONLY_TEARDOWN = 'case " $* " in *" worktree remove "*|*" worktree prune "*) respond ;; esac\n'
+# 後始末の remove と prune だけが非 0 で終わる git (`TreeError` ではなく終了コードで失敗する経路)
+FAIL_ONLY_TEARDOWN = 'case " $* " in *" worktree remove "*|*" worktree prune "*) exit 1 ;; esac\n'
 
 
 class OldGitTests(GitShimMixin, unittest.TestCase):
@@ -1251,17 +1273,30 @@ class OldGitTests(GitShimMixin, unittest.TestCase):
         # 文言を読む。shim は本物と同じく LC_ALL=C のときだけ英語を返す
         self._assert_names_the_minimum_version(self.shim_env(REJECT_NO_LAZY_FETCH, GERMAN_LOCALE))
 
+    def _assert_leftover_registration_is_announced(self, env: dict) -> None:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with jevlint_tree.expanded_commit(self.repo.path, self.sha, env) as expanded:
+                tmp = expanded.tree.parent
+                self.assertTrue((expanded.tree / "a.py").is_file())
+        self.assertFalse(tmp.exists(), "一時ディレクトリが残っている")
+        self.assertEqual(2, self.repo.worktree_count(), "shim が remove と prune を拒んだはず")
+        # 残った登録を黙って残さない: どの worktree か、どう消すかを 1 行で告げる
+        lines = stderr.getvalue().splitlines()
+        self.assertEqual(1, len(lines), lines)
+        self.assertIn(str(expanded.tree), lines[0])
+        self.assertIn("git worktree prune", lines[0])
+        self.repo.git("worktree", "prune")
+        self.assertEqual(1, self.repo.worktree_count())
+
     def test_teardown_does_not_raise_when_git_refuses_the_options_midway(self):
         # 後始末の `worktree remove` / `prune` が `_run_git` の TreeError になっても、
         # 展開の結果は返り、一時ディレクトリは消える。消せなかった登録だけが残る
-        env = self.shim_env(REJECT_ONLY_TEARDOWN)
-        with jevlint_tree.expanded_commit(self.repo.path, self.sha, env) as expanded:
-            tmp = expanded.tree.parent
-            self.assertTrue((expanded.tree / "a.py").is_file())
-        self.assertFalse(tmp.exists(), "一時ディレクトリが残っている")
-        self.assertEqual(2, self.repo.worktree_count(), "shim が remove を拒んだはず")
-        self.repo.git("worktree", "prune")
-        self.assertEqual(1, self.repo.worktree_count())
+        self._assert_leftover_registration_is_announced(self.shim_env(REJECT_ONLY_TEARDOWN))
+
+    def test_teardown_announces_the_leftover_registration_when_remove_and_prune_exit_nonzero(self):
+        # TreeError ではなく終了コードで remove と prune が失敗しても、同じく告げる
+        self._assert_leftover_registration_is_announced(self.shim_env(FAIL_ONLY_TEARDOWN))
 
 
 class GitLocaleTests(unittest.TestCase):

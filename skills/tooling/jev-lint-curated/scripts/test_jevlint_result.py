@@ -1,29 +1,28 @@
 """jevlint_result.py (結果の判定と要約) の仕様。
 
 見るのは `REQUIRED`、`classify`、`summarize` の 3 つの入口。合成する JSON の形は upstream
-(jev-lint v0.7.0、`.cache/jev-lint/` の read-only チェックアウト) の実ソースから読んだもので、
-推測では作らない。引用した行:
+(jev-lint 0.7.0) の実ソースから読んだもので、推測では作らない。引用した関数と型:
 
-- `src/report.ts` `formatJson` (382-437 行): `findings[]` の 1 行 (`rule` は言語を含まない
-  bare な id、`file`、`line`、`value`、`cutoff` 等) と、`stats`、`degraded`、`silentRules`、
+- `src/report.ts` `formatJson`: `findings[]` の 1 行 (`rule` は言語を含まない bare な id、
+  `file`、`line`、`value`、`cutoff` 等) と、`stats`、`degraded`、`silentRules`、
   `idleLanguages`、`ignored`、`unpaired`、`errors` をトップレベルに持つ形
-- `src/gate.ts` `collect` (175-198 行): `stats.subjects`・`stats.missing`・`stats.byFile`
+- `src/gate.ts` `collect`: `stats.subjects`・`stats.missing`・`stats.byFile`
   (`{file: {findings, subjects}}`) の形
-- `src/report.ts` `silentRules` (313-338 行) と `ruleKey` (363-366 行): `silentRules` の
-  各要素は `languageDir/id` の文字列
-- `src/report.ts` `idleLanguages` (346-356 行): `{language, rules}` の配列
-- `src/types.ts` `IgnoreStats` (745-752 行): `{subjects, files, unknownRules}`
-- `src/types.ts` `UnpairedStats` (758-761 行): `{subjects, files}`
-- `src/types.ts` `Spend` (791-806 行): `{calls, usd, ...}`
-- `src/types.ts` `RunError` (808-812 行): `{file, subjects, error}`
-- `src/cli/dry-run.ts` `dryRunDocument` (120-181 行): `dryRun: true`、`subjects` は数値、
-  `usd`、`ignored`・`unpaired`・`idleLanguages`・`silentRules` は check/review と同じ形
-- `src/run.ts` `buildRecord` (944-981 行): `model` は `result.servedModel ?? null`
-  (何も応答が無ければ null)、`schema` は `"jev-lint-run-1"`
+- `src/report.ts` `silentRules` と `ruleKey`: `silentRules` の各要素は `languageDir/id` の
+  文字列
+- `src/report.ts` `idleLanguages`: `{language, rules}` の配列
+- `src/types.ts` `IgnoreStats`: `{subjects, files, unknownRules}`
+- `src/types.ts` `UnpairedStats`: `{subjects, files}`
+- `src/types.ts` `Spend`: `{calls, usd, ...}`
+- `src/types.ts` `RunError`: `{file, subjects, error}`
+- `src/cli/dry-run.ts` `dryRunDocument`: `dryRun: true`、`subjects` は数値、`usd`、
+  `ignored`・`unpaired`・`idleLanguages`・`silentRules` は check/review と同じ形
+- `src/run.ts` `buildRecord`: `model` は `result.servedModel ?? null` (何も応答が無ければ
+  null)、`schema` は `"jev-lint-run-1"`
 
-`classify` の判定は spec の「結果の要約と終了コード」節にある判定順 (2〜9 行目、`classify`
-の docstring が引用する) を、次のデシジョンテーブルの行ごとにテストする (テストのコメントの
-「表の行 N」はこの表を指す)。
+`classify` の判定順 (canonical は `jevlint.py` のモジュール docstring。spec の「結果の要約と
+終了コード」節では項目 2〜9 に当たる) を、次のデシジョンテーブルの行ごとにテストする (テストの
+コメントの「表の行 N」はこの表を指す)。
 
  1. rc 2 -> 2
  2. rc 134 (0/1/3 以外) -> 2
@@ -60,7 +59,7 @@ CURATED_SAMPLE = (
 )
 
 FINDING_ROW = {
-    # report.ts formatJson の row() (383-407 行) がそのまま持つキー一式。
+    # report.ts formatJson の row() がそのまま持つキー一式。
     "rule": "var-name-describes-value",
     "severity": "warning",
     "messageId": "fail",
@@ -85,7 +84,7 @@ FINDING_ROW = {
 
 
 def _doc(**overrides):
-    """formatJson (report.ts 408-436 行) の形に沿った check/review の JSON。"""
+    """formatJson (report.ts) の形に沿った check/review の JSON。"""
     base = {
         "findings": [],
         "review": [],
@@ -116,7 +115,7 @@ def _doc(**overrides):
 
 
 def _record(**overrides):
-    """buildRecord (run.ts 944-981 行) の形。"""
+    """buildRecord (run.ts) の形。"""
     base = {
         "schema": "jev-lint-run-1",
         "recorded": "2026-09-26T00:00:00.000Z",
@@ -141,16 +140,19 @@ class RequiredConstantTests(unittest.TestCase):
 
 
 class ClassifyTests(unittest.TestCase):
+    # 表の行 1・2 の文書と記録は、後段の検査 (JSON、必須キー、記録) をすべて通る形にしてある。
+    # 終了コードの門だけが 2 にできる入力にしないと、門を外しても後段が 2 にして緑のままになる
+
     # 表の行 1: rc 2 -> 2
     def test_row1_rc_2_is_code_2(self):
-        outcome = jevlint_result.classify(2, "{}", None, dry_run=False)
+        outcome = jevlint_result.classify(2, json.dumps(_doc()), _record(), dry_run=False)
         self.assertEqual(outcome.code, 2)
         self.assertIsNone(outcome.doc)
         self.assertIsNone(outcome.record)
 
     # 表の行 2: rc 134 (0/1/3 以外) -> 2
     def test_row2_rc_134_is_code_2(self):
-        outcome = jevlint_result.classify(134, "{}", None, dry_run=False)
+        outcome = jevlint_result.classify(134, json.dumps(_doc()), _record(), dry_run=False)
         self.assertEqual(outcome.code, 2)
 
     # 表の行 3: rc 0、stdout が JSON でない -> 2
@@ -192,7 +194,7 @@ class ClassifyTests(unittest.TestCase):
     def test_dry_run_truthy_int_flag_is_code_2(self):
         # dryRun: 1 は JSON 上 truthy だが `is not True` は真偽値そのものしか通さない。
         # `not doc.get("dryRun")` のような「falsy かどうか」に緩めると、1 は falsy
-        # ではないので誤って通ってしまう (fix round 1、レビュー指摘)。
+        # ではないので誤って通ってしまう。
         outcome = jevlint_result.classify(
             0, '{"dryRun": 1, "subjects": 5}', None, dry_run=True
         )
@@ -200,7 +202,7 @@ class ClassifyTests(unittest.TestCase):
 
     def test_dry_run_truthy_string_flag_is_code_2(self):
         # 文字列 "true" も JSON 上 truthy だが、真偽値ではないので通らない
-        # (test_dry_run_truthy_int_flag_is_code_2 と同じ理由、fix round 1)。
+        # (test_dry_run_truthy_int_flag_is_code_2 と同じ理由)。
         outcome = jevlint_result.classify(
             0, '{"dryRun": "true", "subjects": 5}', None, dry_run=True
         )
@@ -246,7 +248,7 @@ class ClassifyTests(unittest.TestCase):
 
     def test_row6_stats_missing_key_entirely_is_code_2(self):
         # stats.subjects だけでなく stats 自体が丸ごと無い場合も同じ経路で 2 になることを
-        # 見る (fix round 1、レビュー指摘の Minor 3)。
+        # 見る。
         doc = _doc()
         del doc["stats"]
         outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
@@ -254,15 +256,14 @@ class ClassifyTests(unittest.TestCase):
 
     def test_row6_stats_not_a_dict_is_code_2(self):
         # stats が dict でなければ、その下の subjects/missing のどちらを辿ろうとしても
-        # 「無い」と同じ扱いで 2 になる (fix round 1、レビュー指摘の Minor 3)。
+        # 「無い」と同じ扱いで 2 になる。
         doc = _doc()
         doc["stats"] = "not a dict"
         outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
         self.assertEqual(outcome.code, 2)
 
     def test_row6_errors_not_a_list_is_code_2(self):
-        # findings と対称に、errors も型違いなら 2 になることを見る
-        # (fix round 1、レビュー指摘の Minor 3)。
+        # findings と対称に、errors も型違いなら 2 になることを見る。
         doc = _doc()
         doc["errors"] = {}
         outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
@@ -270,16 +271,15 @@ class ClassifyTests(unittest.TestCase):
 
     def test_row6_stats_missing_bool_is_code_2(self):
         # bool ガード (_read_required の isinstance(node, bool) チェック) は dry-run 側の
-        # _dry_run_ok だけでなく非 dry-run 側でも効くことを見る。このテストが無いと
-        # jevlint_result.py の該当 2 行を削除してもテストが緑のまま通ってしまう
-        # (fix round 1、レビュー指摘の Important 1)。
+        # _dry_run_ok だけでなく非 dry-run 側でも効くことを見る。bool は int のサブクラス
+        # なので、ガードが無ければ True が件数 1 として通る。
         doc = _doc()
         doc["stats"]["missing"] = True
         outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
         self.assertEqual(outcome.code, 2)
 
     def test_row6_stats_subjects_bool_is_code_2(self):
-        # test_row6_stats_missing_bool_is_code_2 と同じ理由 (fix round 1、Important 1)。
+        # test_row6_stats_missing_bool_is_code_2 と同じ理由。
         # stats.subjects 側でも bool を件数として誤って通さないことを見る。
         doc = _doc()
         doc["stats"]["subjects"] = False
@@ -432,12 +432,22 @@ class SummarizeCommonTests(unittest.TestCase):
         text = jevlint_result.summarize(
             outcome, sha="s", version="v", curated=CURATED_SAMPLE, mbt_count=0, dry_run=False
         )
-        self.assertIn("3 件を見送った", text)
+        self.assertIn("3 件を見送った、1 ファイルを丸ごと", text)
         self.assertIn("2 件 (paired)", text)
         # silentRules は curated に含まれるものだけ (curated に無い go/... は出ない)
         self.assertIn("typescript/pure-name-is-pure", text)
         self.assertNotIn("go/not-curated-rule", text)
         self.assertIn("rust (5)", text)
+
+    def test_files_ignored_whole_are_shown_even_when_no_subject_was_ignored(self):
+        # ファイルごと見送ったものは subject の件数に入らない。subjects が 0 でも files が
+        # あれば「聞く前に落とした量」として出す
+        doc = _doc(ignored={"subjects": 0, "files": ["a.py"], "unknownRules": []})
+        outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
+        text = jevlint_result.summarize(
+            outcome, sha="s", version="v", curated=CURATED_SAMPLE, mbt_count=0, dry_run=False
+        )
+        self.assertIn("jev-lint-ignore コメントで 0 件を見送った、1 ファイルを丸ごと", text.splitlines())
 
     def test_ignored_and_unpaired_hidden_when_zero(self):
         doc = _doc(
@@ -489,8 +499,8 @@ class SummarizeCommonTests(unittest.TestCase):
         )
 
     def test_code_3_via_realistic_error_batch_missing_matches_error_subjects(self):
-        # run.ts の askBatch (537-556 行): 失敗した batch の全 subject は answer: null に
-        # なり gate.ts の decide (77-90 行) が messageId "missing" にするので、
+        # run.ts の askBatch: 失敗した batch の全 subject は answer: null に
+        # なり gate.ts の decide が messageId "missing" にするので、
         # 実際の質問失敗は必ず stats.missing にも現れる。errors[0].subjects と
         # stats.missing が対応する、現実的な組み合わせを見る。
         doc = _doc(
@@ -514,7 +524,7 @@ class SummarizeCommonTests(unittest.TestCase):
         self.assertIn("エラー: 1 件", text)
 
     def test_code_3_via_errors_only_missing_stays_zero(self):
-        # run.ts の explainFindings (707-713 行): finding には既に answer が付いているので、
+        # run.ts の explainFindings: finding には既に answer が付いているので、
         # explain フォローアップだけが失敗しても stats.missing は動かない ("A failed
         # follow-up leaves the finding unlabelled and is reported; it never removes a
         # finding")。errors はあるが missing は 0 のままという組み合わせが実際に起きうる。

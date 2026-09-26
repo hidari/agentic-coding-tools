@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 # 設定の読み込みを確かめるときに置く最小のファイル。上流の parser がある言語 (typescript、
-# rust、python、javascript) に 1 本ずつ。moonbit は parser が無いので置かない (spec の前提 19)。
+# rust、python、javascript) に 1 本ずつ。moonbit は parser が無いので置かない。
 # 厳選した rule の subject (宣言、コメント、変数) が 1 つずつ当たる形にしてある
 SAMPLES: dict = {
     "sample.ts": (
@@ -155,7 +155,7 @@ def compare(
     """pin した版の表 `old` と引数の版の表 `new` を、厳選の項目 `curated` について比べる。
 
     rule.yml の中身は `read(source)` で読み、バイト列が違えば unified diff を添える (matcher と
-    criteria は `rules --json` に出ないので、diff で見せる。spec の前提 9)。`labels` は
+    criteria は `rules --json` に出ないので、diff で見せる)。`labels` は
     (pin した版, 引数の版) の名前で、失敗の文面と diff の見出しに使う。増えた rule は厳選の
     外も含めて全部並べ、厳選の id と同じ id のものに印を付ける (別の言語に同じ rule が増えた
     ことを、厳選に足すかの候補として見せるため)。

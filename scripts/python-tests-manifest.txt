@@ -738,7 +738,7 @@ skills/devops/windows-vm-verification/test_winvm.py::test_winvm.SshOptions.test_
 skills/devops/windows-vm-verification/test_winvm.py::test_winvm.StderrMessagePrefix.test_every_stderr_message_is_prefixed
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.BuildConfigTests.test_empty_thresholds_all_on
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.BuildConfigTests.test_single_threshold_overrides_only_that_rule
-skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.CuratedTests.test_membership_and_no_duplicates
+skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.CuratedTests.test_no_duplicates_count_and_every_language_uses_the_typescript_ids
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.CuratedTests.test_no_go_items
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.CuratedTests.test_per_language_counts
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.CuratedTests.test_rust_missing_two_ids
@@ -758,6 +758,7 @@ skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainCompat
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainCompatTests.test_no_child_process_sees_the_key
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainCompatTests.test_rules_are_listed_without_a_config_in_an_empty_directory_for_both_versions
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainCompatTests.test_same_version_prepares_one_host_and_reports_no_change
+skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainCompatTests.test_sgconfig_above_the_scratch_is_2_before_any_config_is_loaded
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainCompatTests.test_what_cannot_be_checked_is_2_with_nothing_on_stdout
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainKeyTests.test_dry_run_needs_no_key
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainKeyTests.test_dry_run_passes_no_key_to_the_upstream
@@ -769,6 +770,7 @@ skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainOrderT
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainOrderTests.test_upstream_is_node_running_the_host_cli
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainRejectionTests.test_node_below_the_engines_is_2
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainRejectionTests.test_path_missing_from_the_commit_is_2_before_the_host
+skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainRejectionTests.test_path_with_no_absolute_element_is_2_before_any_git
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainRejectionTests.test_review_passes_the_resolved_base_sha
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainRejectionTests.test_unresolvable_node_is_2_before_any_node_process
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainRejectionTests.test_unresolvable_review_base_is_2_before_the_host
@@ -782,6 +784,7 @@ skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainResult
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainResultTests.test_missing_record_is_2
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainResultTests.test_unusable_upstream_output_is_2_and_saves_nothing
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainResultTests.test_unwritable_record_path_is_2_before_the_upstream_unless_dry_run
+skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainResultTests.test_upstream_exit_outside_0_1_3_is_2_even_with_a_well_formed_result
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainWorktreeTests.test_absent_path_does_not_fall_back_to_the_process_path
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainWorktreeTests.test_commit_option_selects_that_commit
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.MainWorktreeTests.test_config_and_record_live_outside_the_worktree
@@ -829,6 +832,7 @@ skills/tooling/jev-lint-curated/scripts/test_jevlint_compat.py::test_jevlint_com
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.BuildEnvTests.test_copies_lc_all_from_source_when_present
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.BuildEnvTests.test_does_not_inject_lc_all
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.BuildEnvTests.test_path_keeps_only_absolute_nonempty_entries
+skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.BuildEnvTests.test_path_with_no_absolute_entry_is_a_host_error
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.BuildEnvTests.test_sets_fixed_git_safety_values_and_drops_other_git_vars
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.BuildEnvTests.test_with_key_adds_only_typesafe_api_key
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.BuildEnvTests.test_without_key_copies_allowed_values_unchanged
@@ -848,15 +852,18 @@ skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.HostDirTests.test_rejects_unsafe_version_component
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.HostDirTests.test_relative_xdg_cache_home_is_ignored_and_falls_back_to_home
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.HostDirTests.test_unexpanded_tilde_xdg_cache_home_is_ignored
+skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.HostLayoutTests.test_paths_inside_the_host_follow_the_layout_pnpm_add_creates
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.HostReusableTests.test_false_when_cli_js_missing
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.HostReusableTests.test_false_when_host_empty
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.HostReusableTests.test_false_when_version_differs
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.HostReusableTests.test_permission_denied_host_directory
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.HostReusableTests.test_true_when_version_matches_and_cli_present
+skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.InstallEnvTests.test_drops_node_and_corepack_variables_that_can_swap_the_fetched_host
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.InstallEnvTests.test_drops_npm_and_pnpm_config_vars_case_insensitively
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.InstallEnvTests.test_drops_typesafe_typesafeai_and_jevlint_prefixed
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.InstallEnvTests.test_keeps_unrelated_variables
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.InstallEnvTests.test_path_keeps_only_absolute_nonempty_entries
+skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.InstallEnvTests.test_path_with_no_absolute_entry_is_a_host_error
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.KeyStatusTests.test_legacy_key_blank_is_still_missing
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.KeyStatusTests.test_legacy_only_when_only_typesafeai_key_present
 skills/tooling/jev-lint-curated/scripts/test_jevlint_host.py::test_jevlint_host.KeyStatusTests.test_missing_when_empty
@@ -925,6 +932,7 @@ skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_res
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.SummarizeCommonTests.test_code_3_via_realistic_error_batch_missing_matches_error_subjects
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.SummarizeCommonTests.test_dropped_before_asking_shown_when_nonzero
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.SummarizeCommonTests.test_dry_run_has_no_model_line
+skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.SummarizeCommonTests.test_files_ignored_whole_are_shown_even_when_no_subject_was_ignored
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.SummarizeCommonTests.test_finding_line_format_and_japanese_filename_with_space
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.SummarizeCommonTests.test_ignored_and_unpaired_hidden_when_zero
 skills/tooling/jev-lint-curated/scripts/test_jevlint_result.py::test_jevlint_result.SummarizeCommonTests.test_mbt_count_nonzero_shown
@@ -941,6 +949,7 @@ skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.ExpandedCommitTests.test_commit_to_commit_diff_in_the_expanded_tree_matches_the_repository
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.ExpandedCommitTests.test_committed_sgconfig_directory_is_refused_and_tears_down
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.ExpandedCommitTests.test_config_hooks_fire_without_the_wrappers_flags_or_this_git_cannot_run_them
+skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.ExpandedCommitTests.test_dot_git_blob_at_the_root_is_refused_after_worktree_add_and_tears_down
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.ExpandedCommitTests.test_empty_or_relative_tmpdir_falls_back_to_the_system_temp_dir
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.ExpandedCommitTests.test_exception_inside_still_tears_down
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.ExpandedCommitTests.test_failing_worktree_add_is_a_tree_error_and_leaves_nothing_behind
@@ -986,6 +995,7 @@ skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.NormalizePathTests.test_rejects_absolute_and_dotdot_and_dash
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.OldGitTests.test_git_without_no_lazy_fetch_fails_closed_naming_the_minimum_version
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.OldGitTests.test_old_git_is_named_even_when_the_users_locale_is_german
+skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.OldGitTests.test_teardown_announces_the_leftover_registration_when_remove_and_prune_exit_nonzero
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.OldGitTests.test_teardown_does_not_raise_when_git_refuses_the_options_midway
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.PartialCloneTests.test_expanded_commit_on_a_blob_none_clone_raises_and_tears_down
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.PartialCloneTests.test_fixture_lazily_fetches_when_git_runs_without_the_wrappers_options

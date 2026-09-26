@@ -299,7 +299,7 @@ class DescribeTests(unittest.TestCase):
 
 class SamplesTests(unittest.TestCase):
     def test_one_sample_per_language_that_has_a_parser(self):
-        # moonbit は parser が無いので置かない (spec の前提 19)
+        # moonbit は parser が無いので置かない
         suffixes = sorted(name.rpartition(".")[2] for name in jevlint_compat.SAMPLES)
         self.assertEqual(suffixes, ["js", "py", "rs", "ts"])
         for name, text in jevlint_compat.SAMPLES.items():
