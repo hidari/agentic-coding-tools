@@ -26,8 +26,9 @@ compat の終了コードは次のとおり (これも上から順に判定す�
 
     2: 版の文字列が不正、host の用意に失敗、`rules --json` の起動または出力の解釈に失敗、
        のいずれかで検査そのものができなかった
-    1: 厳選した rule が新しい版に無い、kind が変わった、生成した設定で上流が異常終了した、
-       手元の node が `engines` を満たさないか `engines` が `>=N` の形でない、のいずれか
+    1: 厳選した rule が新しい版か pin した版に無い、kind が変わった、生成した設定で上流が
+       異常終了した、手元の node が `engines` を満たさないか `engines` が無いか `>=N` の形で
+       ない、のいずれか
     0: それ以外 (報告のみ。cutoff の変化、rule.yml の変化、増えた rule があっても失敗ではない)
 """
 
@@ -41,9 +42,11 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Callable, Mapping, NoReturn
 
+import jevlint_compat
 import jevlint_host
 import jevlint_result
 import jevlint_tree
@@ -222,16 +225,16 @@ def _committed_paths(root: Path, sha: str, texts: list, env: dict) -> list:
     return paths
 
 
-def _prepare_host(environ: Mapping[str, str], run_pnpm: "Callable | None") -> Path:
+def _prepare_host(version: str, environ: Mapping[str, str], run_pnpm: "Callable | None") -> Path:
     # 既定の runner は `prepare_host` 自身のもの (pnpm の stdout を stderr へ流す) に任せる。
     # `subprocess.run` をそのまま渡すと、初回の取得で pnpm の進捗が要約の stdout に混ざる
     if run_pnpm is None:
-        return jevlint_host.prepare_host(UPSTREAM_VERSION, environ)
-    return jevlint_host.prepare_host(UPSTREAM_VERSION, environ, run=run_pnpm)
+        return jevlint_host.prepare_host(version, environ)
+    return jevlint_host.prepare_host(version, environ, run=run_pnpm)
 
 
-def _checked_node(host: Path, env: dict, run_upstream: Callable, which: Callable) -> str:
-    """起動に使う node を 1 度だけ解決し、host の jev-lint の `engines.node` を満たすか見る。
+def _local_node(host: Path, env: dict, run_upstream: Callable, which: Callable) -> tuple:
+    """起動に使う node を 1 度だけ解決し、(絶対パス, `node --version` の版) を返す。
 
     PATH は `env` (`build_env` が相対と空の要素を落としたもの) から取る。利用者の生の PATH
     で解決すると、相対の要素がプロセスの cwd (消費側のリポジトリ) で解決され、そこに
@@ -258,7 +261,12 @@ def _checked_node(host: Path, env: dict, run_upstream: Callable, which: Callable
         raise jevlint_host.HostError(
             f"node --version が失敗した (終了コード {proc.returncode}): {node}"
         )
-    version = jevlint_host.parse_node_version(proc.stdout)
+    return node, jevlint_host.parse_node_version(proc.stdout)
+
+
+def _checked_node(host: Path, env: dict, run_upstream: Callable, which: Callable) -> str:
+    """`_local_node` の node が、host の jev-lint の `engines.node` を満たすか見る。"""
+    node, version = _local_node(host, env, run_upstream, which)
     engines = jevlint_host.read_engines(host)
     if not jevlint_host.engines_ok(engines, version):
         shown = ".".join(str(part) for part in version)
@@ -357,8 +365,8 @@ def _run(
     run_upstream: Callable,
     which: Callable,
 ) -> int:
-    if args.command not in ("check", "review"):
-        raise UsageError(f"{args.command} はまだ使えない")
+    if args.command == "compat":
+        return _run_compat(args.version, environ, run_pnpm, run_upstream, which)
     thresholds = dict(parse_threshold(text) for text in args.threshold)
 
     # ラッパ自身の git と `node --version` の env。キーを含まない
@@ -370,7 +378,7 @@ def _run(
         base = jevlint_tree.resolve_commit(root, args.base, keyless_env)
     paths = _committed_paths(root, sha, args.paths, keyless_env)
 
-    host = _prepare_host(environ, run_pnpm)
+    host = _prepare_host(UPSTREAM_VERSION, environ, run_pnpm)
     node = _checked_node(host, keyless_env, run_upstream, which)
     if not args.dry_run:
         _require_key(environ)
@@ -430,6 +438,177 @@ def _run(
             return outcome.code
 
 
+# compat が 2 通り目の設定で 1 項目に持たせる threshold。確かめたいのは上流が `threshold` と
+# いう項目を読めるかなので、0 と 1 の間ならどの値でもよい
+_COMPAT_THRESHOLD = 0.5
+
+
+def _compat_scratch(env: dict) -> "tempfile.TemporaryDirectory":
+    """compat の一時ディレクトリ。置き場は `env` の `TMPDIR` (絶対パスのときだけ) で決める。
+
+    `jevlint_tree._temp_base` と同じく、上流に渡す env と同じ値で置き場が決まるようにし、
+    テストが置き場を差し替えられるようにする。相対の値をそのまま渡すと cwd の下に作られ、3.9
+    では返るパスも相対になる (`_temp_base` の実測)。compat はリポジトリを使わないので、置き場が
+    リポジトリの中かどうかは見ない。
+    """
+    candidate = env.get("TMPDIR", "")
+    base = candidate if candidate and os.path.isabs(candidate) else None
+    try:
+        return tempfile.TemporaryDirectory(prefix="jevlint-compat-", dir=base)
+    except OSError as error:
+        raise jevlint_host.HostError(f"一時ディレクトリを作れない: {error}") from None
+
+
+def _rules_table(
+    node: str, host: Path, version: str, cwd: Path, env: dict, run_upstream: Callable
+) -> dict:
+    """host の jev-lint の `rules --json --no-config` を表にする。
+
+    argv は `upstream_argv` で組まない。あちらは `--config` を含む固定の末尾を必ず足し、
+    `--no-config` と `--config` は後勝ちなので (spec の前提 5)、表が設定の影響を受ける。cwd は
+    空の一時ディレクトリで、利用者の `.jev-lint/rules/` を拾わない。終了コードが 0 でなければ
+    表を使わない: 上流は rule の読み込みにエラーがあると JSON を出しつつ 2 を返す
+    (`src/cli/cmd-rules.ts`)。欠けた表で比べると、読めなかった rule を「消えた」と取り違える。
+    """
+    argv = [node, str(host / "node_modules/jev-lint/dist/cli.js"), "rules", "--json", "--no-config"]
+    try:
+        proc = run_upstream(
+            argv, cwd=str(cwd), env=env, stdout=subprocess.PIPE, text=True, encoding="utf-8"
+        )
+    except OSError as error:
+        raise jevlint_host.HostError(
+            f"jev-lint {version} の rules --json を起動できない: {error}"
+        ) from None
+    if proc.returncode != 0:
+        raise jevlint_host.HostError(
+            f"jev-lint {version} の rules --json が終了コード {proc.returncode} で終わった"
+        )
+    try:
+        return jevlint_compat.parse_rules(proc.stdout)
+    except ValueError as error:
+        raise jevlint_host.HostError(f"jev-lint {version} の {error}") from None
+
+
+def _read_rule_yml(source: str) -> bytes:
+    try:
+        return Path(source).read_bytes()
+    except OSError as error:
+        raise jevlint_host.HostError(f"rule.yml を読めない: {source}: {error}") from None
+
+
+def _load_configs(
+    node: str,
+    host: Path,
+    version: str,
+    tree: Path,
+    scratch: Path,
+    env: dict,
+    run_upstream: Callable,
+) -> list:
+    """生成した設定を `version` の上流に `--dry-run` で読ませ、(見出し, 終了コード) の列を返す。
+
+    既定の設定と、1 項目だけ `threshold` を持つ設定の 2 通り (`threshold` は 0.7.0 で `at` から
+    改名され、0.6.7 以前は知らないフィールドとして拒否する)。argv は本番と同じ `upstream_argv`
+    で組む。cwd は最小のファイルだけを置いた `tree` で、設定はその外の `scratch` に書く (上流の
+    baseDir は設定のディレクトリになる)。上流の stderr は捕まえずに流し、判定には終了コード
+    だけを使う (stderr の文面は上流の版で変わる)。stdout (dry-run の JSON) は捨てる。
+    """
+    key = CURATED[0]
+    cases = (
+        ("既定", {}),
+        (f"{key} に threshold {_COMPAT_THRESHOLD}", {key: _COMPAT_THRESHOLD}),
+    )
+    results = []
+    for index, (label, thresholds) in enumerate(cases):
+        config = scratch / f"config-{index}.json"
+        config.write_text(json.dumps(build_config(thresholds)), encoding="utf-8")
+        argv = jevlint_host.upstream_argv(
+            node,
+            host,
+            "check",
+            base=None,
+            excludes=[],
+            paths=["."],
+            dry_run=True,
+            record=None,
+            config=config,
+        )
+        # 上流の stderr がこの後に続くので、どちらの設定の起動かを先に告げる
+        print(f"jevlint: 設定 ({label}) を jev-lint {version} に読ませる", file=sys.stderr)
+        try:
+            proc = run_upstream(argv, cwd=str(tree), env=env, stdout=subprocess.DEVNULL)
+        except OSError as error:
+            raise jevlint_host.HostError(f"jev-lint {version} を起動できない: {error}") from None
+        results.append((label, proc.returncode))
+    return results
+
+
+def _config_line(label: str, returncode: int) -> str:
+    if returncode == 0:
+        return f"設定の読み込み ({label}): 通った"
+    return f"設定の読み込み ({label}): 終了コード {returncode} で失敗 (理由は上流の stderr)"
+
+
+def _engines_line(host: Path, node_version: tuple) -> "tuple[bool, str]":
+    """引数の版の `engines.node` と手元の node の版を比べ、(満たすか, 報告の行) を返す。
+
+    check と review は engines が読めないか `>=N` の形でないと 2 にするが、compat ではそれを
+    「その版に上げると check と review が動かない」という結果として失敗 (1) にする。
+    """
+    shown = ".".join(str(part) for part in node_version)
+    try:
+        engines = jevlint_host.read_engines(host)
+        satisfied = jevlint_host.engines_ok(engines, node_version)
+    except jevlint_host.HostError as error:
+        return False, f"engines.node を判定できない、手元の node {shown}: {error}"
+    verdict = "満たす" if satisfied else "満たさない"
+    return satisfied, f"engines.node {engines}、手元の node {shown}: {verdict}"
+
+
+def _run_compat(
+    version_text: str,
+    environ: Mapping[str, str],
+    run_pnpm: "Callable | None",
+    run_upstream: Callable,
+    which: Callable,
+) -> int:
+    """pin した版と `version_text` の版を比べ、報告を stdout に書いて終了コードを返す。
+
+    段の順序: 版の検査 → 両方の版の host の用意 → node の解決 → 両方の版の `rules --json` と
+    比較 → 引数の版に設定を読ませる → 引数の版の engines。どの子プロセスの env もキーを含まない
+    (pnpm は `install_env`、node と上流は `build_env(with_key=False)`)。検査不能 (例外) の
+    ときは stdout に何も書かない。報告は最後にまとめて書く。
+    """
+    version = parse_version(version_text)
+    env = jevlint_host.build_env(environ, with_key=False)
+    pinned_host = _prepare_host(UPSTREAM_VERSION, environ, run_pnpm)
+    host = _prepare_host(version, environ, run_pnpm)
+    node, node_version = _local_node(pinned_host, env, run_upstream, which)
+    with _compat_scratch(env) as scratch_name:
+        scratch = Path(scratch_name)
+        empty, tree = scratch / "empty", scratch / "tree"
+        empty.mkdir()
+        tree.mkdir()
+        old = _rules_table(node, pinned_host, UPSTREAM_VERSION, empty, env, run_upstream)
+        new = _rules_table(node, host, version, empty, env, run_upstream)
+        report = jevlint_compat.compare(
+            old, new, CURATED, _read_rule_yml, labels=(UPSTREAM_VERSION, version)
+        )
+        for file_name, text in jevlint_compat.SAMPLES.items():
+            (tree / file_name).write_text(text, encoding="utf-8")
+        configs = _load_configs(node, host, version, tree, scratch, env, run_upstream)
+    satisfied, engines_line = _engines_line(host, node_version)
+    lines = [
+        f"jev-lint {UPSTREAM_VERSION} (pin、rule {len(old)} 件) と {version} (rule {len(new)} 件)"
+        f" を、厳選の {len(CURATED)} 項目で比べた",
+        *jevlint_compat.describe(report),
+        *(_config_line(label, returncode) for label, returncode in configs),
+        engines_line,
+    ]
+    print("\n".join(lines))
+    return jevlint_compat.compat_exit(report, [rc for _, rc in configs], satisfied)
+
+
 def main(
     argv: list[str],
     *,
@@ -439,7 +618,9 @@ def main(
     run_upstream: Callable = subprocess.run,
     which: Callable = shutil.which,
 ) -> int:
-    """check / review を実行し、終了コード (意味はこのモジュールの docstring) を返す。
+    """check / review / compat を実行し、終了コード (意味はこのモジュールの docstring) を返す。
+
+    compat の段は `_run_compat` が持つ。以下は check / review の段。
 
     段の順序は仕様である: 引数 → ref とパス (本体のリポジトリの git) → host の用意 (キー
     無し) → node と engines → キー → コミットの展開 → 上流の起動 → 判定と要約。host の用意を

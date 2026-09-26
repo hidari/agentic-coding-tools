@@ -12,6 +12,10 @@ stdout / stderr へ写す形。git は本物の一時リポジトリを使い、
 の中身を記録する。`main()` に渡す environ は `os.environ` を写さずに組む。開発機の実キー、
 global の git 設定、実際の `~/.cache` にある host をテストに混ぜないため。
 
+最後に `main()` の compat を見る。比較の規則そのものは test_jevlint_compat.py が持ち、ここでは
+2 つの版の host の用意、`rules --json` と設定の読み込みの起動の形 (argv・cwd・env)、報告と
+終了コードへの写し方を見る。compat は git を使わないので一時リポジトリを作らない。
+
 CURATED の件数・言語ごとの内訳は spec (`ISSUE-65-spec.md` の「厳選する rule」節) の一覧との
 一致を見るのが目的で、この一覧自体が唯一の真実 (canonical) になる。数を書いたコメントを
 別の場所に置くと drift するので、このテストの assertion 以外に件数を書かない。
@@ -37,6 +41,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from typing import Callable
 from unittest import mock
 
 import jevlint
@@ -890,6 +895,397 @@ class MainResultTests(_MainTestCase):
         code, _, _ = self.run_main(["check", "--dry-run", "--json-out", "out.json", "sub/file.py"])
         self.assertEqual(code, 0)
         self.assertTrue((self.repo.path / "out.json").is_file())
+
+
+COMPAT_NEW = "0.6.1"
+TS_PURE = "typescript/pure-name-is-pure"
+PY_VAR = "python/var-name-describes-value"
+
+
+def _compat_rules(changes: "dict | None" = None) -> dict:
+    """偽の host の rule の表。キーは `<languageDir>/<id>`、値は (kind, cutoff, rule.yml の中身)。
+
+    厳選の全項目と、厳選の外の 1 項目を持つ。`changes` の値が None の項目は消す。
+    """
+    rules = {key: ("noul", 0.5, f"id: {key}\nthreshold: 0.5\n") for key in jevlint.CURATED}
+    rules["go/fn-name-promises"] = ("noul", 0.5, "id: fn-name-promises\n")
+    for key, value in (changes or {}).items():
+        if value is None:
+            del rules[key]
+        else:
+            rules[key] = value
+    return rules
+
+
+def _rejects_threshold(config: dict) -> int:
+    """`threshold` を知らない版 (0.6.7 以前) の設定の読み込み。知らないフィールドで 2 を返す。"""
+    return 2 if any(isinstance(value, dict) for value in config["rules"].values()) else 0
+
+
+class _FakeCompatPnpm:
+    """compat の `prepare_host` の `run` の偽物。`jev-lint@<版>` の版の host を `versions` から作る。
+
+    rule.yml は `<package>/rules/<key>/rule.yml` に書く (偽の上流の `source` がここを指す)。
+    `engines` が None の版は package.json に engines を書かない。`fail` の版は 1 を返す。
+    """
+
+    def __init__(self, versions: dict, fail: tuple = ()):
+        self.versions = versions
+        self.fail = fail
+        self.calls: list = []
+
+    def __call__(self, argv, cwd, env):
+        version = argv[-1].partition("@")[2]
+        self.calls.append({"argv": list(argv), "cwd": Path(cwd), "env": dict(env)})
+        if version in self.fail:
+            return types.SimpleNamespace(returncode=1)
+        spec = self.versions[version]
+        package = Path(cwd) / "node_modules" / "jev-lint"
+        (package / "dist").mkdir(parents=True)
+        (package / "dist" / "cli.js").write_text("// fake cli\n", encoding="utf-8")
+        manifest: dict = {"version": version}
+        if spec["engines"] is not None:
+            manifest["engines"] = {"node": spec["engines"]}
+        (package / "package.json").write_text(json.dumps(manifest), encoding="utf-8")
+        for key, (_, _, text) in spec["rules"].items():
+            path = package / "rules" / key / "rule.yml"
+            path.parent.mkdir(parents=True)
+            path.write_text(text, encoding="utf-8")
+        return types.SimpleNamespace(returncode=0)
+
+
+class _FakeCompatUpstream:
+    """compat の `run_upstream` の偽物。`node --version`、`rules --json`、設定の読み込み
+    (`check --dry-run`) を分けて記録する。
+
+    どの版の起動かは argv の `cli.js` のパス (`<host>/node_modules/jev-lint/dist/cli.js`、host の
+    名前が版) から読む。`rules --json` は `versions` の表を上流の形で返し、`source` は偽の pnpm が
+    host に書いた rule.yml を指す。`rules_result` は版ごとに (終了コード, stdout) を差し替え、
+    stdout が None なら表をそのまま返す。記録する `files` は呼ばれた時点の cwd の中身
+    (相対パスの列)。
+    """
+
+    def __init__(
+        self,
+        versions: dict,
+        *,
+        node_version: str = "v24.18.0\n",
+        config_rc: Callable = lambda config: 0,
+        rules_result: "dict | None" = None,
+    ):
+        self.versions = versions
+        self.node_version = node_version
+        self.config_rc = config_rc
+        self.rules_result = rules_result or {}
+        self.version_calls: list = []
+        self.rules_calls: list = []
+        self.check_calls: list = []
+
+    def all_calls(self) -> list:
+        return self.version_calls + self.rules_calls + self.check_calls
+
+    def __call__(self, argv, **kwargs):
+        cwd = Path(kwargs["cwd"])
+        call = {
+            "argv": list(argv),
+            "cwd": cwd,
+            "env": dict(kwargs["env"]),
+            "files": sorted(path.relative_to(cwd).as_posix() for path in cwd.rglob("*")),
+        }
+        if list(argv[1:]) == ["--version"]:
+            self.version_calls.append(call)
+            return types.SimpleNamespace(returncode=0, stdout=self.node_version)
+        package = Path(argv[1]).parent.parent
+        version = package.parent.parent.name
+        if argv[2] == "rules":
+            self.rules_calls.append(call)
+            returncode, stdout = self.rules_result.get(version, (0, None))
+            if stdout is None:
+                rules = [
+                    {
+                        "id": key.rpartition("/")[2],
+                        "languageDir": key.rpartition("/")[0],
+                        "kind": kind,
+                        "cutoff": cutoff,
+                        "source": str(package / "rules" / key / "rule.yml"),
+                    }
+                    for key, (kind, cutoff, _) in self.versions[version]["rules"].items()
+                ]
+                stdout = json.dumps({"rules": rules, "errors": [], "warnings": []})
+            return types.SimpleNamespace(returncode=returncode, stdout=stdout)
+        config = Path(argv[argv.index("--config") + 1])
+        call["config"] = json.loads(config.read_text(encoding="utf-8"))
+        self.check_calls.append(call)
+        return types.SimpleNamespace(returncode=self.config_rc(call["config"]), stdout="")
+
+
+class _CompatTestCase(unittest.TestCase):
+    """compat の main() に渡す environ と、2 つの版の偽の host の中身。
+
+    environ にはキーを 2 つの名前で入れておき、どの子プロセスにも渡らないことを見る。
+    XDG_CACHE_HOME は `run_compat` のたびに新しいディレクトリにする (host は版ごとに再利用
+    されるので、前の実行の偽の host を次の実行に持ち越さないため)。TMPDIR は compat の一時
+    ディレクトリの置き場で、後始末の検査はその中が空であることで見る。
+    """
+
+    def setUp(self):
+        base = Path(tempfile.mkdtemp(prefix="jevlint-compat-test-"))
+        self.addCleanup(lambda: shutil.rmtree(base, ignore_errors=True))
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(base)
+        self.base = base
+        self.tmpdir = base / "tmp"
+        self.bin = base / "bin"
+        for directory in (self.tmpdir, base / "home", self.bin):
+            directory.mkdir()
+        self.node = self.bin / "node"
+        self.node.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+        self.node.chmod(0o755)
+        self.environ = {
+            "PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}",
+            "HOME": str(base / "home"),
+            "TMPDIR": str(self.tmpdir),
+            "TYPESAFE_API_KEY": SENTINEL,
+            "TYPESAFEAI_API_KEY": SENTINEL,
+        }
+        self.versions = {
+            jevlint.UPSTREAM_VERSION: {"rules": _compat_rules(), "engines": ">=24"},
+            COMPAT_NEW: {"rules": _compat_rules(), "engines": ">=20"},
+        }
+        self.runs = 0
+
+    def fake_upstream(self, **kwargs) -> _FakeCompatUpstream:
+        return _FakeCompatUpstream(self.versions, **kwargs)
+
+    def run_compat(self, version=COMPAT_NEW, *, upstream=None, pnpm=None, which=shutil.which):
+        """main() の compat を呼び、(終了コード, stdout, stderr) を返す。偽物は self に残す。"""
+        self.runs += 1
+        self.cache = self.base / f"cache-{self.runs}"
+        self.environ["XDG_CACHE_HOME"] = str(self.cache)
+        self.pnpm = pnpm or _FakeCompatPnpm(self.versions)
+        self.upstream = upstream or self.fake_upstream()
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = jevlint.main(
+                ["compat", version],
+                environ=self.environ,
+                cwd=self.base,
+                run_pnpm=self.pnpm,
+                run_upstream=self.upstream,
+                which=which,
+            )
+        return code, out.getvalue(), err.getvalue()
+
+    def host(self, version: str) -> Path:
+        return self.cache / "jev-lint-curated" / version
+
+    def cli(self, version: str) -> str:
+        return str(self.host(version) / "node_modules/jev-lint/dist/cli.js")
+
+    def header(self, new: str = COMPAT_NEW) -> str:
+        count = len(_compat_rules())
+        return (
+            f"jev-lint {jevlint.UPSTREAM_VERSION} (pin、rule {count} 件) と {new} "
+            f"(rule {count} 件) を、厳選の {len(jevlint.CURATED)} 項目で比べた"
+        )
+
+    def assert_cleaned_up(self):
+        self.assertEqual(list(self.tmpdir.iterdir()), [])
+
+
+class MainCompatTests(_CompatTestCase):
+    def test_rules_are_listed_without_a_config_in_an_empty_directory_for_both_versions(self):
+        code, _, _ = self.run_compat()
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            [call["argv"] for call in self.upstream.rules_calls],
+            [
+                [str(self.node), self.cli(version), "rules", "--json", "--no-config"]
+                for version in (jevlint.UPSTREAM_VERSION, COMPAT_NEW)
+            ],
+        )
+        for call in self.upstream.rules_calls:
+            with self.subTest(cli=call["argv"][1]):
+                self.assertEqual(call["files"], [])
+                self.assertIn(self.tmpdir.resolve(), call["cwd"].resolve().parents)
+        self.assert_cleaned_up()
+
+    def test_generated_configs_are_loaded_by_the_argument_version_among_four_samples(self):
+        code, _, _ = self.run_compat()
+        self.assertEqual(code, 0)
+        calls = self.upstream.check_calls
+        self.assertEqual(len(calls), 2)
+        default, single = (call["config"] for call in calls)
+        self.assertEqual(default, jevlint.build_config({}))
+        overridden = {key: value for key, value in single["rules"].items() if value != "on"}
+        self.assertEqual(len(overridden), 1, single)
+        ((key, value),) = overridden.items()
+        self.assertEqual(set(value), {"threshold"})
+        self.assertTrue(0 < value["threshold"] < 1)
+        self.assertEqual(single, jevlint.build_config({key: value["threshold"]}))
+        for index, call in enumerate(calls):
+            with self.subTest(index=index):
+                argv = call["argv"]
+                config = Path(argv[argv.index("--config") + 1])
+                self.assertEqual(
+                    argv,
+                    jevlint_host.upstream_argv(
+                        str(self.node),
+                        self.host(COMPAT_NEW),
+                        "check",
+                        base=None,
+                        excludes=[],
+                        paths=["."],
+                        dry_run=True,
+                        record=None,
+                        config=config,
+                    ),
+                )
+                self.assertEqual(
+                    sorted(Path(name).suffix for name in call["files"]), [".js", ".py", ".rs", ".ts"]
+                )
+                self.assertNotIn(call["cwd"].resolve(), config.resolve().parents)
+        self.assert_cleaned_up()
+
+    def test_no_child_process_sees_the_key(self):
+        code, out, err = self.run_compat()
+        self.assertEqual(code, 0)
+        calls = self.upstream.all_calls()
+        # 対照: 子プロセスはすべて記録されている (pnpm 2、node --version 1、rules 2、設定 2)
+        self.assertEqual((len(self.pnpm.calls), len(calls)), (2, 5))
+        keyless = jevlint_host.build_env(self.environ, with_key=False)
+        for call in calls:
+            self.assertEqual(call["env"], keyless)
+        for call in self.pnpm.calls + calls:
+            with self.subTest(argv=call["argv"]):
+                self.assertNotIn(SENTINEL, "\n".join(call["env"].values()))
+                self.assertNotIn("TYPESAFE_API_KEY", call["env"])
+        self.assertNotIn(SENTINEL, out + err)
+
+    def test_same_version_prepares_one_host_and_reports_no_change(self):
+        version = jevlint.UPSTREAM_VERSION
+        code, out, _ = self.run_compat(version)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.pnpm.calls), 1)
+        self.assertEqual(
+            out.splitlines(),
+            [
+                self.header(version),
+                "失敗 0 件",
+                "cutoff の変化 0 件",
+                "rule.yml の変化 0 件",
+                "増えた rule 0 件",
+                "設定の読み込み (既定): 通った",
+                f"設定の読み込み ({TS_PURE} に threshold 0.5): 通った",
+                "engines.node >=24、手元の node 24.18.0: 満たす",
+            ],
+        )
+
+    def test_changes_are_reported_and_a_config_that_fails_to_load_is_1(self):
+        self.versions[COMPAT_NEW]["rules"] = _compat_rules(
+            {
+                TS_PURE: ("noul", 0.63, f"id: {TS_PURE}\nthreshold: 0.5\n"),
+                PY_VAR: ("noul", 0.5, f"id: {PY_VAR}\nat: 0.5\n"),
+                "go/pure-name-is-pure": ("noul", 0.5, "id: pure-name-is-pure\n"),
+            }
+        )
+        upstream = self.fake_upstream(config_rc=_rejects_threshold)
+        code, out, err = self.run_compat(upstream=upstream)
+        self.assertEqual(code, 1)
+        count = len(_compat_rules())
+        self.assertEqual(
+            out.splitlines(),
+            [
+                f"jev-lint {jevlint.UPSTREAM_VERSION} (pin、rule {count} 件) と {COMPAT_NEW} "
+                f"(rule {count + 1} 件) を、厳選の {len(jevlint.CURATED)} 項目で比べた",
+                "失敗 0 件",
+                "cutoff の変化 1 件",
+                f"  {TS_PURE}: 0.5 -> 0.63",
+                "rule.yml の変化 1 件",
+                f"  {PY_VAR}",
+                f"    --- {jevlint.UPSTREAM_VERSION}/{PY_VAR}/rule.yml",
+                f"    +++ {COMPAT_NEW}/{PY_VAR}/rule.yml",
+                "    @@ -1,2 +1,2 @@",
+                f"     id: {PY_VAR}",
+                "    -threshold: 0.5",
+                "    +at: 0.5",
+                "増えた rule 1 件",
+                "  go/pure-name-is-pure (厳選の id)",
+                "設定の読み込み (既定): 通った",
+                f"設定の読み込み ({TS_PURE} に threshold 0.5): 終了コード 2 で失敗 (理由は上流の stderr)",
+                "engines.node >=20、手元の node 24.18.0: 満たす",
+            ],
+        )
+        # 上流の stderr はそのまま流れるので、どの設定を読ませた起動なのかを stderr で先に告げる
+        self.assertIn(f"設定 ({TS_PURE} に threshold 0.5) を jev-lint {COMPAT_NEW} に読ませる", err)
+        self.assert_cleaned_up()
+
+    def test_each_failure_is_1(self):
+        item = "rust/var-name-describes-value"
+        cases = {
+            "厳選の項目が消えた": ({item: None}, ">=20", lambda config: 0),
+            "kind が変わった": ({item: ("score", 0.5, f"id: {item}\nthreshold: 0.5\n")}, ">=20", lambda config: 0),
+            "既定の設定が読めない": ({}, ">=20", lambda config: 1),
+            "node が engines を満たさない": ({}, ">=26", lambda config: 0),
+            "engines が >=N の形でない": ({}, "^24", lambda config: 0),
+            "engines が無い": ({}, None, lambda config: 0),
+        }
+        for name, (changes, engines, config_rc) in cases.items():
+            with self.subTest(name=name):
+                self.versions[COMPAT_NEW] = {"rules": _compat_rules(changes), "engines": engines}
+                code, out, _ = self.run_compat(upstream=self.fake_upstream(config_rc=config_rc))
+                self.assertEqual(code, 1)
+                # 失敗でも報告は出る (何が失敗したかを stdout で読めるように)
+                self.assertTrue(out.startswith("jev-lint "), out)
+                self.assert_cleaned_up()
+        # 対照: 同じ組み立てで何も変えなければ 0
+        self.versions[COMPAT_NEW] = {"rules": _compat_rules(), "engines": ">=20"}
+        self.assertEqual(self.run_compat()[0], 0)
+
+    def test_what_cannot_be_checked_is_2_with_nothing_on_stdout(self):
+        missing = json.dumps(
+            {
+                "rules": [
+                    {
+                        "id": "pure-name-is-pure",
+                        "languageDir": "typescript",
+                        "kind": "noul",
+                        "cutoff": 0.5,
+                        "source": str(self.base / "no-such-rule.yml"),
+                    }
+                ]
+            }
+        )
+        cases = {
+            "rules --json が JSON でない": dict(upstream=dict(rules_result={COMPAT_NEW: (0, "not json")})),
+            "rules --json に rules が無い": dict(upstream=dict(rules_result={COMPAT_NEW: (0, "{}")})),
+            "rules --json が 0 以外で終わった": dict(upstream=dict(rules_result={COMPAT_NEW: (2, None)})),
+            "rule.yml が読めない": dict(upstream=dict(rules_result={COMPAT_NEW: (0, missing)})),
+            "pnpm が失敗した": dict(pnpm_fail=(COMPAT_NEW,)),
+            "node が見つからない": dict(which=lambda name, path=None: None),
+        }
+        for name, case in cases.items():
+            with self.subTest(name=name):
+                code, out, err = self.run_compat(
+                    upstream=self.fake_upstream(**case.get("upstream", {})),
+                    pnpm=_FakeCompatPnpm(self.versions, fail=case.get("pnpm_fail", ())),
+                    which=case.get("which", shutil.which),
+                )
+                self.assertEqual(code, 2)
+                self.assertEqual(out, "")
+                self.assertTrue(err.startswith("jevlint: "), err)
+                self.assertEqual(self.upstream.check_calls, [])
+                self.assert_cleaned_up()
+
+    def test_malformed_version_is_2_before_any_child_process(self):
+        for version in ("latest", "0.7", "v0.7.0"):
+            with self.subTest(version=version):
+                code, out, err = self.run_compat(version)
+                self.assertEqual(code, 2)
+                self.assertEqual(out, "")
+                self.assertIn(version, err)
+                self.assertEqual(self.pnpm.calls, [])
+                self.assertEqual(self.upstream.all_calls(), [])
 
 
 class JsonOutTargetsTests(unittest.TestCase):
