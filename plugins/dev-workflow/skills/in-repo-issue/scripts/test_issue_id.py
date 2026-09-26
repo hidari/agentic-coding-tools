@@ -395,7 +395,8 @@ class LocatedViolation(unittest.TestCase):
         self.assertEqual(found[0].kind, issue_id.KIND_BARE_REF)
 
     def test_unclosed_fence_has_a_distinct_kind(self):
-        # 種別が同じだと増分モードが閉じ忘れを行番号で落とせる (罠 1 の入口)
+        # 種別が同じだと増分モードが閉じ忘れを行番号で落とせる (既存の閉じ忘れフェンスが増分を
+        # 丸ごと免除する形を防ぐ入口)
         found = issue_id.scan_text("\n".join(["前書き", fence(), f"fix {SIGIL}8", ""]), "p.md")
         self.assertEqual(len(found), 1)
         self.assertEqual(found[0].kind, issue_id.KIND_UNCLOSED_FENCE)
@@ -561,15 +562,14 @@ class CheckText(unittest.TestCase):
 class CheckDiff(unittest.TestCase):
     """増分モード (--check-diff) の仕様 pin。
 
-    11 件は spec のテスト方針表に対応する。重点は緩めすぎる方向で、
-    「範囲を絞ったせいで新規違反が素通りする」経路を潰す。
+    重点は緩めすぎる方向で、「範囲を絞ったせいで新規違反が素通りする」経路を潰す。
     """
 
     def stage(self, root: Path, rel: str, text: str = "本文\n") -> None:
         write(root, rel, text)
         git(root, "add", "-A")
 
-    # --- 1: 新規 Issue ディレクトリの名前違反 ---------------------------------
+    # --- 新規 Issue ディレクトリの名前違反 ---------------------------------
 
     def test_new_issue_directory_with_legacy_name_is_flagged(self):
         with TemporaryDirectory() as tmp:
@@ -612,7 +612,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertIn("Issue ディレクトリ: 0 個", out)
 
-    # --- 2: 追加行の数字記法 ---------------------------------------------------
+    # --- 追加行の数字記法 ---------------------------------------------------
 
     def test_added_line_with_a_bare_reference_is_flagged(self):
         with TemporaryDirectory() as tmp:
@@ -624,7 +624,7 @@ class CheckDiff(unittest.TestCase):
         self.assertIn("notes.md:1:", err)
         self.assertIn("違反 1 件", out)
 
-    # --- 3: --base 指定時の range ----------------------------------------------
+    # --- --base 指定時の range ----------------------------------------------
 
     def test_base_ref_sees_only_the_branch_side(self):
         # three-dot にしないと base 側だけにあるコミットが差分へ混ざる (実測)
@@ -653,7 +653,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertIn("追加行: 0 行", out)
 
-    # --- 4: フェンス内の追加行は免除 -------------------------------------------
+    # --- フェンス内の追加行は免除 -------------------------------------------
 
     def test_added_line_inside_a_fence_is_exempt(self):
         with TemporaryDirectory() as tmp:
@@ -664,7 +664,7 @@ class CheckDiff(unittest.TestCase):
             rc, out, err = run(["--check-diff", "--root", str(root)])
         self.assertEqual(rc, 0, err)
 
-    # --- 5: 既存行は報告しない (ratchet) ---------------------------------------
+    # --- 既存行は報告しない (ratchet) ---------------------------------------
 
     def test_pre_existing_violation_on_an_untouched_line_is_not_reported(self):
         with TemporaryDirectory() as tmp:
@@ -689,7 +689,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("notes.md:1:", err)
 
-    # --- 6: 番号の重複は全体で見る ---------------------------------------------
+    # --- 番号の重複は全体で見る ---------------------------------------------
 
     def test_duplicate_number_is_seen_across_the_whole_tree(self):
         # 増分でも全体を見る規則。緩めると同じ番号の Issue が静かに 2 つできる
@@ -713,7 +713,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("番号 8 が重複している", err)
 
-    # --- 7: base の閉じ忘れフェンス (罠 1) --------------------------------------
+    # --- base の閉じ忘れフェンス -------------------------------------------
 
     def test_unclosed_fence_in_base_does_not_turn_the_increment_green(self):
         # base のフェンスが開きっぱなしだと、追加行の違反は「フェンス内」として消え、
@@ -741,7 +741,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("閉じていない", err)
 
-    # --- 8: partial staging (罠 4) ---------------------------------------------
+    # --- partial staging ---------------------------------------------------
 
     def test_unstaged_violation_is_not_reported(self):
         # index を走査しないと、worktree の未 stage 違反で偽陽性になる
@@ -771,7 +771,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("doc.md:2:", err)
 
-    # --- 9: 非 ASCII のパス (罠 2) ---------------------------------------------
+    # --- 非 ASCII のパス ---------------------------------------------------
 
     def test_violation_under_a_non_ascii_directory_is_found(self):
         # diff のヘッダは非 ASCII パスを C クォートする。ヘッダでパスを対応付ける実装だと
@@ -795,7 +795,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("docs/issues/50_日本語のタイトル:", err)
 
-    # --- 10: rename (罠 3) ------------------------------------------------------
+    # --- rename ------------------------------------------------------------
 
     def test_rename_into_a_bad_name_is_flagged_regardless_of_rename_detection(self):
         # --diff-filter=A は rename 検出下で空になる。マシンの git 設定で検査結果が
@@ -954,7 +954,7 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertIn("追加行: 0 行", out)
 
-    # --- 11: submodule ----------------------------------------------------------
+    # --- submodule ----------------------------------------------------------
 
     def test_submodule_entry_does_not_raise(self):
         # gitlink は diff に hunk 付きで出るが blob を持たないので内容取得が失敗する。
@@ -1180,6 +1180,54 @@ class ArgumentSurface(unittest.TestCase):
                 issue_id.main(["--check", "--base", "main", "--root", str(root)])
         self.assertEqual(ctx.exception.code, 2)
         self.assertIn("--base", err.getvalue())
+
+    def test_value_options_reject_repeats(self):
+        # argparse の既定の store は後勝ちで、先の値を黙って捨てる。違反を含むテキストの
+        # 後ろに違反の無いテキストを足すと、rc が 1 から 0 になった (実測)。--base の
+        # 繰り返しは意図と違う範囲を、--root の繰り返しは意図と違うリポジトリを緑にする。
+        # option ごとに subTest を分け、1 つの option だけ拒否を外す変異がその subTest
+        # だけを赤くするようにする
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            bad = root / "bad.txt"
+            bad.write_text(f"fix: 直した ({SIGIL}8)\n", encoding="utf-8")
+            good = root / "good.txt"
+            good.write_text(f"fix: 直した ({PREFIX}8)\n", encoding="utf-8")
+            cases = {
+                "--check-text": [f"--check-text={bad}", "--check-text", str(good)],
+                "--base": ["--check-diff", "--base", "main", "--base", "main", "--root", str(root)],
+                "--root": ["--check", "--root", str(root), "--root", str(root)],
+            }
+            for option, argv in cases.items():
+                with self.subTest(option):
+                    err = io.StringIO()
+                    with redirect_stdout(io.StringIO()), redirect_stderr(err), \
+                            self.assertRaises(SystemExit) as ctx:
+                        issue_id.main(argv)
+                    self.assertEqual(ctx.exception.code, 2)
+                    self.assertIn(f"{option} が 2 回以上ある", err.getvalue())
+
+    def test_value_options_reject_empty_values(self):
+        # 空の値は黙って別の意味になる。--base= は範囲が ...HEAD になって追加行 0 行の緑、
+        # --root= は Path("") が cwd になり、サブディレクトリから起動すると配下しか見ない
+        # (どちらも実測)。変数が未設定のまま `--base "$BASE"` と配線した形で踏む
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            cases = {
+                "--check-text": ["--check-text="],
+                "--base": ["--check-diff", "--base=", "--root", str(root)],
+                "--root": ["--check", "--root="],
+            }
+            for option, argv in cases.items():
+                with self.subTest(option):
+                    err = io.StringIO()
+                    with redirect_stdout(io.StringIO()), redirect_stderr(err), \
+                            self.assertRaises(SystemExit) as ctx:
+                        issue_id.main(argv)
+                    self.assertEqual(ctx.exception.code, 2)
+                    self.assertIn(f"{option} に空の値は渡せない", err.getvalue())
 
     def test_check_and_check_diff_are_mutually_exclusive(self):
         with TemporaryDirectory() as tmp:
