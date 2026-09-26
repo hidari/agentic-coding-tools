@@ -67,6 +67,7 @@ SKILL.md だけを対象にしているため、command の `description` 欠落
       (現在: dev-workflow 7 / security-blue-red-team 6 / web-monkey-qa 2)
 - [ ] command と agent の frontmatter を検査対象へ広げるかを決める。広げる場合、command は
       `name` を持たない (ファイル名が name になる) ので、SKILL.md と同じ規則は当てられない
+- [ ] 単体 skill の側でも同じ数え方の問題が起きる (2026-09-26 に実測)。ある branch にだけある skill のディレクトリに git が無視するファイル (`__pycache__/`) が残ったまま別の branch へ切り替えると、無視するファイルだけのディレクトリが `skills/<category>/<name>/` として残り、`check-package-shape.py` が「SKILL.md がない」と報告してローカルの pre-commit が止まる。CI は clean な checkout なので起きない。component の列挙を揃えるときに、追跡されているファイルを持たないディレクトリを数えない形にする
 
 ## 関連
 
