@@ -1181,6 +1181,36 @@ class ArgumentSurface(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 2)
         self.assertIn("--base", err.getvalue())
 
+    def test_value_options_reject_repeats(self):
+        # argparse の既定の store は後勝ちで、先の値を黙って捨てる。違反を含むテキストの
+        # 後ろに違反の無いテキストを足すと、rc が 1 から 0 になった (実測)。--base の
+        # 繰り返しは意図と違う範囲を、--root の繰り返しは意図と違うリポジトリを緑にする。
+        # option ごとに subTest を分け、1 つの option だけ拒否を外す変異がその subTest
+        # だけを赤くするようにする
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            bad = root / "bad.txt"
+            bad.write_text(f"fix: 直した ({SIGIL}8)\n", encoding="utf-8")
+            good = root / "good.txt"
+            good.write_text(f"fix: 直した ({PREFIX}8)\n", encoding="utf-8")
+            # 対照。1 本ずつなら違反と合格に分かれる
+            self.assertEqual(run(["--check-text", str(bad)])[0], 1)
+            self.assertEqual(run(["--check-text", str(good)])[0], 0)
+            cases = {
+                "--check-text": [f"--check-text={bad}", "--check-text", str(good)],
+                "--base": ["--check-diff", "--base", "main", "--base", "main", "--root", str(root)],
+                "--root": ["--check", "--root", str(root), "--root", str(root)],
+            }
+            for option, argv in cases.items():
+                with self.subTest(option):
+                    err = io.StringIO()
+                    with redirect_stdout(io.StringIO()), redirect_stderr(err), \
+                            self.assertRaises(SystemExit) as ctx:
+                        issue_id.main(argv)
+                    self.assertEqual(ctx.exception.code, 2)
+                    self.assertIn(f"{option} が 2 回以上ある", err.getvalue())
+
     def test_check_and_check_diff_are_mutually_exclusive(self):
         with TemporaryDirectory() as tmp:
             err = io.StringIO()

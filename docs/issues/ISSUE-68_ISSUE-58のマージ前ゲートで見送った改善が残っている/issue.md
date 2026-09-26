@@ -13,13 +13,13 @@ ISSUE-58の PR を作る前の品質ゲート (simplify の4観点、Boy Scout S
 ## 残したもの
 
 1. 入口の例外クラスの統合 (`check-outgoing-text.py`): `InputError` と `Layer1Error` は理由を持つだけの同じ実装で、`ReportError` と `CanaryMissing` は `scan_stdin` の中で `Layer1Error` へ付け替えられるだけである。付け替えのときに渡していたメッセージは捨てられ、出力に届かない。理由を持つ例外1つにまとめ、`parse_report` と `locate` から理由付きで投げれば、クラス3つと付け替えの処理が消える。テストは例外の型ではなく理由の語で照合する形になり、pin は強くなる。出力は変わらない
-2. 入口の起動を並べる (`check-outgoing-text.py` の `run_layer1`、`run_layer2`、`check`): 入力と config ごとの gitleaks と層 2は互いに独立なのに、逐次に起動している。標準ライブラリの `concurrent.futures` で並べると、1入力の `check` が約半分になり、入口のテストファイルが11.7秒から7.8秒になった (負荷の高いホストでの中央値)。runner の hook は毎コミット走るので、この差はコミットのたびに効く。custom の config が失敗しても既定の config の起動が走る (結果は捨てる) 点だけが変わる。層 2が複数の入力を1回の起動で受ける形にすると、層 2の起動が入力の数から1回になる。減るのは層 2の起動だけで、gitleaks の起動と1入力のときの時間は変わらないので、並べる案の代わりではなく併用の候補になる。層 2の座標が入力を示さないのは、1起動1ファイルを前提に入力のパスを印字しない設計 (`check-leak-guard-denylist.py` の `run_check_text` のコメント) なので、まとめるなら入力は序数で示すことになり、入口の座標の読み取りも変わる。commit-msg の hook は `--check-text` に1本を渡す形で使っているので、その形は保つ。今の CLI は `--check-text` を繰り返すとエラーにせず最後の1本だけを見る (2026-09-27 に実測) ので、移行の途中の書き損じは静かに通る
+2. 入口の起動を並べる (`check-outgoing-text.py` の `run_layer1`、`run_layer2`、`check`): 入力と config ごとの gitleaks と層 2は互いに独立なのに、逐次に起動している。標準ライブラリの `concurrent.futures` で並べると、1入力の `check` が約半分になり、入口のテストファイルが11.7秒から7.8秒になった (負荷の高いホストでの中央値)。runner の hook は毎コミット走るので、この差はコミットのたびに効く。custom の config が失敗しても既定の config の起動が走る (結果は捨てる) 点だけが変わる。層 2が複数の入力を1回の起動で受ける形にすると、層 2の起動が入力の数から1回になる。減るのは層 2の起動だけで、gitleaks の起動と1入力のときの時間は変わらないので、並べる案の代わりではなく併用の候補になる。層 2の座標が入力を示さないのは、1起動1ファイルを前提に入力のパスを印字しない設計 (`check-leak-guard-denylist.py` の `run_check_text` のコメント) なので、まとめるなら入力は序数で示すことになり、入口の座標の読み取りも変わる。commit-msg の hook は `--check-text` に1本を渡す形で使っているので、その形は保つ。`--check-text` の繰り返しは受け付けの段で終了コード 2 になる (ISSUE-77) ので、移行の途中の書き損じは静かには通らない
 3. 層 2の判定を見るテスト2本が実物の gitleaks を起動している (`test_check_outgoing_text.py` の `test_denylist_stubs` と `test_combine_layer2_worst_state`): 見ているのは層 2の判定で、層 1の結果に依存しない。PATH を空のディレクトリにすれば約1秒縮む。2で並べる方を採るなら効果はほぼ消える (層 2をまとめる方では残る)
 4. 対照検査の hook の発火条件 (`.pre-commit-config.yaml` の `leak-guard-rules` の `files:`): 検査が読むファイルの集合を、手で保守する2つ目のリストとして持っている。ISSUE-58でも3本から5本へ広げる必要があり、スクリプトの側と突き合わせるテストは無い。`always_run: true` にすれば2つ目の canonical が消える (60ケースで約0.3秒)。hook が毎コミット走るようになる
 5. 対照検査の出力の伏せ方 (`scripts/check-leak-guard-rules.py` の `redact_paths`): 絶対パスを公開される CI のログへ出さないという規則が呼び出し箇所ごとに散っていて、print の一部だけがこれを通る。出力の関所を1つにして全ての print をそこ経由にすれば、新しい print が黙ってパスを出す経路が消える。このスクリプトにはテストが無い
 6. custom の config の自己除外 (`leak-guard.gitleaks.toml`): config 自身のコメントの例がルールに当たるので、config を名前で層 1の走査から外している。例をプレースホルダの形で書けば、生きている2本の config を除外から外せる (履歴に残る root の config の名前は外したままにする)。層 1が見るファイルが変わる
 7. 上限を超える本文の分割を入口の中へ (`check-outgoing-text.py` の入力の前段): 今は空行の位置で分けて渡し直す手順をエージェントに任せている。入口が層 1についてだけ既存の空行の位置で分けて走査し、座標を元へ戻せば、手順とユーザーへの確認が1つずつ減る。100KB を超える本文はまれなので優先度は低い
-8. ISSUE-58の PR で触っていないファイルのコメント: `plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py` の `allow_abbrev` の説明に、層 2で直したのと同じ誤り (`--che` を短縮として受理すると書いているが、実際は ambiguous で止まる) がある。`scripts/check-issue-closure.py`、`scripts/check-related-refs.py`、`scripts/gen-readme.py`、`skills/devops/macos-vm-verification/macvm.py`、`plugins/dev-workflow/skills/pre-merge-quality-gate/SKILL.md`、`.gitleaksignore` に、in-repo Issue の識別子を書いたコメントがある。担当の範囲を指すものは残すか外すかの判断が要る
+8. ISSUE-58の PR で触っていないファイルのコメント: `scripts/check-issue-closure.py`、`scripts/check-related-refs.py`、`scripts/gen-readme.py`、`skills/devops/macos-vm-verification/macvm.py`、`plugins/dev-workflow/skills/pre-merge-quality-gate/SKILL.md`、`.gitleaksignore` に、in-repo Issue の識別子を書いたコメントがある。担当の範囲を指すものは残すか外すかの判断が要る
 
 ## タスク
 
@@ -38,3 +38,4 @@ ISSUE-55 (層 2のマージ前レビューで消化しなかった分。同じ�
 ISSUE-66 (user-path のルールを変えるときに、6の例の書き方と関わる)
 ISSUE-75 (同じ dotfiles の提案のうち、SKILL.md の大きさと公開範囲の判定を扱う。2の入口の起動と同じ1回の送信で払う待ち時間の残りの部分。7を採ると、あちらの既知の限界の分け方の手順の項目が入口へ移る)
 ISSUE-76 (2と3が触る `test_check_outgoing_text.py` を配布物の外へ移すかを決める。どちらが先でも、移動はテストの増減や改名を含まない単独のコミットにする)
+ISSUE-77 (2の層 2の `--check-text` の繰り返しを拒否した。触った `issue-id.py` で、8にあった `allow_abbrev` の説明の誤りもあわせて直した)

@@ -925,6 +925,34 @@ class Redaction(unittest.TestCase):
         self.assertNoSecrets(out)
         self.assertIn("2 件", out)
 
+    def test_repeated_check_text_is_rejected_without_echoing_either_path(self):
+        # argparse の既定の store は後勝ちで、先に渡したパスを黙って捨てる。禁止語を含む
+        # 1 本目の後ろに無害な 2 本目を足すと、検出が消えて rc 0 になった (実測)。拒否は
+        # 受け付けの段で起きるので、環境変数が未設定の skip より前に止まる。2 本とも
+        # パスに禁止語を含め、どちらの側が印字されても捕まえる
+        deny = denylist(self.dir / "deny.txt", WORD)
+        env = {checker.ENV_VAR: str(deny)}
+        paths = []
+        for name, body in ((f"{WORD}-a", f"feat: x\n\n{WORD}\n"), (f"{WORD}-b", "feat: x\n")):
+            (self.dir / name).mkdir()
+            path = self.dir / name / "COMMIT_EDITMSG"
+            path.write_text(body, encoding="utf-8")
+            paths.append(path)
+        leaky, clean = paths
+        # 対照。1 本ずつなら検出と非検出に分かれる
+        self.assertEqual(run_cli("--check-text", str(leaky), env=env, cwd=self.repo)[0], 1)
+        self.assertEqual(run_cli("--check-text", str(clean), env=env, cwd=self.repo)[0], 0)
+        for label, case_env in (("env あり", env), ("env 未設定", None)):
+            with self.subTest(label):
+                # 1 本目は入口 (check-outgoing-text.py) の実際の呼び方の `=` 形で渡す
+                rc, out = run_cli(
+                    f"--check-text={leaky}", "--check-text", str(clean),
+                    env=case_env, cwd=self.repo,
+                )
+                self.assertEqual(rc, 2)
+                self.assertIn("--check-text が 2 回以上ある", out)
+                self.assertNoSecrets(out)
+
     def test_output_never_uses_the_github_number_notation(self):
         # 同じ bundle の in-repo-issue にある issue-id.py は #N を GitHub の番号空間を指す
         # 記法として機械検査で禁じている。出力をコミットメッセージや Issue へ貼るとその検査が

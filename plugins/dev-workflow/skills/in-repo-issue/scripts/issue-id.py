@@ -669,9 +669,24 @@ def run_check_text(source: str) -> int:
     return 1 if violations else 0
 
 
+class _StoreOnce(argparse.Action):
+    """値を 1 つ取る option の 2 回目を usage error (exit 2) にする。
+
+    argparse の既定の store は後勝ちで、`--check-text A --check-text B` は A を黙って捨てて
+    B だけを見る (違反を含む A の後ろに違反の無い B を足すと exit 0 になった。実測)。
+    `--base` と `--root` の繰り返しも、意図と違う範囲やリポジトリを緑にする。1 回目かどうかを
+    既定値の None との比較で見るので、default を持つ option には使えない。
+    """
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        if getattr(namespace, self.dest) is not None:
+            parser.error(f"{option_string} が 2 回以上ある。1 回だけ渡すこと")
+        setattr(namespace, self.dest, values)
+
+
 def main(argv: list[str] | None = None) -> int:
-    # allow_abbrev の既定 (True) は `--che` のような短縮を別モードとして受理する。
-    # typo が静かに別の入口へ落ちないよう完全形の明示だけに絞る
+    # allow_abbrev の既定 (True) は `--nex` のような一意な前方一致を `--next` の短縮として
+    # 受理する。typo が静かに別の入口へ落ちないよう完全形の明示だけに絞る
     parser = argparse.ArgumentParser(
         description="in-repo Issue の識別子を採番し、GitHub 記法との混同を検査する",
         allow_abbrev=False,
@@ -681,13 +696,22 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--check", action="store_true", help="リポジトリ全体を走査する")
     mode.add_argument("--check-diff", action="store_true", help="差分だけを走査する")
     mode.add_argument(
-        "--check-text", metavar="PATH", help="テキスト 1 本を走査する (- で標準入力)"
+        "--check-text",
+        metavar="PATH",
+        action=_StoreOnce,
+        help="テキスト 1 本を走査する (- で標準入力)",
     )
     parser.add_argument(
-        "--base", metavar="REF", help="--check-diff の基準 ref (既定: index と HEAD の差分)"
+        "--base",
+        metavar="REF",
+        action=_StoreOnce,
+        help="--check-diff の基準 ref (既定: index と HEAD の差分)",
     )
     parser.add_argument(
-        "--root", metavar="PATH", help="リポジトリの root (既定: git rev-parse --show-toplevel)"
+        "--root",
+        metavar="PATH",
+        action=_StoreOnce,
+        help="リポジトリの root (既定: git rev-parse --show-toplevel)",
     )
     args = parser.parse_args(argv)
     if args.base is not None and not args.check_diff:
