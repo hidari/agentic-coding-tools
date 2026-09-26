@@ -15,6 +15,13 @@ ISSUE-65 で jev-lint-curated を取り込んだとき、最終レビューで�
 - 後始末の取りこぼしの告知: `_discard_worktree` が worktree の登録の残りを告げるのは、remove と prune がどちらも失敗したときだけである。rmtree がディレクトリを消し残すと、prune は成功してもその登録を残す (ディレクトリが在るので prune の対象にならない) が、告げない
 - 相対の TMPDIR と compat: check と review は一時ディレクトリの置き場がリポジトリの中なら 2 で止めるが、compat はリポジトリを使わないのでこの検査を持たない。TMPDIR が相対のとき、置き場を決める `tmpdir_from_env` の fallback の `tempfile.gettempdir()` が同じ相対の値を cwd を基準に絶対化するので、compat の置き場が cwd (消費側のリポジトリであることが多い) の下にできる (Python 3.14.7 と 3.9.6 で実測)。祖先の `sgconfig.yml` は拒否するので ast-grep の設定は差し込めず、compat はキーを使わない (上流は `rules --json` と `check --dry-run` で呼ぶ)。この経路のテストは `env` の TMPDIR だけを変えて `os.environ` は変えないので、本番の形を模していない
 
+## キーを使う確認 (2026-09-27、ラッパは main の 4ad69c7、対象は 66231ad の scripts/)
+
+- ISSUE-65 の完了条件として、`check --commit 66231ad scripts` をキーを使って 1 回走らせた。上流は jev-lint 0.7.0 で、応答したモデルは jev-1.13.0
+- 見た subject は 1009 件で、dry-run と同じ。未回答が 133 件あり、うち 9 件は上流の HTTP 400 (`max_tokens_exceeded`) だった。degraded は 1 件
+- 指摘は 5 件 (var-name-describes-value が 4 件、test-name-describes-code が 1 件)。ISSUE-65 の測定で有用と判定した 2 件のうち、`INHERITED` (`scripts/test_check_related_refs.py`) は出たが、`children` (`scripts/check-issue-closure.py`) は出なかった。出力は未回答の subject を数えるだけで列挙せず、一時ディレクトリの記録も終了時に消えるので、`children` が未回答だったのか、答えが cutoff に届かなかったのかは区別できない。1 回の実行の有無は、rule が有用かの根拠にならない
+- 費用は $0.13330 (126 回) だった。同じ対象の dry-run の見積もりは $0.05370 で、実際はその約 2.5 倍になった
+
 ## タスク
 
 - [ ] host の入れ替えを直列にするか、戻してから消す形にするかを決めて直す。どかしてから置く手順と、置き換えの失敗の再確認をテストで押さえる
@@ -22,6 +29,8 @@ ISSUE-65 で jev-lint-curated を取り込んだとき、最終レビューで�
 - [ ] 位置引数の `-` 始まりの拒否を `normalize_path` と `parse_version` に一本化する
 - [ ] rmtree の消し残しで worktree の登録が残ったときも告げる
 - [ ] 相対の TMPDIR のとき compat の置き場をどうするか (相対を拒否する、cwd の外へ置く、check と同じくリポジトリの中を拒否する) を決めて直す。テストは `os.environ` の TMPDIR も同じ値にした本番の形で押さえる
+- [ ] dry-run の費用の見積もりが実際を下回った (実際は見積もりの約 2.5 倍) 原因を確かめ、見積もりを直すか、見積もりが何を数えていないかを出力に書くかを決める
+- [ ] 未回答の subject を識別できるようにするか (一覧を出す、記録を残すオプションを足すなど) を決める。既知の指摘が出なかったときに、未回答と cutoff 未満を区別するため
 
 ## 関連
 
