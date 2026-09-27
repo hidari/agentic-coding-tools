@@ -37,8 +37,15 @@ ISSUE-58の計画レビューがこの形を指摘し (D-3)、ユーザーの裁
 - 既存の user-path は、パス要素 `Users` の大文字を手がかりに、REST API の `/api/users/<id>` のような小文字のパスを避けている (canonical の config のコメント)。Linux のパス要素 `home` は小文字なので、同じ手はそのまま使えない。URL の経路に現れる `/home/...` を許可側の対照に並べる必要があるかは確かめていない
 - 既存の許可は `runner` を名前の値で持つが、`Users` の形に限った許可なので、`/home/runner` には届かない
 
+## ダッシュ区切りの形 (2026-09-28 に追記)
+
+同じルールが当たらない形がもう 1 つある。Claude Code がセッションの scratchpad やプロジェクトの記録に使うディレクトリは、ホームディレクトリのパスの区切りをダッシュへ置き換えた名前を持つ (`/private/tmp/claude-<uid>/-Users-<name>-<...>/scratchpad/...` の形。この開発機で観測)。区切りがスラッシュでないので user-path に当たらない。合成した名前で `.../-Users-<name>-Develop-<repo>/scratchpad/x.py` を含む行を入口 `check-outgoing-text.py` へ通すと層 1 は 0 件で、同じ名前の `/Users/<name>/...` の行は検出した (対照)。ISSUE-78 と ISSUE-79 のマージ前ゲートの漏洩スイープ役が指摘し、手元で再現した。
+
+効いてくる経路は上の形と同じで、コマンド行や出力を本文へ貼る経路である。エージェントは書き捨てを scratchpad に置くことがあるので、そのパスが報告や本文へ載りやすい。
+
 ## タスク
 
+- [ ] ダッシュ区切りの形 (`-Users-<name>-`) も user-path で撃つかを決める。撃つなら Linux の形と同じ手順 (検出側と許可側の対照を gitleaks へ通して `scripts/check-leak-guard-rules.py` へ入れ、広げたルールで全履歴を走査する) を踏む
 - [ ] user-path を Linux のホームディレクトリ形へ広げるかを決める。広げない場合は、既知の限界の記述をこの Issue の結論に合わせる
 - [ ] 広げる場合は、ルールの形と許可を決め、検出すべき例と許可すべき例の両方を実際に gitleaks へ通す。対照は `scripts/check-leak-guard-rules.py` へ入れる。別の id のルールとして足すなら入口の canary も要る (同スクリプトが config の id・対照・canary の3つの集合の一致を見る)
 - [ ] 広げたルールで全履歴を走査し、件数と内訳を ISSUE-58の基準値と比べる (`.gitleaksignore` を消した clone で取る)。この Issue 自身が、広げたルールに当たりうる例示 (`/home/runner/...` と `/home/linuxbrew/...` の行) を持つので、それを許可に入れるか、例示の書き方を変えるかを先に決める
