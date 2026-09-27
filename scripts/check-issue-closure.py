@@ -696,7 +696,11 @@ def build_parser() -> argparse.ArgumentParser:
     # 採るのは、書くと docstring の 1 行目と二重管理になるため
     parser = argparse.ArgumentParser(
         description=__doc__.splitlines()[0], allow_abbrev=False)
-    parser.add_argument("--root", default=None, help="リポジトリのルート (既定: git が返す)")
+    parser.add_argument(
+        "--root",
+        default=None,
+        help="リポジトリの中の場所。そこから top-level を求めて root にする (既定: カレントディレクトリ)",
+    )
     return parser
 
 

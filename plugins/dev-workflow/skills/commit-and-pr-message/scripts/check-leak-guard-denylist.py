@@ -781,20 +781,19 @@ class _ValueQuietParser(argparse.ArgumentParser):
 
     経路は版で変わるので、列挙して 1 つずつ塞ぐのではなく出口の error() で塞ぐ。
     exit_on_error が既定の True なら ArgumentError も argparse が捕まえて error() へ回すので、
-    出口はここ 1 つで済む。exit_on_error=False で option 名を出す形は採らない。値を運ぶ経路が
+    出口はここ 1 つで済む (argparse 自身が例外で落ちる形は main の例外の受けが拾う)。
+    exit_on_error=False で option 名を出す形は採らない。値を運ぶ経路が
     すべてそちらへ逸れ、この上書きが外れても赤くならなくなる。代わりに、値を含まない
     argparse 自身の文面 (必須の欠落、同時指定の禁止) も固定の文面になる。usage は出すので、
     どの引数の形が違うかは読める。
     """
 
-    def error(self, message):
-        # message は argparse が argv の値を補間した文面なので使わない
-        self.usage_error("引数を解釈できない。値は印字しない")
+    # 値を含まないと分かっている文面の出口。error() の上書きを通さない
+    usage_error = argparse.ArgumentParser.error
 
-    def usage_error(self, message: str):
-        """値を含まないと分かっている文面で止める。error() の上書きを通さない出口。"""
-        self.print_usage(sys.stderr)
-        self.exit(EXIT_UNABLE, f"{self.prog}: error: {message}\n")
+    def error(self, message):
+        # message は argv の値を補間していることがあり、含むかどうかを区別できないので使わない
+        super().error("引数を解釈できない。値は印字しない")
 
 
 class _StoreOnceNonEmpty(argparse.Action):
@@ -804,8 +803,7 @@ class _StoreOnceNonEmpty(argparse.Action):
     B だけを見る (禁止語を含む A の後ろに無害な B を足すと rc 0 になった。実測)。空の値は
     Path("") で cwd になり、環境変数が未設定だと読む前の skip で rc 0 になった (実測)。
     どちらも受け付けの段で止めるので、skip より前に効く。文面には option 名だけを入れ、
-    値 (= パス) は印字しない。値を含まない文面なので、固定の文面へ潰す error() ではなく
-    usage_error() で出す。1 回目かどうかを既定値の None との比較で見るので、default を
+    値 (= パス) は印字しない。1 回目かどうかを既定値の None との比較で見るので、default を
     持つ option には使えない。
     """
 
@@ -837,17 +835,18 @@ def main(argv: list[str] | None = None, *, env=None) -> int:
         action=_StoreOnceNonEmpty,
         help="テキスト 1 本を走査する",
     )
-    # parse_args ではなく parse_known_args を使う。argparse の
-    # `error: unrecognized arguments: <argv 全部>` は余分な引数をそのまま stderr へ出すので、
-    # hook から `pass_filenames: false` が落ちて追跡パスが引数で渡ると、汚染パスの置き換えが
-    # 隠すはずのパス (= 語そのもの) が Failed ブロックへ並ぶ (実測)。配線に依存しない防御に
-    # するため、件数だけを報告してここで止める。
-    args, extra = parser.parse_known_args(argv)
-    if extra:
-        print(f"[x] 余分な引数が {len(extra)} 件ある。引数は印字しない", file=sys.stderr)
-        return EXIT_UNABLE
-
+    # parse_args ではなく parse_known_args を使い、余分な引数は件数だけを報告して止める。
+    # hook から `pass_filenames: false` が落ちると追跡パスが引数で渡る (実測) ので、件数が
+    # 配線の誤りの手がかりになる。argparse の `unrecognized arguments: <argv 全部>` は
+    # パス (= 語そのもの) を並べるが、それは error() の上書きが固定の文面へ潰すので、
+    # ここが受け持つのは件数だけである。
     try:
+        # parse も下の例外の受けに入れる。3.9.6 の argparse は `-h=` で error() を通らずに
+        # IndexError を投げ、traceback がスクリプトの絶対パスを出して rc 1 (検出) に化けた (実測)
+        args, extra = parser.parse_known_args(argv)
+        if extra:
+            print(f"[x] 余分な引数が {len(extra)} 件ある。引数は印字しない", file=sys.stderr)
+            return EXIT_UNABLE
         path = resolve_denylist(env)
         if path is None:
             print(f"{STATUS_SKIPPED} reason=env-unset")

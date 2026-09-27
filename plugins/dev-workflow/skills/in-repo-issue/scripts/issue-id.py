@@ -62,7 +62,6 @@ scripts/check-leak-guard-rules.py と同じ理由で、「規約違反」と「�
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import subprocess
 import sys
@@ -252,18 +251,14 @@ def _git(root: Path, *args: str) -> bytes:
 
 
 def resolve_root(explicit: str | None) -> Path:
+    # rev-parse の出力を strip() すると名前の末尾の空白まで落ち、存在しないパスになる
+    # (実測)。落とすのは git が足す改行だけ
     if explicit is not None:
-        # 列挙は root を起点に docs/issues を相対で引くので、サブディレクトリを渡すと配下
-        # しか見ず、重複した識別子や「0 個 / 違反なし」を rc 0 で返した (実測)。一致は
-        # inode で見る。大小を区別しない APFS では大小を変えた root を git が正規の綴りで
-        # 返し、文字列で比べると正しい root を拒否する (実測)
+        # 列挙は root を起点に docs/issues を相対で引くので、サブディレクトリをそのまま root に
+        # すると配下しか見ず、重複した識別子や「0 個 / 違反なし」を rc 0 で返した (実測)。
+        # 渡された場所から top-level を求め直す
         out = _git(Path(explicit), "rev-parse", "--show-toplevel")
-        top = Path(out.decode("utf-8").strip())
-        if not os.path.samefile(top, explicit):
-            raise GitError(
-                f"--root が git リポジトリの top-level ではない: {explicit} (top-level は {top})"
-            )
-        return top
+        return Path(out.decode("utf-8").rstrip("\n"))
     try:
         proc = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"], capture_output=True, check=False
@@ -272,7 +267,7 @@ def resolve_root(explicit: str | None) -> Path:
         raise GitError("git が見つからない") from e
     if proc.returncode != 0:
         raise GitError("git リポジトリの root を特定できない (--root で指定する)")
-    return Path(proc.stdout.decode("utf-8").strip())
+    return Path(proc.stdout.decode("utf-8").rstrip("\n"))
 
 
 def _refs(root: Path) -> list[str]:
@@ -728,7 +723,7 @@ def main(argv: list[str] | None = None) -> int:
         "--root",
         metavar="PATH",
         action=_StoreOnceNonEmpty,
-        help="リポジトリの top-level。サブディレクトリは拒否する (既定: git rev-parse --show-toplevel)",
+        help="リポジトリの中の場所。そこから top-level を求めて root にする (既定: カレントディレクトリ)",
     )
     args = parser.parse_args(argv)
     if args.base is not None and not args.check_diff:

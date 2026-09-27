@@ -34,6 +34,7 @@ plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_leak_guard_
 plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_leak_guard_denylist.py::test_check_leak_guard_denylist.LineNumbering.test_counts_only_newline_as_a_boundary
 plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_leak_guard_denylist.py::test_check_leak_guard_denylist.LineNumbering.test_crlf_does_not_shift_the_number
 plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_leak_guard_denylist.py::test_check_leak_guard_denylist.LineNumbering.test_trailing_newline_does_not_add_a_line
+plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_leak_guard_denylist.py::test_check_leak_guard_denylist.Redaction.test_argparse_crash_is_unable_not_a_violation
 plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_leak_guard_denylist.py::test_check_leak_guard_denylist.Redaction.test_argparse_errors_do_not_echo_the_value
 plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_leak_guard_denylist.py::test_check_leak_guard_denylist.Redaction.test_check_text_does_not_print_the_source_path
 plugins/dev-workflow/skills/commit-and-pr-message/scripts/test_check_leak_guard_denylist.py::test_check_leak_guard_denylist.Redaction.test_empty_check_text_is_rejected_before_the_env_skip
@@ -182,8 +183,9 @@ plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_i
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_non_git_root_is_exit_2
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_repository_without_tracked_files_is_exit_2
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_stylesheets_are_excluded
-plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_subdirectory_root_is_exit_2
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_subdirectory_root_is_widened_to_the_top_level
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_templates_directory_is_exempt
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_tracked_listing_failure_is_exit_2
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_undecodable_file_is_counted_as_skipped
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_untracked_file_is_not_scanned
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.CheckRepository.test_untracked_issue_directory_is_flagged
@@ -205,9 +207,10 @@ plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_i
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_new_format_directories_are_counted
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_non_git_root_is_exit_2
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_prefix_migration_rename_is_not_a_duplicate
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_ref_listing_failure_is_exit_2
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_remote_tracking_ref_is_counted
-plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_root_in_another_case_is_the_same_repository
-plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_subdirectory_root_is_exit_2
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_root_whose_name_ends_in_whitespace_is_kept
+plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.NextIdentifier.test_subdirectory_root_is_widened_to_the_top_level
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_bare_reference_is_flagged_with_location_and_replacement
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_cross_repo_reference_is_allowed
 plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py::test_issue_id.ScanText.test_empty_allowed_prefix_does_not_exempt_everything
