@@ -148,6 +148,16 @@ def run(argv: list[str]) -> tuple[int, str, str]:
     return rc, out.getvalue(), err.getvalue()
 
 
+def run_in(cwd: Path, argv: list[str]) -> tuple[int, str, str]:
+    """--root を渡さない経路 (カレントディレクトリから root を求める側) を通す。"""
+    before = os.getcwd()
+    os.chdir(cwd)
+    try:
+        return run(argv)
+    finally:
+        os.chdir(before)
+
+
 class NextIdentifier(unittest.TestCase):
     def test_empty_repository_starts_at_one(self):
         with TemporaryDirectory() as tmp:
@@ -245,7 +255,7 @@ class NextIdentifier(unittest.TestCase):
 
     def test_non_git_root_is_exit_2(self):
         # git を走らせられないのは違反 (1) ではなく検査不能 (2)。git でない root は
-        # top-level を求める rev-parse で止まる
+        # top-level かを確かめる rev-parse で止まる
         with TemporaryDirectory() as tmp:
             rc, out, err = run(["--next", "--root", tmp])
         self.assertEqual(rc, 2)
@@ -266,26 +276,30 @@ class NextIdentifier(unittest.TestCase):
         self.assertEqual(out, "")
         self.assertIn("git for-each-ref", err)
 
-    def test_subdirectory_root_is_widened_to_the_top_level(self):
-        # 列挙は root を起点に docs/issues を相対で引くので、サブディレクトリをそのまま root に
-        # すると配下しか見ず、既存と重複する ISSUE-1 を rc 0 で返した (実測)
+    def test_nested_issue_root_is_exit_2(self):
+        # docs/issues を入れ子に置いて --root で指す配置。top-level へ正規化すると、入れ子の
+        # ISSUE-3 を見ずに ISSUE-1 を rc 0 で返した (実測)。top-level 以外は黙って読み替えずに止める
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            init_repo(root, (f"{PREFIX}1_最初の課題",))
-            rc, out, err = run(["--next", "--root", str(root / "docs")])
-        self.assertEqual(rc, 0, err)
-        self.assertEqual(out, f"{PREFIX}2\n")
+            init_repo(root)
+            write(root, f"packages/foo/docs/issues/{PREFIX}3_入れ子の課題/issue.md")
+            commit(root, "nested")
+            rc, out, err = run(["--next", "--root", str(root / "packages" / "foo")])
+        self.assertEqual(rc, 2)
+        self.assertEqual(out, "")
+        self.assertIn("top-level", err)
 
-    def test_root_whose_name_ends_in_whitespace_is_kept(self):
-        # rev-parse の出力を strip() すると名前の末尾の空白まで落ち、存在しないパスになる
-        # (実測)。落とすのは git が足す改行だけ
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp) / "repo "
-            root.mkdir()
-            init_repo(root, (f"{PREFIX}1_最初の課題",))
-            rc, out, err = run(["--next", "--root", str(root)])
-        self.assertEqual(rc, 0, err)
-        self.assertEqual(out, f"{PREFIX}2\n")
+    def test_repository_whose_name_ends_in_whitespace_is_found_from_cwd(self):
+        # --root を渡さない経路は rev-parse の出力を解く。strip() は名前の末尾の空白まで、
+        # rstrip("\n") は末尾の改行まで落とし、存在しないパスになる (実測)
+        for name in ("repo ", "repo\n"):
+            with self.subTest(name=name), TemporaryDirectory() as tmp:
+                root = Path(tmp) / name
+                root.mkdir()
+                init_repo(root, (f"{PREFIX}1_最初の課題",))
+                rc, out, err = run_in(root, ["--next"])
+                self.assertEqual(rc, 0, err)
+                self.assertEqual(out, f"{PREFIX}2\n")
 
     def test_duplicate_number_is_reported_with_source_and_path(self):
         with TemporaryDirectory() as tmp:
@@ -566,15 +580,25 @@ class CheckRepository(unittest.TestCase):
         self.assertIn("git ls-files", err)
         self.assertNotIn("走査対象ゼロ", err)
 
-    def test_subdirectory_root_is_widened_to_the_top_level(self):
+    def test_subdirectory_root_is_exit_2(self):
         # サブディレクトリをそのまま root にすると配下しか見ず、「Issue ディレクトリ 0 個 /
         # 違反なし」の rc 0 になった (実測)
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             init_repo(root, (f"{PREFIX}1_最初の課題",))
             rc, out, err = run(["--check", "--root", str(root / "docs")])
-        self.assertEqual(rc, 0, err)
-        self.assertIn("検査した Issue ディレクトリ: 1 個", out)
+        self.assertEqual(rc, 2)
+        self.assertIn("top-level", err)
+
+    def test_git_directory_root_is_exit_2(self):
+        # show-prefix は作業ツリーの外でも空を返すので、それだけで判定すると .git を root に
+        # した --check が「0 個 / 違反なし」の rc 0 になった (実測)
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            rc, out, err = run(["--check", "--root", str(root / ".git")])
+        self.assertEqual(rc, 2)
+        self.assertIn("作業ツリーの外", err)
 
 
 class CheckText(unittest.TestCase):
@@ -1265,8 +1289,8 @@ class ArgumentSurface(unittest.TestCase):
 
     def test_value_options_reject_empty_values(self):
         # 空の値は黙って別の意味になる。--base= は範囲が ...HEAD になって追加行 0 行の緑、
-        # --root= は Path("") が cwd になり、サブディレクトリから起動すると配下しか見ない
-        # (どちらも実測)。変数が未設定のまま `--base "$BASE"` と配線した形で踏む
+        # --root= は Path("") が cwd になる (どちらも実測)。変数が未設定のまま
+        # `--base "$BASE"` と配線した形で踏む
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             init_repo(root, (f"{PREFIX}1_最初の課題",))

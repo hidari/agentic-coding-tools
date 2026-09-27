@@ -699,7 +699,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--root",
         default=None,
-        help="リポジトリの中の場所。そこから top-level を求めて root にする (既定: カレントディレクトリ)",
+        help="リポジトリの top-level。規則は issue-id.py の --root と同じ (既定: カレントディレクトリの top-level)",
     )
     return parser
 

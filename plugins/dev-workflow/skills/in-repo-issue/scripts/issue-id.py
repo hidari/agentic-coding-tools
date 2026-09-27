@@ -251,14 +251,27 @@ def _git(root: Path, *args: str) -> bytes:
 
 
 def resolve_root(explicit: str | None) -> Path:
-    # rev-parse の出力を strip() すると名前の末尾の空白まで落ち、存在しないパスになる
-    # (実測)。落とすのは git が足す改行だけ
     if explicit is not None:
-        # 列挙は root を起点に docs/issues を相対で引くので、サブディレクトリをそのまま root に
-        # すると配下しか見ず、重複した識別子や「0 個 / 違反なし」を rc 0 で返した (実測)。
-        # 渡された場所から top-level を求め直す
-        out = _git(Path(explicit), "rev-parse", "--show-toplevel")
-        return Path(out.decode("utf-8").rstrip("\n"))
+        # 列挙は root を起点に docs/issues を相対で引くので、サブディレクトリを root にすると
+        # 配下しか見ず、重複した識別子や「0 個 / 違反なし」を rc 0 で返した (実測)。
+        # top-level へ読み替える形は、入れ子の docs/issues を指す呼び出しを同じ形で黙って
+        # 壊した (実測) ので、top-level 以外は止める。判定はパスを比べずに show-prefix が
+        # 空かどうかで見る。パスの比較は大小を区別しない FS で正しい root を拒否した (実測)。
+        # show-prefix は作業ツリーの外 (.git の中、bare) でも空を返し、.git を root にした
+        # --check が「0 個 / 違反なし」の rc 0 になった (実測) ので、同じ呼び出しで
+        # is-inside-work-tree も聞く
+        out = _git(Path(explicit), "rev-parse", "--is-inside-work-tree", "--show-prefix")
+        inside, _, prefix = out.decode("utf-8").partition("\n")
+        prefix = prefix.removesuffix("\n")
+        if inside != "true":
+            raise GitError(
+                f"--root はリポジトリの top-level を指すこと: {explicit} は作業ツリーの外にある"
+            )
+        if prefix:
+            raise GitError(
+                f"--root はリポジトリの top-level を指すこと: {explicit} は top-level の下の {prefix} にある"
+            )
+        return Path(explicit).resolve()
     try:
         proc = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"], capture_output=True, check=False
@@ -267,7 +280,9 @@ def resolve_root(explicit: str | None) -> Path:
         raise GitError("git が見つからない") from e
     if proc.returncode != 0:
         raise GitError("git リポジトリの root を特定できない (--root で指定する)")
-    return Path(proc.stdout.decode("utf-8").rstrip("\n"))
+    # strip() は名前の末尾の空白まで落とし、存在しないパスになる (実測)。rstrip("\n") も
+    # 名前の末尾の改行を落とす。落とすのは git が足す改行 1 つだけ
+    return Path(proc.stdout.decode("utf-8").removesuffix("\n"))
 
 
 def _refs(root: Path) -> list[str]:
@@ -723,7 +738,7 @@ def main(argv: list[str] | None = None) -> int:
         "--root",
         metavar="PATH",
         action=_StoreOnceNonEmpty,
-        help="リポジトリの中の場所。そこから top-level を求めて root にする (既定: カレントディレクトリ)",
+        help="リポジトリの top-level。サブディレクトリは拒否する (既定: カレントディレクトリの top-level)",
     )
     args = parser.parse_args(argv)
     if args.base is not None and not args.check_diff:
