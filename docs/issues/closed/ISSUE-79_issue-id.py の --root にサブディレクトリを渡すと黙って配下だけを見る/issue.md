@@ -1,5 +1,5 @@
 ---
-status: in_progress
+status: closed
 ---
 
 # fix: issue-id.py の --root にサブディレクトリを渡すと黙って配下だけを見る
@@ -14,9 +14,9 @@ pre-commit と CI は `--root` を渡さないので、今の実害はテスト�
 
 ## タスク
 
-- [ ] 明示された `--root` で `git -C <root> rev-parse --show-toplevel` を呼び、結果が `--root` と同じディレクトリでなければ終了コード 2 にする。git でない root は rev-parse の失敗として終了コード 2 にする
-- [ ] サブディレクトリを渡す形を `--next` と `--check` でテストし、終了コード 2 と、`--next` が識別子を出さないことを押さえる。大小を変えた `--root` が通ることもテストする (大小を区別するファイルシステムでは skip)。一致の確認を外すとサブディレクトリのテストが赤くなることを変異注入で確かめる
-- [ ] git でない root を渡す既存のテスト 2 本 (`--next` と `--check` の `test_non_git_root_is_exit_2`) の期待を rev-parse の失敗へ書き換える。`--check` 側は「走査対象ゼロ」の経路と区別できることを保つ。`--next` 側が押さえていた for-each-ref の失敗の経路は、git でない root からは届かなくなる
+- [x] 明示された `--root` で `git -C <root> rev-parse --show-toplevel` を呼び、結果が `--root` と同じディレクトリでなければ終了コード 2 にする。git でない root は rev-parse の失敗として終了コード 2 にする
+- [x] サブディレクトリを渡す形を `--next` と `--check` でテストし、終了コード 2 と、`--next` が識別子を出さないことを押さえる。大小を変えた `--root` が通ることもテストする (大小を区別するファイルシステムでは skip)。一致の確認を外すとサブディレクトリのテストが赤くなることを変異注入で確かめる
+- [x] git でない root を渡す既存のテスト 2 本 (`--next` と `--check` の `test_non_git_root_is_exit_2`) の期待を rev-parse の失敗へ書き換える。`--check` 側は「走査対象ゼロ」の経路と区別できることを保つ。`--next` 側が押さえていた for-each-ref の失敗の経路は、git でない root からは届かなくなる
 
 ## 関連
 

@@ -25,6 +25,7 @@
 | `--check-text` の対象を読めない                            | 2         |
 | 余分な引数を渡された                                       | 2         |
 | `--check-text` を 2 回以上渡した / 空の値を渡した           | 2         |
+| argparse が引数を解釈できない (`--check=<値>` など)          | 2         |
 | 上記以外の失敗                                             | 2         |
 | 禁止語を検出した                                           | 1         |
 | 検出 0 件                                                  | 0         |
@@ -770,6 +771,32 @@ def _tolerate_unencodable_stdout() -> None:
         reconfigure(errors="backslashreplace")
 
 
+class _ValueQuietParser(argparse.ArgumentParser):
+    """argparse のエラーを、argv の値を補間しない固定の文面で rc 2 にする。
+
+    値を取らない option に `=値` を付けると、argparse は `ignored explicit argument '<値>'`
+    で値をそのまま出す。`--check-text=<path>` のつもりの `--check=<path>` でパスが出る。
+    `--check=`・`--help=`・`-h=` は 3.9.6・3.11.15・3.12.12・3.14.7 のすべてで、`-h<値>` は
+    3.9.6 だけで値を出した (3.11.15 以降はヘルプを出して rc 0。どれも実測)。
+
+    経路は版で変わるので、列挙して 1 つずつ塞ぐのではなく出口の error() で塞ぐ。
+    exit_on_error が既定の True なら ArgumentError も argparse が捕まえて error() へ回すので、
+    出口はここ 1 つで済む。exit_on_error=False で option 名を出す形は採らない。値を運ぶ経路が
+    すべてそちらへ逸れ、この上書きが外れても赤くならなくなる。代わりに、値を含まない
+    argparse 自身の文面 (必須の欠落、同時指定の禁止) も固定の文面になる。usage は出すので、
+    どの引数の形が違うかは読める。
+    """
+
+    def error(self, message):
+        # message は argparse が argv の値を補間した文面なので使わない
+        self.usage_error("引数を解釈できない。値は印字しない")
+
+    def usage_error(self, message: str):
+        """値を含まないと分かっている文面で止める。error() の上書きを通さない出口。"""
+        self.print_usage(sys.stderr)
+        self.exit(EXIT_UNABLE, f"{self.prog}: error: {message}\n")
+
+
 class _StoreOnceNonEmpty(argparse.Action):
     """値を 1 つ取る option の、2 回目と空の値を usage error (rc 2) にする。
 
@@ -777,15 +804,16 @@ class _StoreOnceNonEmpty(argparse.Action):
     B だけを見る (禁止語を含む A の後ろに無害な B を足すと rc 0 になった。実測)。空の値は
     Path("") で cwd になり、環境変数が未設定だと読む前の skip で rc 0 になった (実測)。
     どちらも受け付けの段で止めるので、skip より前に効く。文面には option 名だけを入れ、
-    値 (= パス) は印字しない。1 回目かどうかを既定値の None との比較で見るので、default を
+    値 (= パス) は印字しない。値を含まない文面なので、固定の文面へ潰す error() ではなく
+    usage_error() で出す。1 回目かどうかを既定値の None との比較で見るので、default を
     持つ option には使えない。
     """
 
     def __call__(self, parser, namespace, values, option_string=None):
         if not values:
-            parser.error(f"{option_string} に空の値は渡せない")
+            parser.usage_error(f"{option_string} に空の値は渡せない")
         if getattr(namespace, self.dest) is not None:
-            parser.error(f"{option_string} が 2 回以上ある。1 回だけ渡すこと")
+            parser.usage_error(f"{option_string} が 2 回以上ある。1 回だけ渡すこと")
         setattr(namespace, self.dest, values)
 
 
@@ -797,7 +825,7 @@ def main(argv: list[str] | None = None, *, env=None) -> int:
     env = os.environ if env is None else env
     # allow_abbrev の既定 (True) は `--check-t` を `--check-text` の短縮として受理する。
     # 短縮は typo と同じ exit 2 へ倒し、完全形の明示だけに絞る (先例 issue-id.py)
-    parser = argparse.ArgumentParser(
+    parser = _ValueQuietParser(
         description="禁止語リストで固有名詞の流入を検査する",
         allow_abbrev=False,
     )

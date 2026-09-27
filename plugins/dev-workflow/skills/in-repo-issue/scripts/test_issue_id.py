@@ -252,7 +252,31 @@ class NextIdentifier(unittest.TestCase):
         self.assertEqual(rc, 2)
         # 識別子を出さないこと。出すと検査不能が採番成功に化ける
         self.assertEqual(out, "")
-        self.assertIn("git for-each-ref", err)
+        self.assertIn("git rev-parse", err)
+
+    def test_subdirectory_root_is_exit_2(self):
+        # 列挙は root を起点に docs/issues を相対で引くので、サブディレクトリを渡すと
+        # 配下しか見ない。既存と重複する ISSUE-1 を rc 0 で返した (実測)
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            rc, out, err = run(["--next", "--root", str(root / "docs")])
+        self.assertEqual(rc, 2)
+        self.assertEqual(out, "")
+        self.assertIn("top-level", err)
+
+    def test_root_in_another_case_is_the_same_repository(self):
+        # 大小を区別しない APFS では、大小を変えた --root を git は正規の綴りで返す。
+        # 文字列で比べると正しい root を拒否する (実測)。inode で比べる
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            swapped = str(root).swapcase()
+            if not Path(swapped).exists():
+                self.skipTest("大小を区別するファイルシステム")
+            rc, out, err = run(["--next", "--root", swapped])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out, f"{PREFIX}2\n")
 
     def test_duplicate_number_is_reported_with_source_and_path(self):
         with TemporaryDirectory() as tmp:
@@ -520,8 +544,18 @@ class CheckRepository(unittest.TestCase):
         self.assertEqual(rc, 2)
         # 追跡下 0 件の経路も 2 を返すので、失敗した git コマンドが名指しされていることまで
         # 見る。「[x] が出ている」だけでは 2 つの経路を区別できず dead pin になる (実測)
-        self.assertIn("git ls-files", err)
+        self.assertIn("git rev-parse", err)
         self.assertNotIn("走査対象ゼロ", err)
+
+    def test_subdirectory_root_is_exit_2(self):
+        # サブディレクトリを渡すと配下しか見ず、「Issue ディレクトリ 0 個 / 違反なし」の
+        # rc 0 になった (実測)。0 個を合格にしない
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            rc, out, err = run(["--check", "--root", str(root / "docs")])
+        self.assertEqual(rc, 2)
+        self.assertIn("top-level", err)
 
 
 class CheckText(unittest.TestCase):

@@ -62,6 +62,7 @@ scripts/check-leak-guard-rules.py と同じ理由で、「規約違反」と「�
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -252,7 +253,17 @@ def _git(root: Path, *args: str) -> bytes:
 
 def resolve_root(explicit: str | None) -> Path:
     if explicit is not None:
-        return Path(explicit).resolve()
+        # 列挙は root を起点に docs/issues を相対で引くので、サブディレクトリを渡すと配下
+        # しか見ず、重複した識別子や「0 個 / 違反なし」を rc 0 で返した (実測)。一致は
+        # inode で見る。大小を区別しない APFS では大小を変えた root を git が正規の綴りで
+        # 返し、文字列で比べると正しい root を拒否する (実測)
+        out = _git(Path(explicit), "rev-parse", "--show-toplevel")
+        top = Path(out.decode("utf-8").strip())
+        if not os.path.samefile(top, explicit):
+            raise GitError(
+                f"--root が git リポジトリの top-level ではない: {explicit} (top-level は {top})"
+            )
+        return top
     try:
         proc = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"], capture_output=True, check=False
@@ -717,7 +728,7 @@ def main(argv: list[str] | None = None) -> int:
         "--root",
         metavar="PATH",
         action=_StoreOnceNonEmpty,
-        help="リポジトリの root (既定: git rev-parse --show-toplevel)",
+        help="リポジトリの top-level。サブディレクトリは拒否する (既定: git rev-parse --show-toplevel)",
     )
     args = parser.parse_args(argv)
     if args.base is not None and not args.check_diff:

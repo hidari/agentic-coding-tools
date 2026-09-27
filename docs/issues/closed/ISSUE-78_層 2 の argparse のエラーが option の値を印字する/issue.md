@@ -1,5 +1,5 @@
 ---
-status: in_progress
+status: closed
 ---
 
 # fix: 層 2 の argparse のエラーが option の値を印字する
@@ -14,10 +14,10 @@ status: in_progress
 
 ## タスク
 
-- [ ] argparse のエラーの出口を塞ぐ。ArgumentParser の `error()` を上書きして値を補間しない固定の文面で終了コード 2 にし、`exit_on_error=False` で上がる `ArgumentError` は option 名だけを出して終了コード 2 にする。`_StoreOnceNonEmpty` の文面 (option 名だけを持つ) はそのまま出す
-- [ ] 上の 4 形のテストを足す。どれも stdout と stderr に目印が出ないことを押さえ、`-h<目印>` 以外は終了コード 2 も押さえる (`-h<目印>` は版で終了コードが変わる)。`error()` の上書きを外すとテストが赤くなることを変異注入で確かめる
-- [ ] 4 つのインタプリタで 4 形を実行して目印が出ないことを確かめ、確かめた版をコードのコメントに書く
-- [ ] docstring の分岐表に、この経路の終了コード 2 の行を足す
+- [x] argparse のエラーの出口を塞ぐ。ArgumentParser の `error()` を上書きして、値を補間しない固定の文面で終了コード 2 にする。`exit_on_error` は既定のままにする。既定では argparse が `ArgumentError` を捕まえて `error()` へ回すので、出口は 1 つで済む。`exit_on_error=False` で option 名を出す形を併せると、値を運ぶ経路がすべてそちらへ逸れ、`error()` の上書きを外しても赤くならなくなる。`_StoreOnceNonEmpty` の文面 (option 名だけを持つ) は、上書きを通さずにそのまま出す
+- [x] 上の 4 形のテストを足す。どれも stdout と stderr に目印が出ないことを押さえ、`-h<目印>` 以外は終了コード 2 も押さえる (`-h<目印>` は版で終了コードが変わる)。`error()` の上書きを外すとテストが赤くなることを変異注入で確かめる
+- [x] 4 つのインタプリタで 4 形を実行して目印が出ないことを確かめ、確かめた版をコードのコメントに書く
+- [x] docstring の分岐表に、この経路の終了コード 2 の行を足す
 
 ## 関連
 

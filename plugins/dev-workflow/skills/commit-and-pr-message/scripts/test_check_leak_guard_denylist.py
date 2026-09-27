@@ -960,6 +960,22 @@ class Redaction(unittest.TestCase):
                 self.assertEqual(rc, 2)
                 self.assertIn("--check-text に空の値は渡せない", out)
 
+    def test_argparse_errors_do_not_echo_the_value(self):
+        # 値を取らない option に `=値` を付けると、argparse は `ignored explicit argument
+        # '<値>'` で値をそのまま出す。`--check-text=<path>` のつもりの `--check=<path>` で
+        # パスが出る。`-h<値>` は版で経路が変わり、3.9.6 だけが同じエラーで値を出し、
+        # 3.11.15 以降はヘルプを出して rc 0 になる (3.9.6・3.11.15・3.12.12・3.14.7 で実測)
+        deny = denylist(self.dir / "deny.txt", WORD)
+        for argv in (f"--check={WORD}", f"--help={WORD}", f"-h={WORD}", f"-h{WORD}"):
+            with self.subTest(argv=argv):
+                rc, out = run_cli(argv, env={checker.ENV_VAR: str(deny)}, cwd=self.repo)
+                self.assertNoSecrets(out)
+                if argv == f"-h{WORD}":
+                    self.assertIn(rc, (0, 2))
+                else:
+                    self.assertEqual(rc, 2)
+                    self.assertIn("引数を解釈できない", out)
+
     def test_output_never_uses_the_github_number_notation(self):
         # 同じ bundle の in-repo-issue にある issue-id.py は #N を GitHub の番号空間を指す
         # 記法として機械検査で禁じている。出力をコミットメッセージや Issue へ貼るとその検査が
