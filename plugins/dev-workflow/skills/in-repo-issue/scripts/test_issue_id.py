@@ -226,7 +226,7 @@ class NextIdentifier(unittest.TestCase):
     def test_prefix_migration_rename_is_not_a_duplicate(self):
         # 接頭辞の有無を同一視しないと、旧形式が残る main と新形式へ揃えたブランチが
         # 「番号 8 の重複」に見えて --next が exit 1 で止まり、新規起票が一切できなくなる。
-        # Task 2 の rename がちょうどこの形を作る
+        # 接頭辞を付ける移行の rename がちょうどこの形を作る
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             init_repo(root, ("8_移行する課題",))
@@ -244,15 +244,48 @@ class NextIdentifier(unittest.TestCase):
         self.assertEqual(out, f"{PREFIX}9\n")
 
     def test_non_git_root_is_exit_2(self):
-        # git を走らせられないのは違反 (1) ではなく検査不能 (2)。ここを緑にすると
-        # 「ref が 1 つも無い」と読めてしまい、採番が ISSUE-1 へ巻き戻って既存番号を
-        # 再発行する (実測: 検査を落とすと ISSUE-1 を rc 0 で返した)
+        # git を走らせられないのは違反 (1) ではなく検査不能 (2)。git でない root は
+        # top-level を求める rev-parse で止まる
         with TemporaryDirectory() as tmp:
             rc, out, err = run(["--next", "--root", tmp])
         self.assertEqual(rc, 2)
         # 識別子を出さないこと。出すと検査不能が採番成功に化ける
         self.assertEqual(out, "")
+        self.assertIn("git rev-parse", err)
+
+    def test_ref_listing_failure_is_exit_2(self):
+        # ref の列挙の失敗を緑にすると「ref が 1 つも無い」と読めてしまい、採番が ISSUE-1 へ
+        # 巻き戻って既存番号を再発行する (実測: 検査を落とすと ISSUE-1 を rc 0 で返した)。
+        # git でない root は手前の rev-parse で止まるので、到達性は注入で作る
+        with TemporaryDirectory() as tmp:
+            original = issue_id.resolve_root
+            issue_id.resolve_root = lambda explicit: Path(tmp)
+            self.addCleanup(setattr, issue_id, "resolve_root", original)
+            rc, out, err = run(["--next"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(out, "")
         self.assertIn("git for-each-ref", err)
+
+    def test_subdirectory_root_is_widened_to_the_top_level(self):
+        # 列挙は root を起点に docs/issues を相対で引くので、サブディレクトリをそのまま root に
+        # すると配下しか見ず、既存と重複する ISSUE-1 を rc 0 で返した (実測)
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            rc, out, err = run(["--next", "--root", str(root / "docs")])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out, f"{PREFIX}2\n")
+
+    def test_root_whose_name_ends_in_whitespace_is_kept(self):
+        # rev-parse の出力を strip() すると名前の末尾の空白まで落ち、存在しないパスになる
+        # (実測)。落とすのは git が足す改行だけ
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo "
+            root.mkdir()
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            rc, out, err = run(["--next", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out, f"{PREFIX}2\n")
 
     def test_duplicate_number_is_reported_with_source_and_path(self):
         with TemporaryDirectory() as tmp:
@@ -518,10 +551,30 @@ class CheckRepository(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             rc, out, err = run(["--check", "--root", tmp])
         self.assertEqual(rc, 2)
+        self.assertIn("git rev-parse", err)
+
+    def test_tracked_listing_failure_is_exit_2(self):
+        # git でない root は手前の rev-parse で止まるので、到達性は注入で作る
+        with TemporaryDirectory() as tmp:
+            original = issue_id.resolve_root
+            issue_id.resolve_root = lambda explicit: Path(tmp)
+            self.addCleanup(setattr, issue_id, "resolve_root", original)
+            rc, out, err = run(["--check"])
+        self.assertEqual(rc, 2)
         # 追跡下 0 件の経路も 2 を返すので、失敗した git コマンドが名指しされていることまで
         # 見る。「[x] が出ている」だけでは 2 つの経路を区別できず dead pin になる (実測)
         self.assertIn("git ls-files", err)
         self.assertNotIn("走査対象ゼロ", err)
+
+    def test_subdirectory_root_is_widened_to_the_top_level(self):
+        # サブディレクトリをそのまま root にすると配下しか見ず、「Issue ディレクトリ 0 個 /
+        # 違反なし」の rc 0 になった (実測)
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            rc, out, err = run(["--check", "--root", str(root / "docs")])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("検査した Issue ディレクトリ: 1 個", out)
 
 
 class CheckText(unittest.TestCase):
@@ -581,7 +634,7 @@ class CheckDiff(unittest.TestCase):
         self.assertIn("docs/issues/13_旧形式の課題:", err)
 
     def test_existing_legacy_directory_is_not_flagged(self):
-        # ratchet の本体。取り付けた瞬間に既存 938 件が赤くなるのを避ける理由がここ
+        # ratchet の本体。取り付けた瞬間に既存の違反が全部赤くなるのを避ける理由がここ
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             init_repo(root, ("13_旧形式の課題",))
@@ -678,7 +731,8 @@ class CheckDiff(unittest.TestCase):
         self.assertIn("追加行: 1 行", out)
 
     def test_touching_a_line_that_holds_a_violation_reports_it(self):
-        # 5 の裏。既存違反でも、その行を書き換えたら追加行になるので報告される
+        # 直前の test_pre_existing_violation_on_an_untouched_line_is_not_reported の裏。
+        # 既存違反でも、その行を書き換えたら追加行になるので報告される
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             init_repo(root, (f"{PREFIX}1_最初の課題",))
@@ -702,7 +756,7 @@ class CheckDiff(unittest.TestCase):
         self.assertIn("番号 8 が重複している", err)
 
     def test_duplicate_number_between_two_untouched_directories_is_still_seen(self):
-        # 6 の要。差分に出ないディレクトリどうしの重複も見る。増分で絞ると落ちる経路
+        # 差分に出ないディレクトリどうしの重複も見る。増分で絞ると落ちる経路
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             init_repo(
@@ -758,7 +812,8 @@ class CheckDiff(unittest.TestCase):
         self.assertEqual(rc, 0, err)
 
     def test_staged_violation_is_reported_even_if_the_worktree_hides_it(self):
-        # 8 の裏。worktree を走査していると、コミットされる違反を見落とす
+        # 上の test_unstaged_violation_is_not_reported の裏。worktree を走査していると、
+        # コミットされる違反を見落とす
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             init_repo(root, (f"{PREFIX}1_最初の課題",))

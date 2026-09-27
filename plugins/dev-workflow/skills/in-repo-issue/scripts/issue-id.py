@@ -251,8 +251,14 @@ def _git(root: Path, *args: str) -> bytes:
 
 
 def resolve_root(explicit: str | None) -> Path:
+    # rev-parse の出力を strip() すると名前の末尾の空白まで落ち、存在しないパスになる
+    # (実測)。落とすのは git が足す改行だけ
     if explicit is not None:
-        return Path(explicit).resolve()
+        # 列挙は root を起点に docs/issues を相対で引くので、サブディレクトリをそのまま root に
+        # すると配下しか見ず、重複した識別子や「0 個 / 違反なし」を rc 0 で返した (実測)。
+        # 渡された場所から top-level を求め直す
+        out = _git(Path(explicit), "rev-parse", "--show-toplevel")
+        return Path(out.decode("utf-8").rstrip("\n"))
     try:
         proc = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"], capture_output=True, check=False
@@ -261,7 +267,7 @@ def resolve_root(explicit: str | None) -> Path:
         raise GitError("git が見つからない") from e
     if proc.returncode != 0:
         raise GitError("git リポジトリの root を特定できない (--root で指定する)")
-    return Path(proc.stdout.decode("utf-8").strip())
+    return Path(proc.stdout.decode("utf-8").rstrip("\n"))
 
 
 def _refs(root: Path) -> list[str]:
@@ -717,7 +723,7 @@ def main(argv: list[str] | None = None) -> int:
         "--root",
         metavar="PATH",
         action=_StoreOnceNonEmpty,
-        help="リポジトリの root (既定: git rev-parse --show-toplevel)",
+        help="リポジトリの中の場所。そこから top-level を求めて root にする (既定: カレントディレクトリ)",
     )
     args = parser.parse_args(argv)
     if args.base is not None and not args.check_diff:

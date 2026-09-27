@@ -550,7 +550,9 @@ def main(argv: list[str] | None = None) -> int:
         allow_abbrev=False,
     )
     parser.add_argument(
-        "--root", metavar="PATH", help="リポジトリの root (既定: git rev-parse --show-toplevel)"
+        "--root",
+        metavar="PATH",
+        help="リポジトリの中の場所。そこから top-level を求めて root にする (既定: カレントディレクトリ)",
     )
     args = parser.parse_args(argv)
 

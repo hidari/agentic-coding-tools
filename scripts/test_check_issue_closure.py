@@ -132,8 +132,8 @@ class Fixture:
     def commit(self):
         """fixture をコミットする。
 
-        検査対象は git を読まない (借用する issue_dirs はファイルシステムを歩き、
-        `--root` を渡すので resolve_root も git を呼ばない)。つまりコミットを外しても
+        検査対象は git の履歴を読まない (借用する issue_dirs はファイルシステムを歩き、
+        借用する resolve_root が呼ぶのは rev-parse だけでコミットの有無を見ない)。つまりコミットを外しても
         テストは緑のまま通る (実測: 全件緑、実行時間は 18% 短縮)。それでも積むのは、
         追跡下のリポジトリが production の見る構造上の形そのものだから。借用先が
         `git ls-files` を見る形へ変わったとき、未コミットの fixture は production の

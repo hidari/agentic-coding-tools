@@ -960,6 +960,48 @@ class Redaction(unittest.TestCase):
                 self.assertEqual(rc, 2)
                 self.assertIn("--check-text に空の値は渡せない", out)
 
+    def test_argparse_errors_do_not_echo_the_value(self):
+        # 値を取らない option に `=値` を付けると、argparse は値をそのまま出す。版ごとの
+        # 実測は _ValueQuietParser の docstring が持つ。`-h<値>` は版で経路が変わり、
+        # ヘルプを出して rc 0 になる版がある
+        deny = denylist(self.dir / "deny.txt", WORD)
+        cases = (
+            (f"--check={WORD}", (2,)),
+            (f"--help={WORD}", (2,)),
+            (f"-h={WORD}", (2,)),
+            (f"-h{WORD}", (0, 2)),
+        )
+        for argv, allowed in cases:
+            with self.subTest(argv=argv):
+                rc, out = run_cli(argv, env={checker.ENV_VAR: str(deny)}, cwd=self.repo)
+                self.assertNoSecrets(out)
+                self.assertIn(rc, allowed)
+                if rc == 2:
+                    self.assertIn("引数を解釈できない", out)
+
+    def test_argparse_crash_is_unable_not_a_violation(self):
+        # 3.9.6 の argparse は `-h=` で error() を通らずに IndexError を投げた (実測)。受けが
+        # 無いと traceback がスクリプトの絶対パスを出し、rc 1 (検出) に化ける。版を問わず
+        # 到達させるため、parse の失敗は注入で作る
+        rc, out = run_cli("-h=", cwd=self.repo)
+        self.assertEqual(rc, 2)
+        self.assertNotIn("Traceback", out)
+        marker = "zz-private-marker"
+        original = checker._ValueQuietParser.parse_known_args
+
+        def boom(self, args=None, namespace=None):
+            raise IndexError(f"secret path {marker}")
+
+        checker._ValueQuietParser.parse_known_args = boom
+        self.addCleanup(setattr, checker._ValueQuietParser, "parse_known_args", original)
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(io.StringIO()):
+            rc = checker.main(["--check"], env={})
+        out = buf.getvalue()
+        self.assertEqual(rc, checker.EXIT_UNABLE)
+        self.assertNotIn(marker, out)
+        self.assertIn("IndexError", out)
+
     def test_output_never_uses_the_github_number_notation(self):
         # 同じ bundle の in-repo-issue にある issue-id.py は #N を GitHub の番号空間を指す
         # 記法として機械検査で禁じている。出力をコミットメッセージや Issue へ貼るとその検査が
