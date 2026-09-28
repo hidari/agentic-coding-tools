@@ -54,20 +54,13 @@ store から複製した緑と registry から取得した緑は、ラッパの�
 
 ## 結果
 
-2026-09-28 16:47 UTC 頃に実測した。完了の定義の 1〜4 はすべて満たした。各段の rc は次のとおり。
-
-- 1: 陽性の stage1.sh が rc=0、陰性の stage1.sh が rc=0、docker inspect が rc=0
-- 2: 陽性の check.sh が rc=0、store-after.sh が rc=0
-- 3: astgrep-elf.sh が rc=0、astgrep-version.sh が rc=0 (ログの `postinstall script did not run` は 0 件)
-- 4: 陰性の check.sh が rc=2
+2026-09-28 16:47 UTC 頃に実測した。完了の定義の 1〜4 はすべて満たした。各起動の rc は「各段のコマンド」の行末に書いた。
 
 ### 環境
 
-- Docker の server は 29.4.0 の linux/arm64 で、image も linux/arm64 で作った。`@ast-grep/cli` は linux-arm64-gnu のバイナリを踏んだ。x64 のバイナリと、背景に書いた消費側の macOS 用のバイナリは、どちらも踏んでいない
+- Docker の server は 29.4.0 (`docker version` で確認) の linux/arm64 で、image も linux/arm64 で作った。arm64 でだけ測ったので、`@ast-grep/cli` は linux-arm64-gnu のバイナリだけを踏み (2 のログの `Downloading` の行)、x64 のバイナリも、背景に書いた消費側の macOS 用のバイナリも踏んでいない
 - base image は `node:24-trixie` で、digest は `sha256:be40f6a87b9b22215ddb20da0a2320a5c6d583fe3ee3b0024d9fa4f05b40c8fd` (Dockerfile の FROM で固定した)
-- build した image の ID は `sha256:69218703ed317adff478d6b01cbee91d43dc8fdfc7c2b3a3643dfbbbd7ceac34`
-- コンテナは root で動かした (HOME は `/root`)
-- pnpm は npm も corepack も通さずに置いた。pnpm 12.3.4 の `pnpm` 本体のパッケージは、`optionalDependencies` に `@pnpm/exe.<platform>` を並べ、preinstall と postinstall で `node install.js` を走らせる形で配られている (registry のメタデータで確認。`install.js` の中身は読んでいない)。`@pnpm/exe.linux-arm64` の中身は単一の実行ファイル `package/pnpm` だったので、`@pnpm/exe.linux-arm64@12.3.4` の tarball を registry の `dist.integrity` (sha512) と照合してから実行ファイルだけを取り出した。corepack を避けたのは、corepack の shim が版の指定の無い起動で registry に最新の版を問い合わせ、陰性のコンテナで pnpm 自身の起動が失敗しうるため (corepack の README の `COREPACK_DEFAULT_TO_LATEST` の記載による。ここでは実測していない)
+- pnpm の置き方は Dockerfile のとおりで、npm も corepack も通していない。pnpm 12.3.4 の `pnpm` 本体のパッケージは、`optionalDependencies` に `@pnpm/exe.<platform>` を並べ、preinstall と postinstall で `node install.js` を走らせる形で配られている (registry のメタデータで確認。`install.js` の中身は読んでいない)。`@pnpm/exe.linux-arm64@12.3.4` の tarball は 4 ファイルで、実行ファイルは `package/pnpm` の 1 つだけ (ほかは LICENSE、THIRD-PARTY-NOTICES.md、package.json) だったので、それだけを取り出した。corepack を避けたのは、corepack の shim が版の指定の無い起動で registry に最新の版を問い合わせ、陰性のコンテナで pnpm 自身の起動が失敗しうるため (corepack の README の `COREPACK_DEFAULT_TO_LATEST` の記載による。ここでは実測していない)
 
 ### Dockerfile
 
@@ -93,40 +86,44 @@ WORKDIR /root
 
 ### 各段のコマンド
 
-build context と、ラッパを bind mount する元を用意する段。clone の origin はホストの絶対パスを持つので外してから image に入れた。
+build context と、ラッパを bind mount する元を用意する段。clone の origin はホストの絶対パスを持つので外した。ただし clone の reflog (`logs/HEAD` とブランチの reflog の 2 つ) にも clone 元のパスが 1 行ずつ残っていて、それは image に入った。image はローカルに置いただけで公開しておらず、記録を書いたあとに消した。
 
 ```
-git archive v0.10.0 skills/tooling/jev-lint-curated > .cache/archive.tar
-mkdir -p .cache/v0.10.0 && tar -xf .cache/archive.tar -C .cache/v0.10.0
-git clone --quiet --no-hardlinks "$PWD" "$PWD/.cache/ctx/repo"
-git -C "$PWD/.cache/ctx/repo" remote remove origin
-docker pull --platform linux/arm64 node:24-trixie
-docker build --progress=plain --platform linux/arm64 -t issue81-jevlint "$PWD/.cache/ctx"
-docker run -d --name issue81-pos --platform linux/arm64 -e CLAUDE_SKILL_DIR=/skill -v "$PWD/.cache/v0.10.0/skills/tooling/jev-lint-curated:/skill:ro" -v "$PWD/.cache/ctr:/scripts:ro" issue81-jevlint sleep infinity
-docker run -d --name issue81-neg --platform linux/arm64 --network none -e CLAUDE_SKILL_DIR=/skill -v "$PWD/.cache/v0.10.0/skills/tooling/jev-lint-curated:/skill:ro" -v "$PWD/.cache/ctr:/scripts:ro" issue81-jevlint sleep infinity
+mkdir -p .cache/v0.10.0 && git archive v0.10.0 skills/tooling/jev-lint-curated > .cache/archive.tar   # rc=0
+tar -xf .cache/archive.tar -C .cache/v0.10.0   # rc=0
+git clone --quiet --no-hardlinks "$PWD" "$PWD/.cache/ctx/repo"   # rc=0
+git -C "$PWD/.cache/ctx/repo" remote remove origin   # rc=0
+docker pull --platform linux/arm64 node:24-trixie   # rc=0 (digest を知るためにタグで引いた)
+docker build --progress=plain --platform linux/arm64 -t issue81-jevlint "$PWD/.cache/ctx"   # rc=0
+docker run -d --name issue81-pos --platform linux/arm64 -e CLAUDE_SKILL_DIR=/skill -v "$PWD/.cache/v0.10.0/skills/tooling/jev-lint-curated:/skill:ro" -v "$PWD/.cache/ctr:/scripts:ro" issue81-jevlint sleep infinity   # rc=0
+docker run -d --name issue81-neg --platform linux/arm64 --network none -e CLAUDE_SKILL_DIR=/skill -v "$PWD/.cache/v0.10.0/skills/tooling/jev-lint-curated:/skill:ro" -v "$PWD/.cache/ctr:/scripts:ro" issue81-jevlint sleep infinity   # rc=0
 ```
 
-各段は別々に実行し、どれも `> .cache/<段>.log 2>&1; echo "rc=$?"` で rc を取った。
+各段は別々に実行した。どのコマンドも直後の `echo "rc=$?"` で rc を取り、docker の段は出力を `> .cache/<段>.log 2>&1` でログへ向けた。上と下のブロックの行末の `# rc=N` がその値である。
 
 ```
 # 1
-docker exec issue81-pos sh /scripts/stage1.sh
-docker exec issue81-neg sh /scripts/stage1.sh
-docker inspect -f '{{.Name}} image={{.Image}} network={{.HostConfig.NetworkMode}}' issue81-pos issue81-neg
+docker exec issue81-pos sh /scripts/stage1.sh   # rc=0
+docker exec issue81-neg sh /scripts/stage1.sh   # rc=0
+docker inspect -f '{{.Name}} image={{.Image}} network={{.HostConfig.NetworkMode}}' issue81-pos issue81-neg   # rc=0
 # 2
-docker exec issue81-pos sh /scripts/check.sh
-docker exec issue81-pos sh /scripts/store-after.sh
+docker exec issue81-pos sh /scripts/check.sh   # rc=0
+docker exec issue81-pos sh /scripts/store-after.sh   # rc=0
 # 3
-docker exec issue81-pos sh /scripts/astgrep-elf.sh
-docker exec issue81-pos sh /scripts/astgrep-version.sh
-docker exec issue81-pos sh /scripts/astgrep-marker.sh
+docker exec issue81-pos sh /scripts/astgrep-elf.sh   # rc=0
+docker exec issue81-pos sh /scripts/astgrep-version.sh   # rc=0
+docker exec issue81-pos sh /scripts/astgrep-marker.sh   # rc=1 (判別力が無かった。3 を参照)
+# 3 の対照 (ホスト側で、registry の元の tarball を読む)
+mkdir -p .cache/astgrep-orig && curl -fsS -o .cache/astgrep-orig/cli-0.45.3.tgz https://registry.npmjs.org/@ast-grep/cli/-/cli-0.45.3.tgz   # rc=0
+tar -xzf .cache/astgrep-orig/cli-0.45.3.tgz -C .cache/astgrep-orig   # rc=0
+grep -n -F 'postinstall script did not run' .cache/astgrep-orig/package/ast-grep   # rc=0 (12 行目)
 # 4
-docker exec issue81-neg sh /scripts/check.sh
+docker exec issue81-neg sh /scripts/check.sh   # rc=2
 # 後始末
-docker rm -f issue81-pos issue81-neg
+docker rm -f issue81-pos issue81-neg   # rc=0
 ```
 
-`.cache/ctr/` に置いたスクリプトは次の 6 本。check.sh が 2 と 4 で同じラッパの起動を担い、その終了コードはラッパのものになる。
+`.cache/ctr/` (コンテナの `/scripts`) に置いたスクリプトを、実行したままの全文で載せる。コメントは実行前に書いたもので、書き換えていない。
 
 ```
 # check.sh
@@ -264,7 +261,7 @@ grep -rn -F 'postinstall script did not run' . --exclude=ast-grep --exclude=sg
 
 ### 1. 前提
 
-陽性と陰性で同じ出力になった。
+陽性と陰性で同じ出力になった (2 つのログはバイト単位で一致した)。stage1.sh の rc が見る前提は、store が無いか空であること、`~/.cache/jev-lint-curated` が無いこと、pnpm が 12.3.4 であることの 3 つだけで (ほかに `cd "$HOME"` の失敗で 90 になる)、ほかの項目は表示を読んで確かめた。stage1.sh は `pnpm store path` の rc を終了コードに反映しないので、store path が取れなかったときも `store does not exist` と出て rc=0 になりうる。この回はログの `pnpm store path rc=0` と絶対パスの `store=` の行で、取れていたことを確かめた。
 
 - env: `HOME=/root`。`XDG_CACHE_HOME`・`XDG_DATA_HOME`・`PNPM_HOME` はどれも未設定
 - `cd "$HOME"` での `pnpm store path` は `/root/.local/share/pnpm/store/v11` で、そのディレクトリは存在しなかった
@@ -274,7 +271,7 @@ grep -rn -F 'postinstall script did not run' . --exclude=ast-grep --exclude=sg
 
 ### 2. 陽性
 
-check.sh のログの全文 (rc=0)。
+check.sh のログの全文。
 
 ```
 Update available! 12.3.4 → 12.6.0.
@@ -302,19 +299,21 @@ commit b44ae283e9dde8231707776ab10a8e0a1aa00965  jev-lint 0.7.0
 対象ファイルの無い言語: javascript (1), moonbit (7), rust (5), typescript (7)
 ```
 
-- 進捗行は `Progress: resolved 5, reused 0, downloaded 5, added 5, done` で、reused が 0、downloaded が 5
-- store の前後: 前は `/root/.local/share/pnpm/store/v11` が存在しなかった。後は同じ `pnpm store path` (cwd は `/root`) が同じパスを指し、そこに `files/` と `index.db` ができて非空になった (store-after.sh が rc=0)
-- 冒頭の `Update available!` は、pnpm が自分の新しい版を registry に問い合わせた結果で、取得そのものには関わらない
+- 進捗行: `Progress: resolved 5, reused 0, downloaded 5, added 5, done`
+- store の前後: 前は 1 のとおり存在しなかった。後は同じ `pnpm store path` (cwd は `/root`) が同じパスを指し、そこに `files/` と `index.db` ができて非空になった
+- 冒頭の `Update available!` の 3 行は pnpm 自身の新しい版の告知で、この Issue の判定には使っていない
 
 ### 3. postinstall
 
-- astgrep-elf.sh (rc=0): 該当は `node_modules/.pnpm/@ast-grep+cli@0.45.3/node_modules/@ast-grep/cli/ast-grep` の 1 つだけで、`file` は `ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, for GNU/Linux 3.7.0` を返し、先頭 4 バイトは `7f 45 4c 46`
-- astgrep-version.sh (rc=0): 出力は `ast-grep 0.45.3` で、`postinstall script did not run` は 0 件
-- 0 件の対照: registry の `@ast-grep/cli@0.45.3` の tarball をホストの `.cache/` に取って読むと、`package/ast-grep` は `#!/u` で始まる 1481 バイトのスクリプトで、12 行目に `[warn] postinstall script did not run; falling back to runtime binary resolution.` を持っていた。postinstall が走らなければこのスクリプトが残り、`--version` の出力にこの文言が出る。このスクリプトは実行時にバイナリを探して起動するので、`--version` の rc=0 だけでは postinstall が走ったかどうかを区別できない。host の中の `postinstall.js` や `package.json` などにはこの文言が無い (astgrep-marker.sh の grep が rc=1) ので、0 件は置き換わった `ast-grep` を読んだ結果である
+- astgrep-elf.sh: 該当は `node_modules/.pnpm/@ast-grep+cli@0.45.3/node_modules/@ast-grep/cli/ast-grep` の 1 つだけで、大きさは 51995576 バイト。`file` の出力は `ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, for GNU/Linux 3.7.0, BuildID[sha1]=d7bf90a82b1095e527d3e8bd9a12794da3da95bc, not stripped` で、先頭 4 バイトは `7f 45 4c 46`
+- astgrep-version.sh: 出力は `ast-grep 0.45.3` で、`postinstall script did not run` は 0 件
+- postinstall が `ast-grep` を置き換えたと判断した根拠は次の 3 つ。1 つ目は、上のとおり ELF であること。registry の元の tarball の `package/ast-grep` は、`#!/usr/bin/env node` で始まる 1481 バイトのスクリプトである。2 つ目は、2 のログにある `postinstall$ node postinstall.js` と `postinstall: Done` の行。3 つ目は、元のスクリプトの 3〜4 行目のコメントが ``On Unix, `postinstall` replaces this file with the native binary`` と書いていること
+- 0 件が要る理由: 元のスクリプトは、win32 以外では 12 行目で `[warn] postinstall script did not run; falling back to runtime binary resolution.` を stderr に出す。そのあと `resolveBinaryPath()` で見つけたネイティブバイナリを起動し、その終了コードで終わる。コードを読んだ限りでは、postinstall が走らなくても `--version` は rc=0 になりうるので、rc だけでは区別できず、文言が出ないことも見る必要がある。postinstall 無しで起動して確かめてはいない。version 段は stderr も `2>&1` で同じログへ向けていたので、警告が出ていればログに入る。置き換わったことは、この 0 件に加えて ELF であることでも支えている
+- astgrep-marker.sh には判別力が無かった。コメントのとおり、文言がパッケージの中に実在することを示すつもりで書いた。ところが元のパッケージでこの文言を持つのは `ast-grep` だけで、スクリプトはそれを `--exclude` で外していた。そのため rc=1 という結果は置き換えの有無によらず同じになり、上の根拠には使っていない。文言が実在することは、ホスト側で元の tarball を読んで確かめた (「各段のコマンド」の 3 の対照)
 
 ### 4. 陰性
 
-check.sh のログの全文 (rc=2)。1〜9 行目が pnpm 自身の registry へ到達できないことを名指すエラーで、最後の行がラッパの pnpm add の失敗の行である。
+check.sh のログの全文。1〜9 行目が pnpm 自身の registry へ到達できないことを名指すエラーで、最後の行がラッパの pnpm add の失敗の行である。
 
 ```
 Error: ERR_PNPM_RESOLVING_NPM_RESOLVER_NETWORK_ERROR
@@ -330,13 +329,18 @@ Error: ERR_PNPM_RESOLVING_NPM_RESOLVER_NETWORK_ERROR
 jevlint: pnpm add jev-lint@0.7.0 が失敗した (終了コード 1)
 ```
 
-### ISSUE-84 への材料 (実行役の側から)
+### 残ったこと
 
-- 3 の「ログに無い」は、文言がパッケージに実在することを確かめる対照が無いと、見ていない 0 件と区別できなかった。条件は対照を求めていなかったので、実行役が自分で足した
-- 「pnpm はネットワーク無しでも起動できる形にする」は手段を指定しておらず、pnpm 12 の配られ方 (本体のパッケージは install scripts と platform ごとの `optionalDependencies` を持つ) を調べて決める必要があった
+この Issue が確かめたのは、store も host も空の Linux (arm64) の経路だけである。次の 3 つは確かめていない。行き先は ISSUE-74 に足したタスクで、`--allow-build=@ast-grep/cli` の理由をコードに書く前に測る。
+
+- 背景に書いた、温まった store で side-effects cache が postinstall を飛ばしうる経路
+- `@ast-grep/cli` の x64 と macOS 用のバイナリ
+- postinstall が走らなかったときの挙動 (3 に書いた、元のスクリプトの fallback)
+
+実行役の側から見た完了の定義の条項の材料は ISSUE-84 に書いた。
 
 ## 関連
 
 ISSUE-65 (jev-lint の採用方式。host を取得する設計の出所)
-ISSUE-74 (jev-lint-curated の後始末と入れ替えの残り)
+ISSUE-74 (jev-lint-curated の後始末と入れ替えの残り。「残ったこと」の行き先)
 ISSUE-84 (完了の定義の共通の条項をひな形にする。この Issue の実行の結果を材料にする)
