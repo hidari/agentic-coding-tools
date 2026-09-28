@@ -27,11 +27,11 @@ GitHub の告知 (main の CI の注釈と https://github.com/actions/runner-ima
 2026-09-28 に、抜け道と実現不能の 2 観点の批評を 1 回通して直してある。
 
 ```
-/goal ISSUE-82 を完了させる。CI の 4 job の runs-on を ubuntu-26.04 にし、ローカルの Ubuntu 26.04 のコンテナと実際の runner の両方で全 step が通ることを示して PR を作る。
+/goal ISSUE-82 を完了させる。CI の 4 job の runs-on を ubuntu-26.04 にし、ローカルの Ubuntu 26.04 のコンテナと実際の runner の両方で全 step が通ることを示して PR を作る。この条件は、下の 1〜5 をすべて満たしたとき、下の「失敗したときの出口」に当たって PR を作ったとき、または 30 ターンに達して「未完了: 残りの番号」を出力したときに満たされる。
 
 進め方の決まり:
 - main から新しいブランチを切って作業する
-- 各段は別々の Bash 呼び出しにする。出力はパイプに繋がず > .cache/<段>.log 2>&1; echo "rc=$?" で取ってから cat で示す。スクリプトに set -e を置かない。コンテナで回すスクリプトは .cache/ にファイルで書き、ホスト側のパスは $PWD で書いて $(...) を使わない
+- 各段は別々の Bash 呼び出しにする。rc を取るコマンドはパイプに繋がず、> .cache/<段>.log 2>&1; echo "rc=$?" で取る。ログは短ければ cat で、長ければ要所を grep -n で抜いて示す (Bash ツールの出力は長いと途中で切れる)。スクリプトに set -e を置かない。コンテナで回すスクリプトは .cache/ にファイルで書き、ホスト側のパスは $PWD で書いて $(...) を使わない
 
 満たすこと:
 1. ローカルの環境: docker run --rm --platform linux/amd64 で ubuntu:26.04 を起動する (runner は x86_64 で、scripts/ci/install-gitleaks.sh は x64 の gitleaks を取る)。リポジトリは :ro で bind mount し、コンテナの中の書き込める場所へ全履歴で clone する。apt で python3・git・curl・ca-certificates を入れ、非 root のユーザーを作って clone 以降をそのユーザーで回す。run の前に同じコンテナで次を示す: /etc/os-release の PRETTY_NAME、uname -m、dpkg --print-architecture、id -u (0 でない)、python3 --version、git --version、clone の git rev-parse HEAD (ホストの HEAD と一致)
@@ -42,12 +42,11 @@ GitHub の告知 (main の CI の注釈と https://github.com/actions/runner-ima
 
 失敗したときの出口:
 - ローカルか実際の runner で落ちたら、原因を直す最小の変更で直してよい。実際の runner のための push は原因ごとに 1 回にまとめる。テストの削除、期待値の緩和、--update-manifest による焼き直しはしない。変更したファイルを git diff --stat main で示す
-- 直すのに設計の判断が要る (Python の版に依存する挙動など) と言えるのは、失敗したテストの ID、失敗の出力の該当行、ローカルの非 root の 26.04 のコンテナでの同じテストの結果を並べて示した場合に限る。その場合は直さず、原因を「結果」節に書き、ISSUE-82 は閉じない (4 のクローズを済ませていたら、in_progress に戻して open 側へ git mv するコミットにする)。PR を作った状態で止まる
+- 直すのに設計の判断が要る (Python の版に依存する挙動など) と言えるのは、失敗したテストの ID、失敗の出力の該当行、ローカルの非 root の 26.04 のコンテナでの同じテストの結果を並べて示した場合に限る。その場合は直さず、原因を「結果」節に書き、ISSUE-82 は閉じない (4 のクローズを済ませていたら、dev-workflow:in-repo-issue の Phase F の手順で戻す)。PR を作った状態で止まり、その場合はそこで完了とする
 
 制約:
 - マージしない。ユーザーが ! で行う
 - コミット・PR のタイトルと本文・PR のコメントに、ホストの絶対パスも、その区切りをダッシュに置き換えた形も書かない
-- 30 ターンに達したら「未完了: 残りの番号」を出力して止まる
 ```
 
 ## 関連

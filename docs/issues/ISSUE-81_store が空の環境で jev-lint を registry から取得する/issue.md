@@ -24,7 +24,7 @@ store から複製した緑と registry から取得した緑は、ラッパの�
 2026-09-28 に、抜け道と実現不能の 2 観点の批評を 1 回通して直してある。
 
 ```
-/goal ISSUE-81 を完了させる。jev-lint-curated の v0.10.0 が、pnpm の store も host も空の Linux コンテナで jev-lint を registry から取得して動くことを実測で示し、結果を ISSUE-81 に記録して PR を作る。
+/goal ISSUE-81 を完了させる。jev-lint-curated の v0.10.0 が、pnpm の store も host も空の Linux コンテナで jev-lint を registry から取得して動くことを実測で示し、結果を ISSUE-81 に記録して PR を作る。この条件は、下の 1〜7 をすべて満たしたとき、下の「失敗したときの出口」に当たって PR を作ったとき、または 30 ターンに達して「未完了: 残りの番号」を出力したときに満たされる。
 
 進め方の決まり:
 - main から新しいブランチを切って作業する
@@ -32,7 +32,7 @@ store から複製した緑と registry から取得した緑は、ラッパの�
 - 陽性と陰性は、この同じ image から起動した別々のコンテナで行う。docker run に -t を付けない
 - ラッパは git archive v0.10.0 で取り出した skills/tooling/jev-lint-curated を読み取り専用で bind mount し、python3 -E -s -B で起動する。check は clone の中で起動する
 - Dockerfile とコンテナで回すスクリプトは .cache/ にファイルで書く。ホスト側のパスは $PWD で書き、$(...) を使わない
-- 各段は別々の Bash 呼び出しにする。出力はパイプに繋がず > .cache/<段>.log 2>&1; echo "rc=$?" で取ってから cat で示す。スクリプトに set -e を置かない。陰性の段は Bash の timeout を 600000 にする
+- 各段は別々の Bash 呼び出しにする。rc を取るコマンドはパイプに繋がず、> .cache/<段>.log 2>&1; echo "rc=$?" で取る。ログは短ければ cat で、長ければ要所を grep -n で抜いて示す (Bash ツールの出力は長いと途中で切れる)。スクリプトに set -e を置かない。陰性の段は Bash の timeout を 600000 にする
 
 満たすこと:
 1. 前提: 陽性と陰性の各コンテナで、ラッパを起動する前に次を示す。env の HOME・XDG_CACHE_HOME・XDG_DATA_HOME・PNPM_HOME。cd "$HOME" で実行した pnpm store path と、そのディレクトリが無いか空であること。~/.cache/jev-lint-curated が無いこと。pnpm --version が 12.3.4。docker inspect による各コンテナの image の ID (両者で一致) と NetworkMode (陰性は none)
@@ -51,7 +51,6 @@ store から複製した緑と registry から取得した緑は、ラッパの�
 - マージと、キーを使う check / review (--dry-run 無し) はしない。どちらもユーザーが ! で行う
 - ホストの ~/.cache と pnpm の store に触れない。ホストで pnpm add を走らせない
 - コミット・PR のタイトルと本文・PR のコメントに、ホストの絶対パスも、その区切りをダッシュに置き換えた形も書かない
-- 30 ターンに達したら「未完了: 残りの番号」を出力して止まる
 ```
 
 ## 関連
