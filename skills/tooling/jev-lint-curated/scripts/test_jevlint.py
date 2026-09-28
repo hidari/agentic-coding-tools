@@ -1527,5 +1527,69 @@ class Py39SourceTests(unittest.TestCase):
                 self.assertNotIn("tomllib", imported)
 
 
+_PATHLIB_PREDICATE_NAMES = {"exists", "is_file", "is_dir", "is_symlink", "resolve"}
+
+
+def _is_os_path_receiver(node: ast.expr) -> bool:
+    """`os.path.<attr>(...)` の受け手 (os.path) かどうかを式の形で判定する。
+
+    `os.path` は常に Attribute(value=Name('os'), attr='path') の形になる。
+    """
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "path"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "os"
+    )
+
+
+def find_pathlib_predicate_calls(tree: ast.AST) -> list[str]:
+    """版に依存する pathlib 述語呼び出し (os.path 受け手を除く) の attr 名を集める。
+
+    jevlint_host.py / jevlint_tree.py が `os.path.realpath` へ寄せた理由
+    (`Path.resolve()` は symlink ループの扱いが版で違う) の裏返しの pin。
+    """
+    found = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in _PATHLIB_PREDICATE_NAMES
+            and not _is_os_path_receiver(node.func.value)
+        ):
+            found.append(node.func.attr)
+    return found
+
+
+class PathlibPredicateBan(unittest.TestCase):
+    """product モジュールでの版依存 pathlib 述語呼び出しを禁じる。
+
+    対象は test_*.py を除く jevlint*.py。`os.path.isfile` 等へ寄せた既存の
+    書き換え (jevlint_tree.py 等) を、今後の変更が後退させないための pin。
+    """
+
+    def test_no_pathlib_predicates_in_product_modules(self):
+        paths = sorted(HERE.glob("jevlint*.py"))
+        self.assertTrue(paths, "対象の jevlint*.py が見つからない")
+        violations = []
+        for path in paths:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            hits = find_pathlib_predicate_calls(tree)
+            if hits:
+                violations.append(f"{path.name}: {hits}")
+        self.assertEqual(violations, [])
+
+    def test_synthetic_predicate_call_is_detected(self):
+        # 対照 (陽性): p.is_file() は受け手が os.path でない述語呼び出し
+        tree = ast.parse("p.is_file()\n")
+        self.assertEqual(find_pathlib_predicate_calls(tree), ["is_file"])
+
+    def test_os_path_receiver_is_not_detected(self):
+        # 対照 (陰性): os.path.isfile は名前自体が対象外、os.path.exists は
+        # 名前が対象でも受け手が os.path なので除外される
+        tree = ast.parse("os.path.isfile(p)\nos.path.exists(p)\n")
+        self.assertEqual(find_pathlib_predicate_calls(tree), [])
+
+
 if __name__ == "__main__":
     unittest.main()

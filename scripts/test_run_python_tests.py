@@ -11,6 +11,7 @@ main() へ実リポジトリの ROOT を渡すと、この自己テスト自身�
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import io
 import os
@@ -357,6 +358,57 @@ class ChildEnvironment(unittest.TestCase):
         # 実行 ID まで見る。子が起動に失敗しても「違反なし」の形で緑に見える
         self.assertTrue(ok, summary)
         self.assertEqual(["test_probe.Probe.test_no_git_variables_are_inherited"], ids)
+
+
+_VERSION_BRANCH_NAMES = {"version_info", "hexversion"}
+
+
+def find_version_references(tree: ast.AST) -> list[str]:
+    """`sys.version_info` / `sys.hexversion` を名前に持つ参照を AST で集める。
+
+    文字列や docstring はただの ast.Constant で ast.Attribute / ast.Name には
+    ならないため対象に入らない。import の形 (`import sys` か
+    `from sys import version_info`) は問わず、属性名・識別子名だけを見る。
+    """
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in _VERSION_BRANCH_NAMES:
+            found.append(node.attr)
+        elif isinstance(node, ast.Name) and node.id in _VERSION_BRANCH_NAMES:
+            found.append(node.id)
+    return found
+
+
+class VersionBranchBan(unittest.TestCase):
+    """`sys.version_info` / `sys.hexversion` によるバージョン分岐をリポジトリ全体で禁じる。
+
+    版で通る経路が割れると、その経路は実行した interpreter 側でしか通らず
+    manifest の実行 ID 集合には現れない (run-python-tests.py の docstring が持つ
+    限界)。分岐そのものを書かせないことでこの限界を埋める。
+    """
+
+    def test_no_version_references_in_repository(self):
+        paths = [
+            p for p in ROOT.rglob("*.py") if not runner.SKIP_DIRS & set(p.relative_to(ROOT).parts)
+        ]
+        self.assertTrue(paths, "*.py が 1 つも見つからない")
+        violations = []
+        for path in paths:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            hits = find_version_references(tree)
+            if hits:
+                violations.append(f"{path.relative_to(ROOT).as_posix()}: {hits}")
+        self.assertEqual(violations, [])
+
+    def test_synthetic_version_check_is_detected(self):
+        # 対照 (陽性): sys.version_info への実参照は Attribute として検出される
+        tree = ast.parse("import sys\nif sys.version_info >= (3, 13):\n    pass\n")
+        self.assertEqual(find_version_references(tree), ["version_info"])
+
+    def test_string_mention_is_not_detected(self):
+        # 対照 (陰性): 文字列中の言及は Constant であって Attribute/Name ではない
+        tree = ast.parse('s = "sys.version_info"\n')
+        self.assertEqual(find_version_references(tree), [])
 
 
 if __name__ == "__main__":
