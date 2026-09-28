@@ -1425,16 +1425,20 @@ class CountSuffixTests(unittest.TestCase):
         self.assertEqual(0, jevlint_tree.count_suffix(self.tree, ["sub/c.py"], ".mbt"))
         self.assertEqual(2, jevlint_tree.count_suffix(self.tree, ["sub", "a.mbt"], ".mbt"))
 
-    def test_permission_denied_directory_target_does_not_raise_and_counts_zero_for_it(self):
-        # `os.path.isfile` は判定不能 (権限エラー) を「無い」に丸めて数え続ける。ここは
-        # 上流を呼んで課金した後の要約で、`stat_or_none` で止めるべき場所ではない
-        # (呼び出し前の判定は _check_out_path や reject_sgconfig_in_ancestors が持つ)
+    def test_permission_denied_file_target_does_not_raise_and_counts_zero_for_it(self):
+        # denied 自身の stat は親 (self.tree) の権限で決まるので落ちない。落ちるのは
+        # denied の「中」にあるファイル (denied/x.mbt) を探す段で、denied 自身に search
+        # 権限が要るため。ここを `denied` 自身ではなく `denied/x.mbt` にしないと、この
+        # 権限拒否は決して観測されない (dead pin になる)。`os.path.isfile` は判定不能を
+        # 「無い」に丸めて数え続ける。上流を呼んで課金した後の要約なので止めない
         denied = self.tree / "denied"
         denied.mkdir()
         (denied / "x.mbt").write_text("", encoding="utf-8")
         self.addCleanup(os.chmod, denied, stat.S_IRWXU)
         os.chmod(denied, 0)
-        self.assertEqual(1, jevlint_tree.count_suffix(self.tree, ["denied", "a.mbt"], ".mbt"))
+        self.assertEqual(
+            1, jevlint_tree.count_suffix(self.tree, ["denied/x.mbt", "a.mbt"], ".mbt")
+        )
 
 
 if __name__ == "__main__":

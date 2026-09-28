@@ -511,12 +511,12 @@ def tmpdir_from_env(env: dict) -> Path:
     `realpath` はどの版でも投げない (実測)。ループは後段の `mkdtemp` が `OSError` にする。
     """
     candidate = env.get("TMPDIR", "")
-    try:
-        if not (candidate and os.path.isabs(candidate)):
+    if not (candidate and os.path.isabs(candidate)):
+        try:
             # gettempdir は候補が 1 つも使えないと FileNotFoundError を投げる
             candidate = tempfile.gettempdir()
-    except OSError as error:
-        raise TreeError(f"一時ディレクトリの置き場を解決できない: {error}") from None
+        except OSError as error:
+            raise TreeError(f"一時ディレクトリの置き場を解決できない: {error}") from None
     return Path(os.path.realpath(candidate))
 
 
@@ -645,10 +645,8 @@ def signals_as_exceptions() -> Iterator[None]:
 def count_suffix(tree: Path, paths: list, suffix: str) -> int:
     """対象のパス (空なら `tree` 全体) の下にある、名前が `suffix` で終わるファイルの本数。
 
-    `is_file()` ではなく `os.path.isfile` を使う。ここは上流を呼んで課金した後の要約で、
-    判定不能 (権限エラー等) を「無い」に丸めて数え続けてよい。止めるべき場所
-    (`_check_out_path` や `reject_sgconfig_in_ancestors` のような、上流を呼ぶ前の判定) は
-    `jevlint_fs.stat_or_none` を使う。
+    `is_file()` ではなく `os.path.isfile` を使う。上流を呼んで課金した後の要約なので
+    止めない (判定不能は「無い」に丸めて数え続ける)。
     """
     if not paths or "" in paths:
         targets = [tree]

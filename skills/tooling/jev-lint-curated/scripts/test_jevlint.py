@@ -965,6 +965,45 @@ class MainResultTests(_MainTestCase):
         self.assertEqual(self.upstream.calls, [])
         self.assert_cleaned_up()
 
+    def test_json_out_directly_under_a_permission_denied_directory_is_2_before_the_upstream(
+        self,
+    ):
+        # denied 自身の stat (`_check_out_path` の parent_stat) は self.repo.path の権限で
+        # 決まるので落ちない。落ちるのは保存先自身 (denied/out.json) の stat
+        # (`target_stat`) で、denied に search 権限が要るため。上のテストは 2 段ネストで
+        # parent_stat 側の腕しか通さないので、これは同じ try の target_stat 側の腕を通す
+        denied = self.repo.path / "denied"
+        denied.mkdir()
+        self.addCleanup(os.chmod, denied, stat.S_IRWXU)
+        os.chmod(denied, 0)
+        code, out, err = self.run_main(
+            ["check", "--json-out", "denied/out.json", "sub/file.py"], environ=self.keyed()
+        )
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertRegex(err, r"^jevlint: --json-out の保存先を確かめられない")
+        self.assertIn("denied/out.json", err)
+        self.assertEqual(self.upstream.calls, [])
+        self.assert_cleaned_up()
+
+    def test_json_out_through_a_symlink_loop_is_2_before_the_upstream(self):
+        # `os.path.realpath` は symlink のループでも投げない (jevlint_tree.py の
+        # tmpdir_from_env と同じ実測)。resolved.parent の stat が ELOOP の OSError になり、
+        # `_check_out_path` の try がそれを拾う。`Path.resolve()` に戻すと 3.9.6 では
+        # resolve() 自身が RuntimeError を投げて main() の catch-all に落ち、この文言には
+        # ならない (3.14 は resolve() も投げないので、同じ OSError の腕で拾われて変わらない)
+        loop = self.repo.path / "loop"
+        loop.symlink_to(loop)
+        code, out, err = self.run_main(
+            ["check", "--json-out", "loop/out.json", "sub/file.py"], environ=self.keyed()
+        )
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertRegex(err, r"^jevlint: --json-out の保存先を確かめられない")
+        self.assertIn("loop/out.json", err)
+        self.assertEqual(self.upstream.calls, [])
+        self.assert_cleaned_up()
+
     def test_unwritable_record_path_is_2_before_the_upstream_unless_dry_run(self):
         (self.repo.path / "out.json.record.json").mkdir()
         code, out, err = self.run_main(
