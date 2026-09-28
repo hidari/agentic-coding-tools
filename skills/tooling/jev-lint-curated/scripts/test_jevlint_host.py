@@ -506,6 +506,25 @@ class PrepareHostTests(unittest.TestCase):
             jevlint_host.prepare_host("0.7.0", self.source, run=run)
         self.assertEqual(run.calls, [])
 
+    def test_pnpm_workspace_ancestor_found_only_via_realpath_is_rejected(self):
+        # host.parents (未解決の表記) には現れず、os.path.realpath で解決した表記の
+        # 祖先としてしか見えない pnpm-workspace.yaml を検出できることを pin する。
+        # XDG_CACHE_HOME を symlink (link) にし、実体 (real/cache) の親 (real) に
+        # pnpm-workspace.yaml を置く。host.parents は link を辿らないので real は
+        # 現れないが、realpath(host).parents には real が現れる
+        real_cache = self.cache_home.parent / "real" / "cache"
+        real_cache.mkdir(parents=True)
+        (real_cache.parent / "pnpm-workspace.yaml").write_text("packages: []\n", encoding="utf-8")
+        link = self.cache_home.parent / "link"
+        link.symlink_to(real_cache)
+        source = {"XDG_CACHE_HOME": str(link)}
+        run = _FakeRun("0.7.0")
+        with self.assertRaisesRegex(
+            jevlint_host.HostError, "^host の祖先に pnpm-workspace.yaml がある"
+        ):
+            jevlint_host.prepare_host("0.7.0", source, run=run)
+        self.assertEqual(run.calls, [])
+
     def test_symlink_loop_in_cache_path_becomes_hosterror(self):
         # 文面まで見るのは、どの腕が止めたかを pin するため。型だけ (assertRaises) だと、
         # stdlib の挙動が変わって別の腕 (例えば後段の parent.mkdir()) が拾うように
@@ -525,9 +544,15 @@ class PrepareHostTests(unittest.TestCase):
             jevlint_host.prepare_host("0.7.0", self.source, run=_FakeRun("0.7.0"))
 
     def test_host_parent_that_is_a_file_becomes_hosterror(self):
-        # host の親ディレクトリを作れない経路 (prepare_host の parent.mkdir()) を、
-        # _reject_pnpm_workspace_ancestor や host_reusable より先に踏むことを pin する。
-        # run が一度も呼ばれないことで、取得を試みる前に止まっていることを確認する
+        # 親が通常ファイルの成分は NotADirectoryError になり、stat_or_none はそれを
+        # 「無い」(None) に丸める。そのため _reject_pnpm_workspace_ancestor の
+        # candidate の stat も host_reusable の 2 つの stat もどちらも「無い」と
+        # 判定して素通りし (prepare_host の呼び出し順は
+        # _reject_pnpm_workspace_ancestor → host_reusable → parent.mkdir())、
+        # 実際に止めるのは後段の parent.mkdir() (既存のディレクトリが無い場所に
+        # ファイルがあるので mkdir が FileExistsError) だけになる。
+        # ENOTDIR → None の丸めがここまで一貫して効くことを end to end で pin する。
+        # run が一度も呼ばれないことで、取得を試みる前に止まっていることも確認する
         parent = jevlint_host.host_dir("0.7.0", self.source).parent
         parent.parent.mkdir(parents=True, exist_ok=True)
         parent.write_text("", encoding="utf-8")

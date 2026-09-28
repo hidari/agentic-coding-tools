@@ -3,6 +3,10 @@
 見るのは `stat_or_none` の 1 入口だけ。「無い」(None を返す) と「確かめられない
 (そのまま例外を投げる)」の境界を、実物のファイルシステムの状態 (権限 0 のディレクトリ、
 自分を指す symlink) で作って検証する。モックは使わない。
+
+権限 0 のディレクトリを使う `test_permission_denied_raises` は root では意味を失う
+(root は権限ビットを無視して読めてしまうため) ので、root で走らせると赤になる。CI の
+runner と検証コンテナは非 root で走る前提。
 """
 
 from __future__ import annotations
