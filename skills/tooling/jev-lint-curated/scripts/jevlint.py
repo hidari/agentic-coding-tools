@@ -301,8 +301,8 @@ def _check_out_path(path: Path, shown: str, expanded: jevlint_tree.Expanded) -> 
     try:
         parent_stat = jevlint_fs.stat_or_none(resolved.parent)
         target_stat = jevlint_fs.stat_or_none(resolved)
-    except OSError:
-        raise UsageError(f"--json-out の保存先を確かめられない: {shown!r}") from None
+    except OSError as error:
+        raise UsageError(f"--json-out の保存先を確かめられない: {shown!r}: {error}") from None
     if parent_stat is None or not stat.S_ISDIR(parent_stat.st_mode):
         raise UsageError(f"--json-out の保存先の親ディレクトリが無い: {shown!r}")
     if target_stat is not None and stat.S_ISDIR(target_stat.st_mode):

@@ -831,6 +831,7 @@ skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.ParseVersi
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.PathlibPredicateBan.test_no_pathlib_predicates_in_product_modules
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.PathlibPredicateBan.test_os_path_receiver_is_not_detected
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.PathlibPredicateBan.test_synthetic_predicate_call_is_detected
+skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.PathlibPredicateBan.test_synthetic_uncalled_predicate_reference_is_detected
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.Py39SourceTests.test_py39_source
 skills/tooling/jev-lint-curated/scripts/test_jevlint.py::test_jevlint.UpstreamVersionTests.test_matches_own_parse_version
 skills/tooling/jev-lint-curated/scripts/test_jevlint_compat.py::test_jevlint_compat.CompareTests.test_curated_item_missing_from_the_argument_version_is_a_failure
@@ -992,6 +993,7 @@ skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.ExpandedCommitTests.test_no_usable_system_temp_dir_is_a_tree_error
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.ExpandedCommitTests.test_normal_exit_removes_the_worktree_and_the_temp_dir
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.ExpandedCommitTests.test_nothing_is_announced_when_there_is_no_sgconfig
+skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.ExpandedCommitTests.test_permission_error_on_the_post_materialize_sgconfig_stat_is_a_tree_error
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.ExpandedCommitTests.test_rejects_when_an_ancestor_of_the_tree_holds_sgconfig
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.ExpandedCommitTests.test_repository_root_is_untouched_by_the_expansion
 skills/tooling/jev-lint-curated/scripts/test_jevlint_tree.py::test_jevlint_tree.ExpandedCommitTests.test_sgconfig_yaml_is_removed_too

@@ -1014,6 +1014,30 @@ class ExpandedCommitTests(unittest.TestCase):
         self.assertIn("sgconfig.yml", str(cm.exception))
         self._assert_torn_down_into(base)
 
+    def test_permission_error_on_the_post_materialize_sgconfig_stat_is_a_tree_error(self):
+        # materialize は 120000 (symlink) を通常ファイルとして書き、160000 は書かない
+        # (`_WRITTEN_MODES`) ので、この後の candidate の stat は ENOENT・通常ファイル・
+        # ディレクトリしか返らず、コミットした symlink ループでもこの OSError の腕には
+        # 実際のコミット内容から到達できない (jevlint_tree.py の該当コメントと同じ実測)。
+        # 実コンテンツで再現できない状態を `jevlint_fs.stat_or_none` に注入して pin する
+        original_stat_or_none = jevlint_tree.jevlint_fs.stat_or_none
+
+        def flaky(path):
+            # `reject_sgconfig_in_ancestors` も同じ関数を同じベース名 (sgconfig.yml) で
+            # 呼ぶので、注入は worktree 直下の candidate (tree/sgconfig.yml) だけに絞る。
+            # それ以外は本物の stat_or_none にそのまま委ねる
+            if path.parts[-2:] == ("tree", "sgconfig.yml"):
+                raise PermissionError("denied")
+            return original_stat_or_none(path)
+
+        base, env = self._private_base()
+        with mock.patch("jevlint_tree.jevlint_fs.stat_or_none", side_effect=flaky):
+            with self.assertRaises(jevlint_tree.TreeError) as cm:
+                with jevlint_tree.expanded_commit(self.repo.path, self.sha, env):
+                    self.fail("sgconfig.yml の stat が権限エラーの展開が通った")
+        self.assertIn("sgconfig.yml を確認できない", str(cm.exception))
+        self._assert_torn_down_into(base)
+
     def test_failing_worktree_add_is_a_tree_error_and_leaves_nothing_behind(self):
         base, env = self._private_base()
         with self.assertRaises(jevlint_tree.TreeError) as cm:

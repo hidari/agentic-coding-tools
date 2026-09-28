@@ -965,6 +965,9 @@ class MainResultTests(_MainTestCase):
         self.assertEqual(out, "")
         self.assertRegex(err, r"^jevlint: --json-out の保存先を確かめられない")
         self.assertIn("denied/sub/out.json", err)
+        # OSError の理由 (EACCES) がメッセージに出ること。抜けると EACCES と ELOOP を
+        # 利用者が区別できない (final review Important 1)
+        self.assertIn("Permission denied", err)
         self.assertEqual(self.upstream.calls, [])
         self.assert_cleaned_up()
 
@@ -1550,20 +1553,26 @@ def _is_os_path_receiver(node: ast.expr) -> bool:
 
 
 def find_pathlib_predicate_calls(tree: ast.AST) -> list[str]:
-    """版に依存する pathlib 述語呼び出し (os.path 受け手を除く) の attr 名を集める。
+    """版に依存する pathlib 述語の参照 (呼び出さない属性参照を含む、os.path 受け手を除く) の attr 名を集める。
 
     jevlint_host.py / jevlint_tree.py が `os.path.realpath` へ寄せた理由
     (`Path.resolve()` は symlink ループの扱いが版で違う) の裏返しの pin。
+
+    見るのは ast.Call ではなく ast.Attribute そのもの。`filter(Path.is_file, xs)` の
+    ように述語を呼び出さず関数オブジェクトとして渡す形は、ast.Call を条件にすると
+    見えない (final review の Evidence 節で迂回として記録された形)。`p.is_file()` の
+    ような通常の呼び出しも `Call(func=Attribute(...))` の内側に同じ Attribute ノードを
+    持つので、Attribute だけを見ても検出は後退しない。`getattr(p, "is_dir")()` は
+    属性名が文字列リテラルで ast.Attribute にならないため、この検出の外 (仕様の外、許容)。
     """
     found = []
     for node in ast.walk(tree):
         if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr in _PATHLIB_PREDICATE_NAMES
-            and not _is_os_path_receiver(node.func.value)
+            isinstance(node, ast.Attribute)
+            and node.attr in _PATHLIB_PREDICATE_NAMES
+            and not _is_os_path_receiver(node.value)
         ):
-            found.append(node.func.attr)
+            found.append(node.attr)
     return found
 
 
@@ -1606,6 +1615,14 @@ class PathlibPredicateBan(unittest.TestCase):
         # 名前が対象でも受け手が os.path なので除外される
         tree = ast.parse("os.path.isfile(p)\nos.path.exists(p)\n")
         self.assertEqual(find_pathlib_predicate_calls(tree), [])
+
+    def test_synthetic_uncalled_predicate_reference_is_detected(self):
+        # 対照 (陽性、迂回対策): `filter(Path.is_file, xs)` は述語を呼び出さず関数
+        # オブジェクトとして渡すため、ast.Call を条件にした検出では見えない (final
+        # review の Evidence 節で迂回として記録された形)。ast.Attribute を直接見ることで
+        # 呼び出しの有無によらず検出する
+        tree = ast.parse("filter(Path.is_file, xs)\n")
+        self.assertEqual(find_pathlib_predicate_calls(tree), ["is_file"])
 
 
 if __name__ == "__main__":

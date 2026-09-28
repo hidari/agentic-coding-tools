@@ -502,13 +502,17 @@ def tmpdir_from_env(env: dict) -> Path:
     `env` の `TMPDIR` が空でない絶対パスならそれ、それ以外は `tempfile.gettempdir()`。
     `os.environ` ではなく `env` から読むのは、上流に渡す env と同じ値で置き場が決まるように
     し、テストが置き場を差し替えられるようにするため。空や相対の値を `mkdtemp(dir=...)` に
-    そのまま渡すと cwd の下に作られ、3.11 までは返るパスも相対になる (実測: 3.9.6 は
-    `'jevlint-xxx'`、3.14.7 は cwd を前置した絶対パス)。相対のままだと `worktree add` は
-    `-C root` の root から、書き出しは cwd から解決して別の場所を指す。
+    そのまま渡すと cwd の下に作られ、3.11 までは返るパスも相対になる (実測: 3.9.6・3.11.15 は
+    相対のまま [`'jevlint-xxx'` の形]、3.12.12・3.14.7 は cwd を前置した絶対パス)。相対の
+    ままだと `worktree add` は `-C root` の root から、書き出しは cwd から解決して別の場所を
+    指す。
 
     解決は `os.path.realpath` で行う。`Path.resolve()` は symlink のループを 3.12 までは
     `RuntimeError` にし、3.14 では投げない (実測: 3.9.6・3.11.15・3.12.12・3.14.7)。
-    `realpath` はどの版でも投げない (実測)。ループは後段の `mkdtemp` が `OSError` にする。
+    `realpath` は symlink のループでは投げない (実測: 3.9.6・3.11.15・3.12.12・3.14.7)。
+    embedded NUL を含む表記では 3.14.7 の `realpath` が `ValueError` を投げ、3.9.6 は
+    NUL を含んだままの絶対パスを返す (実測)。argv と environ は C 文字列なので、この経路には
+    CLI からは到達しない。ループは後段の `mkdtemp` が `OSError` にする。
     """
     candidate = env.get("TMPDIR", "")
     if not (candidate and os.path.isabs(candidate)):
@@ -523,8 +527,8 @@ def tmpdir_from_env(env: dict) -> Path:
 def is_inside(path: Path, directory: Path) -> bool:
     """`path` (解決した形で渡す) が `directory` そのものか、その下にあるか。
 
-    包含は inode で見る。大文字小文字を区別しないファイルシステムでは `resolve()` が
-    与えられた表記の大文字小文字を保つので (実測: APFS)、文字列の比較は `.../Repo` と
+    包含は inode で見る。大文字小文字を区別しないファイルシステムでは解決 (`os.path.realpath`)
+    が与えられた表記の大文字小文字を保つので (実測: APFS)、文字列の比較は `.../Repo` と
     `.../repo/sub` の包含を見落とす。まだ無い祖先は同じ inode を指しようがないので飛ばす。
     """
     for ancestor in (path, *path.parents):
@@ -595,6 +599,13 @@ def expanded_commit(root: Path, sha: str, env: dict) -> Iterator[Expanded]:
         for name in _SGCONFIG_NAMES:
             candidate = tree / name
             try:
+                # materialize は 120000 (symlink) をリンク先の文字列を中身にした通常
+                # ファイルとして書き、160000 (submodule) は書かない (`_WRITTEN_MODES`)。
+                # そのため candidate の stat は ENOENT・通常ファイル・ディレクトリしか
+                # 返らず、コミットした symlink ループでもこの OSError の腕には実際の
+                # コミット内容から到達できない。テストは `jevlint_fs.stat_or_none` に
+                # PermissionError を注入してこの腕を pin する
+                # (test_jevlint_tree.py の ExpandedCommitTests)
                 candidate_stat = jevlint_fs.stat_or_none(candidate)
             except OSError as error:
                 raise TreeError(f"{name} を確認できない: {candidate}: {error}") from None

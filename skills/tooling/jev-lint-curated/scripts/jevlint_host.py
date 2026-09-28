@@ -242,7 +242,7 @@ def cli_path(host: Path) -> Path:
 def host_reusable(host: Path, version: str) -> bool:
     """`host` を作り直さずに使えるか。`package.json` の `version` が一致し `cli.js` がある。
 
-    確かめられないとき (権限エラー・symlink のループ等) は判定不能を「無い」に丸めず
+    stat で確かめられないとき (権限エラー・symlink のループ等) は判定不能を「無い」に丸めず
     `HostError` にする。`jevlint_fs.stat_or_none` が「無い」以外の `OSError` を
     そのまま投げるので、ここではそれを `HostError` に変えるだけでよい。
     """
@@ -269,14 +269,17 @@ def _reject_pnpm_workspace_ancestor(host: Path) -> None:
     経路の一般化)。`prepare_host` は host の親の
     中に作った一時ディレクトリを cwd にして `pnpm add` を呼ぶため、host の祖先にこの
     ファイルがあると同じ理由で意図しない registry に化ける経路が残る。macOS では
-    `/tmp` が `/private/tmp` の symlink であるように (`jevlint_tree.py` の `_temp_base`
-    と同じ実測)、与えられた表記だけでは祖先を見落とすことがあるため、解決した表記の
-    祖先も合わせて見る。
+    `/tmp` が `/private/tmp` の symlink であるように (`jevlint_tree.py` の
+    `reject_sgconfig_in_ancestors` と同じ実測)、与えられた表記だけでは祖先を見落とすことが
+    あるため、解決した表記の祖先も合わせて見る。
 
     解決は `os.path.realpath` で行う。`Path.resolve()` は symlink のループを 3.12 までは
     `RuntimeError` にし、3.14 では投げない (実測: 3.9.6・3.11.15・3.12.12・3.14.7)。
-    `realpath` はどの版でも投げない (実測)。ループや権限で祖先を確かめられないときは、
-    下の stat (`jevlint_fs.stat_or_none`) が `HostError` にする。
+    `realpath` は symlink のループでは投げない (実測: 3.9.6・3.11.15・3.12.12・3.14.7)。
+    embedded NUL を含む表記では 3.14.7 の `realpath` が `ValueError` を投げ、3.9.6 は
+    NUL を含んだままの絶対パスを返す (実測)。argv と environ は C 文字列なので、この経路には
+    CLI からは到達しない。ループや権限で祖先を確かめられないときは、下の stat
+    (`jevlint_fs.stat_or_none`) が `HostError` にする。
     """
     ancestors = set(host.parents) | set(Path(os.path.realpath(host)).parents)
     for ancestor in ancestors:
