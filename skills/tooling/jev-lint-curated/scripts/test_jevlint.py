@@ -25,6 +25,9 @@ parse_threshold / parse_version / parse_args の異常系は、値そのもの�
 
 Python 3.9 構文の検査 (test_py39_source) は、このディレクトリの jevlint*.py と
 test_jevlint*.py の両方 (このファイル自身を含む) を対象にする。
+
+pathlib の版依存述語呼び出しの検査 (test_no_pathlib_predicates_in_product_modules)
+は test_*.py を除く jevlint*.py だけを対象にする。
 """
 
 from __future__ import annotations
@@ -1531,9 +1534,12 @@ _PATHLIB_PREDICATE_NAMES = {"exists", "is_file", "is_dir", "is_symlink", "resolv
 
 
 def _is_os_path_receiver(node: ast.expr) -> bool:
-    """`os.path.<attr>(...)` の受け手 (os.path) かどうかを式の形で判定する。
+    """受け手が `os.path` の直接チェーン (Attribute(value=Name('os'), attr='path')) かを見る。
 
-    `os.path` は常に Attribute(value=Name('os'), attr='path') の形になる。
+    `from os import path` や `import os.path as osp` はこの形に当たらないため
+    判定から漏れるが、漏れた場合は述語呼び出しとして検出される側 (over-detection)
+    に倒れる。見逃し (false negative) より誤検出 (false positive) を選ぶ設計で、
+    この 2 形まで許可リストへ広げてはいない。
     """
     return (
         isinstance(node, ast.Attribute)
@@ -1580,9 +1586,20 @@ class PathlibPredicateBan(unittest.TestCase):
         self.assertEqual(violations, [])
 
     def test_synthetic_predicate_call_is_detected(self):
-        # 対照 (陽性): p.is_file() は受け手が os.path でない述語呼び出し
-        tree = ast.parse("p.is_file()\n")
-        self.assertEqual(find_pathlib_predicate_calls(tree), ["is_file"])
+        # 対照 (陽性): 5 つの述語すべてが検出される。名前を _PATHLIB_PREDICATE_NAMES
+        # から動的に生成せず直書きするのは、そちらから 1 つ削っても対照側が一緒に
+        # 縮んで dead pin になるのを防ぐため
+        tree = ast.parse(
+            "p.exists()\n"
+            "p.is_file()\n"
+            "p.is_dir()\n"
+            "p.is_symlink()\n"
+            "p.resolve()\n"
+        )
+        self.assertEqual(
+            find_pathlib_predicate_calls(tree),
+            ["exists", "is_file", "is_dir", "is_symlink", "resolve"],
+        )
 
     def test_os_path_receiver_is_not_detected(self):
         # 対照 (陰性): os.path.isfile は名前自体が対象外、os.path.exists は

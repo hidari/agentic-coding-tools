@@ -405,6 +405,13 @@ class VersionBranchBan(unittest.TestCase):
         tree = ast.parse("import sys\nif sys.version_info >= (3, 13):\n    pass\n")
         self.assertEqual(find_version_references(tree), ["version_info"])
 
+    def test_synthetic_by_name_version_check_is_detected(self):
+        # 対照 (陽性、Name 分岐): `from sys import version_info` の形は
+        # 参照時に Attribute ではなく Name になる。この対照が無いと Name 分岐
+        # (find_version_references の elif) を削除しても全テストが緑のままになる
+        tree = ast.parse("from sys import version_info\nif version_info >= (3, 13):\n    pass\n")
+        self.assertEqual(find_version_references(tree), ["version_info"])
+
     def test_string_mention_is_not_detected(self):
         # 対照 (陰性): 文字列中の言及は Constant であって Attribute/Name ではない
         tree = ast.parse('s = "sys.version_info"\n')
