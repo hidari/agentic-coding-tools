@@ -367,8 +367,10 @@ def find_version_references(tree: ast.AST) -> list[str]:
     """`sys.version_info` / `sys.hexversion` を名前に持つ参照を AST で集める。
 
     文字列や docstring はただの ast.Constant で ast.Attribute / ast.Name には
-    ならないため対象に入らない。import の形 (`import sys` か
-    `from sys import version_info`) は問わず、属性名・識別子名だけを見る。
+    ならないため対象に入らない。別名を付けない import の形 (`import sys` か
+    `from sys import version_info`) は問わず、属性名・識別子名を見る。別名を付けた
+    `from sys import ... as ...` だけは、属性名・識別子名ではなく import 文自体
+    (`ast.ImportFrom` の alias) を見る (下記)。
 
     `from sys import version_info as vi` は元の名前を残さない束縛を作るため、
     以降の参照は `vi` という ast.Name にしかならず、上の 2 分岐だけでは迂回できる
