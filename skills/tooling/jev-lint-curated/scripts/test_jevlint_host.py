@@ -12,10 +12,9 @@
 (host の置き場をテストごとに隔離するため)。cwd の検査は `os.chdir` で「消費側のリポジトリ」
 を模した別ディレクトリへ一時的に移動し、`run` に渡った cwd がそれと一致しないことで見る。
 
-権限エラー (`PermissionError`) と symlink ループの `resolve()` の扱いは Python の版で
-挙動が違う (3.9.6 では例外が伝播するが、3.14.7 の pathlib はどちらも握りつぶして偽の
-値を返す。実測)。該当のテストは `sys.version_info` で期待値を分けており、
-`unittest.skip` は使わない (このリポジトリのテスト runner は skip を赤にする)。
+権限 0 のディレクトリを使うテストは root では意味を失う (root は権限ビットを無視して
+読めてしまうため) ので、root で走らせると赤になる。CI の runner と検証コンテナは
+非 root で走る前提。
 """
 
 from __future__ import annotations
@@ -23,7 +22,6 @@ from __future__ import annotations
 import json
 import os
 import stat
-import sys
 import tempfile
 import types
 import unittest
@@ -509,27 +507,34 @@ class PrepareHostTests(unittest.TestCase):
         self.assertEqual(run.calls, [])
 
     def test_symlink_loop_in_cache_path_becomes_hosterror(self):
-        # 3.9.6: _reject_pnpm_workspace_ancestor の resolve() が RuntimeError になり
-        # HostError に変わる (実測)。3.14.7: resolve() 自体は例外にならないが、その後の
-        # parent.mkdir() がループを辿れず OSError (ELOOP) になり、それも HostError に
-        # 変わる (jevlint_tree.py の _temp_base と同じ収束。両方とも実測)。
-        # どちらの版でも HostError になるので version 分岐は要らない
+        # 文面まで見るのは、どの腕が止めたかを pin するため。型だけ (assertRaises) だと、
+        # stdlib の挙動が変わって別の腕 (例えば後段の parent.mkdir()) が拾うように
+        # なっても、HostError であることは変わらないので緑のまま気づけない
         loop = self.cache_home.parent / "loop"
         loop.symlink_to(loop)
         source = {"XDG_CACHE_HOME": str(loop / "cache")}
-        with self.assertRaises(jevlint_host.HostError):
+        with self.assertRaisesRegex(jevlint_host.HostError, "^host の祖先を確認できない"):
             jevlint_host.prepare_host("0.7.0", source, run=_FakeRun("0.7.0"))
 
     def test_permission_denied_ancestor_becomes_hosterror(self):
-        # 3.9.6: 祖先の exists() が PermissionError を再送出し HostError になる (実測)。
-        # 3.14.7: exists() は握りつぶして False を返すが、その後 parent.mkdir() が
-        # 同じ権限不足で OSError になり、それも HostError に変わる (実測)。
-        # これも両方の版で HostError に収束する
+        # 文面まで見る理由は test_symlink_loop_in_cache_path_becomes_hosterror と同じ
         self.cache_home.mkdir(parents=True, exist_ok=True)
         os.chmod(self.cache_home, 0)
         self.addCleanup(os.chmod, self.cache_home, stat.S_IRWXU)
-        with self.assertRaises(jevlint_host.HostError):
+        with self.assertRaisesRegex(jevlint_host.HostError, "^host の祖先を確認できない"):
             jevlint_host.prepare_host("0.7.0", self.source, run=_FakeRun("0.7.0"))
+
+    def test_host_parent_that_is_a_file_becomes_hosterror(self):
+        # host の親ディレクトリを作れない経路 (prepare_host の parent.mkdir()) を、
+        # _reject_pnpm_workspace_ancestor や host_reusable より先に踏むことを pin する。
+        # run が一度も呼ばれないことで、取得を試みる前に止まっていることを確認する
+        parent = jevlint_host.host_dir("0.7.0", self.source).parent
+        parent.parent.mkdir(parents=True, exist_ok=True)
+        parent.write_text("", encoding="utf-8")
+        run = _FakeRun("0.7.0")
+        with self.assertRaisesRegex(jevlint_host.HostError, "^host の親ディレクトリを作れない"):
+            jevlint_host.prepare_host("0.7.0", self.source, run=run)
+        self.assertEqual(run.calls, [])
 
     def test_package_json_written_is_private_true(self):
         seen = {}
@@ -582,19 +587,12 @@ class HostReusableTests(unittest.TestCase):
 
     def test_permission_denied_host_directory(self):
         # host_reusable は単独の関数で、prepare_host のように downstream の mkdir で
-        # 例外を収束させる仕組みが無い。is_file() の PermissionError の扱いが版で
-        # 違う (実測): 3.9.6 は再送出するので host_reusable は
-        # HostError にする。3.14.7 の pathlib は PermissionError も握りつぶして
-        # False を返すので、この版では「再利用できない」という通常の判定に落ちる。
-        # unittest.skip は使わず (このリポジトリの runner は skip を赤にする)、
-        # 版ごとの正しい期待値をそれぞれ検証する
+        # 例外を収束させる仕組みが無い。stat_or_none は権限エラーをどの版でも
+        # そのまま投げるので、host_reusable はどの版でも HostError にする
         os.chmod(self.host, 0)
         self.addCleanup(os.chmod, self.host, stat.S_IRWXU)
-        if sys.version_info >= (3, 13):
-            self.assertFalse(jevlint_host.host_reusable(self.host, "0.7.0"))
-        else:
-            with self.assertRaises(jevlint_host.HostError):
-                jevlint_host.host_reusable(self.host, "0.7.0")
+        with self.assertRaisesRegex(jevlint_host.HostError, "^host を確認できない"):
+            jevlint_host.host_reusable(self.host, "0.7.0")
 
 
 class ParseNodeVersionTests(unittest.TestCase):

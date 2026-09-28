@@ -9,21 +9,25 @@
 「入れてよいものだけ許す」対象が小さく、取得は「消費側や利用者の環境をほぼそのまま渡しつつ
 危険な一部だけ落とす」対象が大きいため。
 
-このモジュールは他の jevlint* モジュールを import しない。依存は入口 (`jevlint.py`) から
+このモジュールは葉の `jevlint_fs` のほかは import しない。依存は入口 (`jevlint.py`) から
 下流へ一方向に流し、循環を作らないため。
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import uuid
 from pathlib import Path
 from typing import Callable, Mapping
+
+import jevlint_fs
 
 
 class HostError(Exception):
@@ -238,19 +242,17 @@ def cli_path(host: Path) -> Path:
 def host_reusable(host: Path, version: str) -> bool:
     """`host` を作り直さずに使えるか。`package.json` の `version` が一致し `cli.js` がある。
 
-    `is_file()` は ENOENT 等を握りつぶして `False` を返すが、権限エラー
-    (`PermissionError`) は Python 3.9 では再送出する (実測: 3.9.6。3.14.7 の pathlib は
-    `PermissionError` も握りつぶして `False` を返すようになっている。実測)。
-    再送出された場合は判定不能を「無い」に丸めず `HostError` にする。
+    確かめられないとき (権限エラー・symlink のループ等) は判定不能を「無い」に丸めず
+    `HostError` にする。`jevlint_fs.stat_or_none` が「無い」以外の `OSError` を
+    そのまま投げるので、ここではそれを `HostError` に変えるだけでよい。
     """
     package_json = package_json_path(host)
     cli_js = cli_path(host)
     try:
-        package_json_is_file = package_json.is_file()
-        cli_js_is_file = cli_js.is_file()
-    except PermissionError as error:
-        raise HostError(f"host を確認できない (権限不足): {host}: {error}") from None
-    if not package_json_is_file or not cli_js_is_file:
+        stats = (jevlint_fs.stat_or_none(package_json), jevlint_fs.stat_or_none(cli_js))
+    except OSError as error:
+        raise HostError(f"host を確認できない: {host}: {error}") from None
+    if not all(s is not None and stat.S_ISREG(s.st_mode) for s in stats):
         return False
     try:
         data = json.loads(package_json.read_text(encoding="utf-8"))
@@ -271,20 +273,16 @@ def _reject_pnpm_workspace_ancestor(host: Path) -> None:
     と同じ実測)、与えられた表記だけでは祖先を見落とすことがあるため、解決した表記の
     祖先も合わせて見る。
 
-    `resolve()` は symlink のループで Python 3.9 では `RuntimeError` になる (実測:
-    3.9.6。`jevlint_tree.py` の `_temp_base` と同じ現象。3.14.7 は投げない)。`exists()`
-    は権限エラーで 3.9 では `PermissionError` を再送出する (3.14.7 は握りつぶして
-    `False` を返す。実測)。どちらも `HostError` に変える。
+    解決は `os.path.realpath` で行う。`Path.resolve()` は symlink のループを 3.12 までは
+    `RuntimeError` にし、3.14 では投げない (実測: 3.9.6・3.11.15・3.12.12・3.14.7)。
+    `realpath` はどの版でも投げない (実測)。ループや権限で祖先を確かめられないときは、
+    下の stat (`jevlint_fs.stat_or_none`) が `HostError` にする。
     """
-    try:
-        resolved_parents = set(host.resolve().parents)
-    except (OSError, RuntimeError) as error:
-        raise HostError(f"host の祖先を解決できない: {host}: {error}") from None
-    ancestors = set(host.parents) | resolved_parents
+    ancestors = set(host.parents) | set(Path(os.path.realpath(host)).parents)
     for ancestor in ancestors:
         candidate = ancestor / "pnpm-workspace.yaml"
         try:
-            found = candidate.exists()
+            found = jevlint_fs.stat_or_none(candidate) is not None
         except OSError as error:
             raise HostError(f"host の祖先を確認できない: {candidate}: {error}") from None
         if found:
@@ -322,7 +320,7 @@ def _replace_host_atomically(host: Path, tmp: Path, version: str) -> None:
         return
     old = None
     try:
-        if host.exists():
+        if jevlint_fs.stat_or_none(host) is not None:
             old = host.parent / f".old-{uuid.uuid4().hex}"
             host.rename(old)
         tmp.replace(host)
