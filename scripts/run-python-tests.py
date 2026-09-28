@@ -36,8 +36,9 @@ scripts/test_run_python_tests.py が検証する構造のため、次の 3 形�
 CI へ第 2 の取り付けを足せば塞がるが、取り付け literal の二重管理と引き換えに
 なるため採らず、レビューを防衛層とする (ユーザー判断)。
 
-テストの中で版によって通る経路は ID の集合に現れない。その形は
-test_run_python_tests.py のテストが禁じる。
+テストの中で `sys.version_info` / `sys.hexversion` で明示的に分ける経路は ID の集合に
+現れない。その形は test_run_python_tests.py の VersionBranchBan が禁じる (stdlib の
+挙動差で暗黙に分かれる経路 [例: except PermissionError の腕] は見ない)。
 """
 from __future__ import annotations
 

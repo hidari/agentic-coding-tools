@@ -369,6 +369,14 @@ def find_version_references(tree: ast.AST) -> list[str]:
     文字列や docstring はただの ast.Constant で ast.Attribute / ast.Name には
     ならないため対象に入らない。import の形 (`import sys` か
     `from sys import version_info`) は問わず、属性名・識別子名だけを見る。
+
+    `from sys import version_info as vi` は元の名前を残さない束縛を作るため、
+    以降の参照は `vi` という ast.Name にしかならず、上の 2 分岐だけでは迂回できる
+    (final review の Evidence 節で実際に迂回として記録された形)。`ast.ImportFrom` の
+    alias 自体を見て、別名を付けた import をその場で検出する。alias 無しの import は
+    ここでは数えない (元の名前のまま束縛されるので、後続の参照が Name 分岐で捕まる。
+    ここでも数えると同じ import が二重に数えられ、迂回対策の無い既存テストの期待値と
+    ずれる)。
     """
     found = []
     for node in ast.walk(tree):
@@ -376,6 +384,10 @@ def find_version_references(tree: ast.AST) -> list[str]:
             found.append(node.attr)
         elif isinstance(node, ast.Name) and node.id in _VERSION_BRANCH_NAMES:
             found.append(node.id)
+        elif isinstance(node, ast.ImportFrom) and node.module == "sys":
+            for alias in node.names:
+                if alias.name in _VERSION_BRANCH_NAMES and alias.asname is not None:
+                    found.append(alias.name)
     return found
 
 
@@ -384,7 +396,8 @@ class VersionBranchBan(unittest.TestCase):
 
     版で通る経路が割れると、その経路は実行した interpreter 側でしか通らず
     manifest の実行 ID 集合には現れない (run-python-tests.py の docstring が持つ
-    限界)。分岐そのものを書かせないことでこの限界を埋める。
+    限界)。`sys.version_info` / `sys.hexversion` で明示的に分ける形は禁じる
+    (stdlib の挙動差で暗黙に分かれる経路 [例: except PermissionError の腕] は見ない)。
     """
 
     def test_no_version_references_in_repository(self):
@@ -415,6 +428,21 @@ class VersionBranchBan(unittest.TestCase):
     def test_string_mention_is_not_detected(self):
         # 対照 (陰性): 文字列中の言及は Constant であって Attribute/Name ではない
         tree = ast.parse('s = "sys.version_info"\n')
+        self.assertEqual(find_version_references(tree), [])
+
+    def test_synthetic_aliased_import_is_detected(self):
+        # 対照 (陽性、迂回対策): `from sys import version_info as vi` は元の名前を
+        # 残さない束縛を作るため、以降の参照は Name(id="vi") にしかならず Attribute/Name
+        # 分岐だけでは検出できない (final review の Evidence 節で迂回として記録された形)。
+        # ImportFrom の alias 自体を見る
+        tree = ast.parse("from sys import version_info as vi\nif vi >= (3, 13):\n    pass\n")
+        self.assertEqual(find_version_references(tree), ["version_info"])
+
+    def test_unaliased_import_is_not_double_counted(self):
+        # 対照 (陰性): alias 無しの import は ImportFrom 分岐では数えない。後続の
+        # 参照が Name 分岐で捕まるので、ここでも数えると
+        # test_synthetic_by_name_version_check_is_detected の期待値 (1 件) とずれる
+        tree = ast.parse("from sys import version_info\n")
         self.assertEqual(find_version_references(tree), [])
 
 
