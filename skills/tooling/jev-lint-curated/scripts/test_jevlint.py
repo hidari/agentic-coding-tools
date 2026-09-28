@@ -37,6 +37,7 @@ import os
 import shlex
 import shutil
 import signal
+import stat
 import tempfile
 import types
 import unittest
@@ -941,6 +942,26 @@ class MainResultTests(_MainTestCase):
         self.assertEqual(code, 2)
         self.assertEqual(out, "")
         self.assertIn("missing/out.json", err)
+        self.assertEqual(self.upstream.calls, [])
+        self.assert_cleaned_up()
+
+    def test_json_out_under_a_permission_denied_ancestor_is_2_before_the_upstream(self):
+        # 権限 0 のディレクトリ自身の stat は親 (self.repo.path) の権限で決まるので落ちない。
+        # 落ちるのは denied の「中」を探す段 (denied/sub の stat) で、denied 自身に search
+        # 権限が要るため。3.14.7 の pathlib is_dir() は権限エラーを握りつぶして False を返す
+        # ので、直す前の実装は resolved.parent.is_dir() が偽になり「親ディレクトリが無い」に
+        # 誤判定する (実測)。stat_or_none は判定不能を「無い」に丸めないので区別できる
+        denied = self.repo.path / "denied"
+        denied.mkdir()
+        self.addCleanup(os.chmod, denied, stat.S_IRWXU)
+        os.chmod(denied, 0)
+        code, out, err = self.run_main(
+            ["check", "--json-out", "denied/sub/out.json", "sub/file.py"], environ=self.keyed()
+        )
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertRegex(err, r"^jevlint: --json-out の保存先を確かめられない")
+        self.assertIn("denied/sub/out.json", err)
         self.assertEqual(self.upstream.calls, [])
         self.assert_cleaned_up()
 

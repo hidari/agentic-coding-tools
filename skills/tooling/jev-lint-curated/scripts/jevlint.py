@@ -41,6 +41,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -48,6 +49,7 @@ from pathlib import Path
 from typing import Callable, Mapping, NoReturn
 
 import jevlint_compat
+import jevlint_fs
 import jevlint_host
 import jevlint_result
 import jevlint_tree
@@ -289,14 +291,21 @@ def _check_out_path(path: Path, shown: str, expanded: jevlint_tree.Expanded) -> 
     """保存先 1 つを、symlink を解決した先で検査する。`shown` は利用者が書いた形のパス。
 
     展開の worktree と scratch の中は、抜けるときに消えるので拒否する。包含の判定は
-    `jevlint_tree.is_inside` (inode で見る) に任せる。
+    `jevlint_tree.is_inside` (inode で見る) に任せる。解決は `os.path.realpath` で行う
+    (`jevlint_tree.tmpdir_from_env` と同じ理由)。親ディレクトリと保存先自身の判定は
+    `jevlint_fs.stat_or_none` で行い、判定不能 (権限エラー等) は「無い」に丸めない。
     """
-    resolved = path.resolve()
+    resolved = Path(os.path.realpath(path))
     if any(jevlint_tree.is_inside(resolved, inside) for inside in (expanded.tree, expanded.scratch)):
         raise UsageError(f"--json-out の保存先が展開した一時ディレクトリの中にある: {shown!r}")
-    if not resolved.parent.is_dir():
+    try:
+        parent_stat = jevlint_fs.stat_or_none(resolved.parent)
+        target_stat = jevlint_fs.stat_or_none(resolved)
+    except OSError:
+        raise UsageError(f"--json-out の保存先を確かめられない: {shown!r}") from None
+    if parent_stat is None or not stat.S_ISDIR(parent_stat.st_mode):
         raise UsageError(f"--json-out の保存先の親ディレクトリが無い: {shown!r}")
-    if resolved.is_dir():
+    if target_stat is not None and stat.S_ISDIR(target_stat.st_mode):
         raise UsageError(f"--json-out の保存先がディレクトリ: {shown!r}")
 
 
