@@ -49,7 +49,7 @@ import jevlint_host
 import jevlint_result
 import jevlint_tree
 from test_jevlint_fs import deny_all_access
-from test_jevlint_tree import GitRepo, worktree_count
+from test_jevlint_tree import GitRepo, production_tmpdir, worktree_count
 
 HERE = Path(__file__).resolve().parent
 
@@ -756,6 +756,24 @@ class MainRejectionTests(_MainTestCase):
         self.assertEqual(code, 0)
         self.assertFalse(marker.exists())
 
+    def test_relative_tmpdir_is_2_for_check_and_review_and_nothing_is_made_under_cwd(self):
+        # compat と同じ規則 (MainCompatTests の相対の TMPDIR のテスト)。本番の形として os.environ の
+        # TMPDIR も同じ値にし、gettempdir のキャッシュ (tempfile.tempdir) を外して呼ぶ。
+        # cwd (setUp で base) の下に rel を作っておかないと、gettempdir は相対の候補を
+        # 飛ばすので退行を見られない
+        (self.base / "rel").mkdir()
+        environ = dict(self.environ, TMPDIR="rel")
+        for argv in (["check", "--dry-run", "sub/file.py"], ["review", "--dry-run", "--base", "HEAD"]):
+            with self.subTest(argv=argv):
+                with production_tmpdir("rel"):
+                    code, out, err = self.run_main(argv, environ=environ)
+                self.assertEqual(code, 2)
+                self.assertEqual(out, "")
+                self.assertIn("TMPDIR", err)
+                self.assertEqual(os.listdir(self.base / "rel"), [])
+                self.assertEqual(self.upstream.calls, [])
+                self.assertEqual(self.repo.worktree_count(), 1)
+
     def test_unresolvable_node_is_2_before_any_node_process(self):
         code, out, err = self.run_main(
             ["check", "--dry-run", "sub/file.py"], which=lambda name, path=None: None
@@ -1420,6 +1438,21 @@ class MainCompatTests(_CompatTestCase):
         code, _, _ = self.run_compat()
         self.assertEqual(code, 0)
         self.assertEqual(len(self.upstream.check_calls), 2)
+
+    def test_relative_tmpdir_is_2_and_nothing_is_made_under_cwd(self):
+        # compat はリポジトリを使わないので「置き場がリポジトリの中」の検査を持たない。
+        # 相対の TMPDIR を gettempdir に回すと cwd (消費側のリポジトリであることが多い) の
+        # 下に置き場ができるので、check / review と同じく相対そのものを拒否する
+        (self.base / "rel").mkdir()
+        self.environ["TMPDIR"] = "rel"
+        with production_tmpdir("rel"):
+            code, out, err = self.run_compat()
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("TMPDIR", err)
+        self.assertEqual(os.listdir(self.base / "rel"), [])
+        self.assertEqual(self.upstream.rules_calls, [])
+        self.assertEqual(self.upstream.check_calls, [])
 
     def test_malformed_version_is_2_before_any_child_process(self):
         for version in ("latest", "0.7", "v0.7.0"):
