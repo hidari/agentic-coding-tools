@@ -34,9 +34,9 @@
 `.gitattributes` が選ぶ textconv の driver はそこで起動しうる。この限界はこのモジュールでは
 扱わず、`jevlint.py` の `main` の docstring (SKILL.md が指す先) が文書化する。
 
-このモジュールは他の jevlint* モジュールを import しない。依存は入口 (`jevlint.py`)
-から下流へ一方向に流し、循環を作らないため。git を呼ぶ関数はすべて `env` を引数で
-受け取り、自分では組み立てない (組み立ては呼び出し側 `build_env` の責務)。
+他の jevlint* モジュールは、葉の `jevlint_fs` のほかは import しない。依存は入口
+(`jevlint.py`) から下流へ一方向に流し、循環を作らないため。git を呼ぶ関数はすべて `env` を
+引数で受け取り、自分では組み立てない (組み立ては呼び出し側 `build_env` の責務)。
 """
 
 from __future__ import annotations
@@ -45,12 +45,15 @@ import contextlib
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
+
+import jevlint_fs
 
 
 class TreeError(Exception):
@@ -445,14 +448,16 @@ def reject_sgconfig_in_ancestors(path: Path) -> None:
     上流は ast-grep を起動し、ast-grep は cwd と親ディレクトリから sgconfig を探して、
     `customLanguages` の動的ライブラリを読み込む。共有の一時ディレクトリには別の利用者も
     ファイルを置けるので、キーを使わない起動でも利用者の権限で任意のコードが走りうる。
-    上流を起動する子プロセスの cwd は解決済みの形 (macOS では `/var` が `/private/var`) に
-    なるので、与えられた形と解決した形の両方の祖先を見る。
+
+    どの祖先を見るか (与えられた表記と解決した表記) は `jevlint_fs.find_in_ancestors` が
+    持つ。判定不能 (権限エラー等) は「無い」に丸めず `TreeError` にする。
     """
-    ancestors = set(path.parents) | set(path.resolve().parents)
-    for ancestor in ancestors:
-        for name in _SGCONFIG_NAMES:
-            if (ancestor / name).exists():
-                raise TreeError(f"一時ディレクトリの祖先に {name} がある: {ancestor / name}")
+    try:
+        found = jevlint_fs.find_in_ancestors(path, _SGCONFIG_NAMES)
+    except OSError as error:
+        raise TreeError(f"一時ディレクトリの祖先を確認できない: {error}") from None
+    if found is not None:
+        raise TreeError(f"一時ディレクトリの祖先に {found.name} がある: {found}")
 
 
 def _discard_worktree(git: _QuietGit, root: Path, tree: Path) -> None:
@@ -488,27 +493,30 @@ def tmpdir_from_env(env: dict) -> Path:
     `env` の `TMPDIR` が空でない絶対パスならそれ、それ以外は `tempfile.gettempdir()`。
     `os.environ` ではなく `env` から読むのは、上流に渡す env と同じ値で置き場が決まるように
     し、テストが置き場を差し替えられるようにするため。空や相対の値を `mkdtemp(dir=...)` に
-    そのまま渡すと cwd の下に作られ、3.9 では返るパスも相対になる (実測: 3.9.6 は
-    `'jevlint-xxx'`、3.14.7 は cwd を前置した絶対パス)。相対のままだと `worktree add` は
-    `-C root` の root から、書き出しは cwd から解決して別の場所を指す。
+    そのまま渡すと cwd の下に作られ、3.11 までは返るパスも相対になる (実測: 3.9.6・3.11.15 は
+    相対のまま [`'jevlint-xxx'` の形]、3.12.12・3.14.7 は cwd を前置した絶対パス)。相対の
+    ままだと `worktree add` は `-C root` の root から、書き出しは cwd から解決して別の場所を
+    指す。
+
+    解決は `os.path.realpath` で行う (`Path.resolve()` を使わない理由は
+    `jevlint_fs.find_in_ancestors` の docstring が持つ)。realpath は symlink のループを
+    通り過ぎるので、ループは後段の `mkdtemp` が `OSError` にする。
     """
     candidate = env.get("TMPDIR", "")
-    try:
-        if candidate and os.path.isabs(candidate):
-            return Path(candidate).resolve()
-        # gettempdir は候補が 1 つも使えないと FileNotFoundError を投げる
-        return Path(tempfile.gettempdir()).resolve()
-    except (OSError, RuntimeError) as error:
-        # 3.9 の resolve() は symlink のループを RuntimeError にする (実測: 3.9.6。3.14.7 は
-        # 投げず、後の mkdtemp が OSError になる)
-        raise TreeError(f"一時ディレクトリの置き場を解決できない: {error}") from None
+    if not (candidate and os.path.isabs(candidate)):
+        try:
+            # gettempdir は候補が 1 つも使えないと FileNotFoundError を投げる
+            candidate = tempfile.gettempdir()
+        except OSError as error:
+            raise TreeError(f"一時ディレクトリの置き場を解決できない: {error}") from None
+    return Path(os.path.realpath(candidate))
 
 
 def is_inside(path: Path, directory: Path) -> bool:
     """`path` (解決した形で渡す) が `directory` そのものか、その下にあるか。
 
-    包含は inode で見る。大文字小文字を区別しないファイルシステムでは `resolve()` が
-    与えられた表記の大文字小文字を保つので (実測: APFS)、文字列の比較は `.../Repo` と
+    包含は inode で見る。大文字小文字を区別しないファイルシステムでは解決 (`os.path.realpath`)
+    が与えられた表記の大文字小文字を保つので (実測: APFS)、文字列の比較は `.../Repo` と
     `.../repo/sub` の包含を見落とす。まだ無い祖先は同じ inode を指しようがないので飛ばす。
     """
     for ancestor in (path, *path.parents):
@@ -578,12 +586,24 @@ def expanded_commit(root: Path, sha: str, env: dict) -> Iterator[Expanded]:
         materialize(root, sha, tree, env, hooks)
         for name in _SGCONFIG_NAMES:
             candidate = tree / name
+            try:
+                # materialize は 120000 (symlink) をリンク先の文字列を中身にした通常
+                # ファイルとして書き、160000 (submodule) は書かない (`_WRITTEN_MODES`)。
+                # そのため candidate の stat は ENOENT・通常ファイル・ディレクトリしか
+                # 返らず、コミットした symlink ループでもこの OSError の腕には実際の
+                # コミット内容から到達できない。テストは `jevlint_fs.stat_or_none` に
+                # PermissionError を注入してこの腕を pin する
+                candidate_stat = jevlint_fs.stat_or_none(candidate)
+            except OSError as error:
+                raise TreeError(f"{name} を確認できない: {candidate}: {error}") from None
+            if candidate_stat is None:
+                continue
             # コミットの `sgconfig.yml/x` は展開後にディレクトリになる。ast-grep が読む
             # のはファイルなので消す対象ではなく、`unlink()` も macOS では
             # PermissionError になる (実測)。消さずに拒否する
-            if candidate.is_dir():
+            if stat.S_ISDIR(candidate_stat.st_mode):
                 raise TreeError(f"コミットの {name} がディレクトリなので展開を拒否する")
-            if candidate.is_file():
+            if stat.S_ISREG(candidate_stat.st_mode):
                 try:
                     candidate.unlink()
                 except OSError as error:
@@ -621,14 +641,18 @@ def signals_as_exceptions() -> Iterator[None]:
 
 
 def count_suffix(tree: Path, paths: list, suffix: str) -> int:
-    """対象のパス (空なら `tree` 全体) の下にある、名前が `suffix` で終わるファイルの本数。"""
+    """対象のパス (空なら `tree` 全体) の下にある、名前が `suffix` で終わるファイルの本数。
+
+    `is_file()` ではなく `os.path.isfile` を使う。上流を呼んで課金した後の要約なので
+    止めない (判定不能は「無い」に丸めて数え続ける)。
+    """
     if not paths or "" in paths:
         targets = [tree]
     else:
         targets = [tree / path for path in paths]
     count = 0
     for target in targets:
-        if target.is_file():
+        if os.path.isfile(target):
             count += int(target.name.endswith(suffix))
             continue
         for _, _, filenames in os.walk(target):

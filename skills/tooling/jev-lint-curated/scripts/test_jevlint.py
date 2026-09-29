@@ -48,6 +48,7 @@ import jevlint
 import jevlint_host
 import jevlint_result
 import jevlint_tree
+from test_jevlint_fs import deny_all_access
 from test_jevlint_tree import GitRepo, worktree_count
 
 HERE = Path(__file__).resolve().parent
@@ -944,6 +945,64 @@ class MainResultTests(_MainTestCase):
         self.assertEqual(self.upstream.calls, [])
         self.assert_cleaned_up()
 
+    def test_json_out_under_a_permission_denied_ancestor_is_2_before_the_upstream(self):
+        # denied の中 (denied/sub) を stat させるため 2 段にする。親ディレクトリの有無を
+        # pathlib の is_dir() で見ると、3.14 では権限エラーが False に丸められて
+        # (jevlint_fs の docstring)「親ディレクトリが無い」と取り違える。確かめられない
+        # ことを「無い」と別の文面で返すことを見る
+        denied = self.repo.path / "denied"
+        denied.mkdir()
+        deny_all_access(self, denied)
+        code, out, err = self.run_main(
+            ["check", "--json-out", "denied/sub/out.json", "sub/file.py"], environ=self.keyed()
+        )
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertRegex(err, r"^jevlint: --json-out の保存先を確かめられない")
+        self.assertIn("denied/sub/out.json", err)
+        # OSError の理由 (EACCES) がメッセージに出ること。出ないと、権限と symlink の
+        # ループ (ELOOP) のどちらで確かめられなかったのかを利用者が区別できない
+        self.assertIn("Permission denied", err)
+        self.assertEqual(self.upstream.calls, [])
+        self.assert_cleaned_up()
+
+    def test_json_out_directly_under_a_permission_denied_directory_is_2_before_the_upstream(
+        self,
+    ):
+        # denied 自身の stat (`_check_out_path` の parent_stat) は親の権限で決まり落ちない。
+        # 落ちるのは保存先自身 (denied/out.json) の stat (`target_stat`)。上のテストは
+        # parent_stat 側の腕しか通さないので、これは同じ try の target_stat 側の腕を通す
+        denied = self.repo.path / "denied"
+        denied.mkdir()
+        deny_all_access(self, denied)
+        code, out, err = self.run_main(
+            ["check", "--json-out", "denied/out.json", "sub/file.py"], environ=self.keyed()
+        )
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertRegex(err, r"^jevlint: --json-out の保存先を確かめられない")
+        self.assertIn("denied/out.json", err)
+        self.assertEqual(self.upstream.calls, [])
+        self.assert_cleaned_up()
+
+    def test_json_out_through_a_symlink_loop_is_2_before_the_upstream(self):
+        # `os.path.realpath` は symlink のループでも投げない (jevlint_fs.find_in_ancestors の
+        # docstring)。resolved.parent の stat が ELOOP の OSError になり、
+        # `_check_out_path` の try がそれを拾う。`Path.resolve()` に戻すと 3.9.6 では
+        # resolve() 自身が RuntimeError を投げて main() の catch-all に落ち、この文言には
+        # ならない (3.14 は resolve() も投げないので、同じ OSError の腕で拾われて変わらない)
+        loop = self.repo.path / "loop"
+        loop.symlink_to(loop)
+        code, out, err = self.run_main(
+            ["check", "--json-out", "loop/out.json", "sub/file.py"], environ=self.keyed()
+        )
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertRegex(err, r"^jevlint: --json-out の保存先を確かめられない")
+        self.assertIn("loop/out.json", err)
+        self.assertEqual(self.upstream.calls, [])
+        self.assert_cleaned_up()
+
     def test_unwritable_record_path_is_2_before_the_upstream_unless_dry_run(self):
         (self.repo.path / "out.json.record.json").mkdir()
         code, out, err = self.run_main(
@@ -1465,6 +1524,97 @@ class Py39SourceTests(unittest.TestCase):
                     elif isinstance(node, ast.ImportFrom):
                         imported.add(node.module or "")
                 self.assertNotIn("tomllib", imported)
+
+
+_PATHLIB_PREDICATE_NAMES = {"exists", "is_file", "is_dir", "is_symlink", "resolve"}
+
+
+def _is_os_path_receiver(node: ast.expr) -> bool:
+    """受け手が `os.path` の直接チェーン (Attribute(value=Name('os'), attr='path')) かを見る。
+
+    `from os import path` や `import os.path as osp` はこの形に当たらないため
+    判定から漏れるが、漏れた場合は述語呼び出しとして検出される側 (over-detection)
+    に倒れる。見逃し (false negative) より誤検出 (false positive) を選ぶ設計で、
+    この 2 形まで許可リストへ広げてはいない。
+    """
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "path"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "os"
+    )
+
+
+def find_pathlib_predicate_references(tree: ast.AST) -> list[str]:
+    """版に依存する pathlib 述語の参照 (呼び出さない属性参照を含む、os.path 受け手を除く) の attr 名を集める。
+
+    述語と `Path.resolve()` の版差は `jevlint_fs` の docstring と
+    `jevlint_fs.find_in_ancestors` の docstring が持つ。
+
+    見るのは ast.Call ではなく ast.Attribute そのもの。`filter(Path.is_file, xs)` の
+    ように述語を呼び出さず関数オブジェクトとして渡す形は、ast.Call を条件にすると
+    見えない。`p.is_file()` のような通常の呼び出しも `Call(func=Attribute(...))` の
+    内側に同じ Attribute ノードを持つので、Attribute だけを見ても検出は後退しない。
+    `getattr(p, "is_dir")()` は属性名が文字列リテラルで ast.Attribute にならないため、
+    この検出の外 (仕様の外、許容)。
+    """
+    found = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr in _PATHLIB_PREDICATE_NAMES
+            and not _is_os_path_receiver(node.value)
+        ):
+            found.append(node.attr)
+    return found
+
+
+class PathlibPredicateBan(unittest.TestCase):
+    """製品モジュールでの版依存 pathlib 述語の参照 (呼び出しに限らない) を禁じる。
+
+    対象は test_*.py を除く jevlint*.py (`jevlint*.py` の glob に test_jevlint*.py は
+    当たらない)。製品モジュールが pathlib の述語へ戻ることを防ぐ pin で、製品は
+    `os.path` の関数と `jevlint_fs` を使う。
+    """
+
+    def test_no_pathlib_predicates_in_product_modules(self):
+        paths = sorted(HERE.glob("jevlint*.py"))
+        self.assertTrue(paths, "対象の jevlint*.py が見つからない")
+        violations = []
+        for path in paths:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            hits = find_pathlib_predicate_references(tree)
+            if hits:
+                violations.append(f"{path.name}: {hits}")
+        self.assertEqual(violations, [])
+
+    def test_synthetic_predicate_call_is_detected(self):
+        # 対照 (陽性): 5 つの述語すべてが検出される。名前を _PATHLIB_PREDICATE_NAMES
+        # から動的に生成せず直書きするのは、そちらから 1 つ削っても対照側が一緒に
+        # 縮んで dead pin になるのを防ぐため
+        tree = ast.parse(
+            "p.exists()\n"
+            "p.is_file()\n"
+            "p.is_dir()\n"
+            "p.is_symlink()\n"
+            "p.resolve()\n"
+        )
+        self.assertEqual(
+            find_pathlib_predicate_references(tree),
+            ["exists", "is_file", "is_dir", "is_symlink", "resolve"],
+        )
+
+    def test_os_path_receiver_is_not_detected(self):
+        # 対照 (陰性): os.path.isfile は名前自体が対象外、os.path.exists は
+        # 名前が対象でも受け手が os.path なので除外される
+        tree = ast.parse("os.path.isfile(p)\nos.path.exists(p)\n")
+        self.assertEqual(find_pathlib_predicate_references(tree), [])
+
+    def test_synthetic_uncalled_predicate_reference_is_detected(self):
+        # 対照 (陽性、迂回対策): 呼び出さない参照も検出する (理由は
+        # find_pathlib_predicate_references の docstring)
+        tree = ast.parse("filter(Path.is_file, xs)\n")
+        self.assertEqual(find_pathlib_predicate_references(tree), ["is_file"])
 
 
 if __name__ == "__main__":

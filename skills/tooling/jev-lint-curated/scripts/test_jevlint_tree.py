@@ -35,6 +35,7 @@ from pathlib import Path
 from unittest import mock
 
 import jevlint_tree
+from test_jevlint_fs import deny_all_access
 
 # `GIT_*` を落とした環境。jevlint_tree とこのテストは jevlint_host に依存しない (依存は
 # 入口から下流への一方向) ので、`jevlint_host.build_env` を使わず env を自前で組み立てる。
@@ -380,6 +381,42 @@ class ReadonlyGitTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     jevlint_tree._git_readonly(repo.path, args, ENV)
         self.assertEqual(0, jevlint_tree._git_readonly(repo.path, ["rev-parse", "HEAD"], ENV).returncode)
+
+
+class RejectSgconfigInAncestorsTests(unittest.TestCase):
+    """`reject_sgconfig_in_ancestors` 単体。`expanded_commit` 越しではなく直接呼ぶ。
+
+    どの祖先を見るか (与えられた表記と解決した表記、順序、確かめられないときに投げること) は
+    test_jevlint_fs.py の FindInAncestorsTests が持つ。ここでは結果を TreeError の文面へ
+    写す形だけを見る。文面まで見るのは、どの腕が止めたかを pin するため。型だけ
+    (assertRaises) だと、別の腕が拾うようになっても緑のまま気づけない。
+    """
+
+    def setUp(self):
+        self.outer = Path(tempfile.mkdtemp(prefix="jevlint-sgconfig-"))
+        self.addCleanup(lambda: shutil.rmtree(self.outer, ignore_errors=True))
+
+    def test_unverifiable_ancestor_becomes_a_tree_error(self):
+        # denied の中を stat させるため、path は denied の 2 段下に置く
+        denied = self.outer / "denied"
+        denied.mkdir()
+        deny_all_access(self, denied)
+        with self.assertRaisesRegex(
+            jevlint_tree.TreeError, "^一時ディレクトリの祖先を確認できない: .*Permission denied"
+        ):
+            jevlint_tree.reject_sgconfig_in_ancestors(denied / "sub" / "leaf")
+
+    def test_sgconfig_in_an_ancestor_is_rejected_by_its_name(self):
+        # 2 つ目の名前 (sgconfig.yaml) を置き、見つかった名前が文面に出ることを見る
+        (self.outer / "sgconfig.yaml").write_text("ruleDirs: []\n", encoding="utf-8")
+        with self.assertRaisesRegex(
+            jevlint_tree.TreeError, r"^一時ディレクトリの祖先に sgconfig\.yaml がある: "
+        ):
+            jevlint_tree.reject_sgconfig_in_ancestors(self.outer / "t" / "leaf")
+
+    def test_no_sgconfig_in_ancestors_passes(self):
+        # 対照 (陰性): 上の 2 本と同じ置き場で、何も無ければ拒否しない
+        self.assertIsNone(jevlint_tree.reject_sgconfig_in_ancestors(self.outer / "t" / "leaf"))
 
 
 class ValidateTreePathsTests(unittest.TestCase):
@@ -922,16 +959,27 @@ class ExpandedCommitTests(unittest.TestCase):
         self.assertEqual(1, repo.worktree_count())
 
     def test_tmpdir_through_a_symlink_loop_is_a_tree_error(self):
-        # 3.9 の `Path.resolve()` は symlink のループを RuntimeError にする (実測: 3.9.6。
-        # 3.14.7 は投げず、後の mkdtemp が OSError になる)。どちらも TreeError に落とす
+        # `tmpdir_from_env` の realpath はループを通り過ぎ (jevlint_fs.find_in_ancestors の
+        # docstring)、後段の `mkdtemp` が OSError (ELOOP) になる
         outer = Path(tempfile.mkdtemp(prefix="jevlint-loop-"))
         self.addCleanup(lambda: shutil.rmtree(outer, ignore_errors=True))
         loop = outer / "loop"
         os.symlink(str(loop), loop)
-        with self.assertRaises(jevlint_tree.TreeError):
+        with self.assertRaisesRegex(jevlint_tree.TreeError, "^一時ディレクトリを作れない"):
             with jevlint_tree.expanded_commit(self.repo.path, self.sha, dict(ENV, TMPDIR=str(loop / "x"))):
                 self.fail("symlink のループを置き場にした展開が通った")
         self.assertEqual(1, self.repo.worktree_count())
+
+    def test_no_usable_system_temp_dir_is_a_tree_error(self):
+        # gettempdir はプロセスで結果を一度だけ決めてキャッシュするので、候補が 1 つも
+        # 使えない状態は実物では作れない。注入で作る
+        with mock.patch(
+            "jevlint_tree.tempfile.gettempdir", side_effect=FileNotFoundError("none")
+        ):
+            with self.assertRaisesRegex(
+                jevlint_tree.TreeError, "^一時ディレクトリの置き場を解決できない"
+            ):
+                jevlint_tree.tmpdir_from_env({})
 
     def test_missing_blob_during_expansion_is_a_tree_error_and_tears_down(self):
         blob = self.repo.hash_blob(b"x\n")
@@ -962,6 +1010,27 @@ class ExpandedCommitTests(unittest.TestCase):
             with jevlint_tree.expanded_commit(self.repo.path, sha, env):
                 self.fail("sgconfig.yml がディレクトリのコミットの展開が通った")
         self.assertIn("sgconfig.yml", str(cm.exception))
+        self._assert_torn_down_into(base)
+
+    def test_permission_error_on_the_post_materialize_sgconfig_stat_is_a_tree_error(self):
+        # この OSError の腕にはコミット内容から到達できない (理由は expanded_commit の
+        # この stat に付いたコメント) ので、`jevlint_fs.stat_or_none` に注入して pin する
+        original_stat_or_none = jevlint_tree.jevlint_fs.stat_or_none
+
+        def flaky(path):
+            # `reject_sgconfig_in_ancestors` も (`jevlint_fs.find_in_ancestors` を通して)
+            # 同じ関数を同じベース名 (sgconfig.yml) で呼ぶので、注入は worktree 直下の candidate (tree/sgconfig.yml) だけに絞る。
+            # それ以外は本物の stat_or_none にそのまま委ねる
+            if path.parts[-2:] == ("tree", "sgconfig.yml"):
+                raise PermissionError("denied")
+            return original_stat_or_none(path)
+
+        base, env = self._private_base()
+        with mock.patch("jevlint_tree.jevlint_fs.stat_or_none", side_effect=flaky):
+            with self.assertRaises(jevlint_tree.TreeError) as cm:
+                with jevlint_tree.expanded_commit(self.repo.path, self.sha, env):
+                    self.fail("sgconfig.yml の stat が権限エラーの展開が通った")
+        self.assertIn("sgconfig.yml を確認できない", str(cm.exception))
         self._assert_torn_down_into(base)
 
     def test_failing_worktree_add_is_a_tree_error_and_leaves_nothing_behind(self):
@@ -1374,6 +1443,18 @@ class CountSuffixTests(unittest.TestCase):
         self.assertEqual(1, jevlint_tree.count_suffix(self.tree, ["a.mbt"], ".mbt"))
         self.assertEqual(0, jevlint_tree.count_suffix(self.tree, ["sub/c.py"], ".mbt"))
         self.assertEqual(2, jevlint_tree.count_suffix(self.tree, ["sub", "a.mbt"], ".mbt"))
+
+    def test_permission_denied_file_target_does_not_raise_and_counts_zero_for_it(self):
+        # denied の中を stat させるため、対象は denied 自身ではなく denied/x.mbt にする
+        # (denied 自身の stat は親の権限で決まり、落ちない)。`os.path.isfile` は判定不能を
+        # 「無い」に丸めて数え続ける。上流を呼んで課金した後の要約なので止めない
+        denied = self.tree / "denied"
+        denied.mkdir()
+        (denied / "x.mbt").write_text("", encoding="utf-8")
+        deny_all_access(self, denied)
+        self.assertEqual(
+            1, jevlint_tree.count_suffix(self.tree, ["denied/x.mbt", "a.mbt"], ".mbt")
+        )
 
 
 if __name__ == "__main__":

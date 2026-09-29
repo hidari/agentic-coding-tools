@@ -41,6 +41,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -48,6 +49,7 @@ from pathlib import Path
 from typing import Callable, Mapping, NoReturn
 
 import jevlint_compat
+import jevlint_fs
 import jevlint_host
 import jevlint_result
 import jevlint_tree
@@ -289,14 +291,22 @@ def _check_out_path(path: Path, shown: str, expanded: jevlint_tree.Expanded) -> 
     """保存先 1 つを、symlink を解決した先で検査する。`shown` は利用者が書いた形のパス。
 
     展開の worktree と scratch の中は、抜けるときに消えるので拒否する。包含の判定は
-    `jevlint_tree.is_inside` (inode で見る) に任せる。
+    `jevlint_tree.is_inside` (inode で見る) に任せる。解決は `os.path.realpath` で行う
+    (`Path.resolve()` を使わない理由は `jevlint_fs.find_in_ancestors` の docstring が持つ)。
+    親ディレクトリと保存先自身の判定は `jevlint_fs.stat_or_none` で行い、判定不能
+    (権限エラー等) は「無い」に丸めない。
     """
-    resolved = path.resolve()
+    resolved = Path(os.path.realpath(path))
     if any(jevlint_tree.is_inside(resolved, inside) for inside in (expanded.tree, expanded.scratch)):
         raise UsageError(f"--json-out の保存先が展開した一時ディレクトリの中にある: {shown!r}")
-    if not resolved.parent.is_dir():
+    try:
+        parent_stat = jevlint_fs.stat_or_none(resolved.parent)
+        target_stat = jevlint_fs.stat_or_none(resolved)
+    except OSError as error:
+        raise UsageError(f"--json-out の保存先を確かめられない: {shown!r}: {error}") from None
+    if parent_stat is None or not stat.S_ISDIR(parent_stat.st_mode):
         raise UsageError(f"--json-out の保存先の親ディレクトリが無い: {shown!r}")
-    if resolved.is_dir():
+    if target_stat is not None and stat.S_ISDIR(target_stat.st_mode):
         raise UsageError(f"--json-out の保存先がディレクトリ: {shown!r}")
 
 
@@ -308,8 +318,8 @@ def _json_out_targets(
     `<path>` は main の `cwd` からの相対で解釈する。記録は `<path>.record.json` で、名前は
     利用者が書いたパスから作る (`<path>` が symlink でも、その解決先の名前からは作らない)。
     上流の起動は課金されるので、書けない保存先で起動の後に失敗しないよう、どちらの保存先も
-    親ディレクトリがあることとディレクトリでないことをここで確かめる (権限までは見ない)。
-    `--dry-run` は記録を書かないので、記録の保存先は見ない。
+    親ディレクトリがあることとディレクトリでないことをここで確かめる (書き込み権限までは
+    見ない)。`--dry-run` は記録を書かないので、記録の保存先は見ない。
     """
     given = Path(text)
     if not given.is_absolute():

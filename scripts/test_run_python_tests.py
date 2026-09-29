@@ -11,6 +11,7 @@ main() へ実リポジトリの ROOT を渡すと、この自己テスト自身�
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import io
 import os
@@ -100,7 +101,7 @@ def run_main(root: Path, argv: list[str] | None = None) -> tuple[int, str]:
 
 class Discover(unittest.TestCase):
     def test_new_top_level_directory_is_scanned(self):
-        # 全体走査の pin。ディレクトリ列挙 (旧 SEARCH_DIRS) 方式へ戻す変異は、
+        # 全体走査の pin。ディレクトリ列挙方式へ戻す変異は、
         # 列挙に無いトップレベルディレクトリを見失ってここが赤になる
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -357,6 +358,86 @@ class ChildEnvironment(unittest.TestCase):
         # 実行 ID まで見る。子が起動に失敗しても「違反なし」の形で緑に見える
         self.assertTrue(ok, summary)
         self.assertEqual(["test_probe.Probe.test_no_git_variables_are_inherited"], ids)
+
+
+_VERSION_BRANCH_NAMES = {"version_info", "hexversion"}
+
+
+def find_version_references(tree: ast.AST) -> list[str]:
+    """`sys.version_info` / `sys.hexversion` を名前に持つ参照を AST で集める。
+
+    文字列や docstring はただの ast.Constant で ast.Attribute / ast.Name には
+    ならないため対象に入らない。見るのは属性名 (`sys.version_info`)・識別子名
+    (`from sys import *` の後の `version_info` など)・`from sys import` の import 文の 3 つ。
+
+    import 文そのものを見るのは、`from sys import version_info as vi` が元の名前を
+    残さない束縛を作り、以降の参照が `vi` という ast.Name にしかならないため。別名の
+    有無で分けずに import 文を数えるので、`from sys import version_info` の後の参照は
+    import 文と Name の両方で数えられる。件数に意味は無く、見るのは空かどうか。
+    """
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in _VERSION_BRANCH_NAMES:
+            found.append(node.attr)
+        elif isinstance(node, ast.Name) and node.id in _VERSION_BRANCH_NAMES:
+            found.append(node.id)
+        elif isinstance(node, ast.ImportFrom) and node.module == "sys":
+            for alias in node.names:
+                if alias.name in _VERSION_BRANCH_NAMES:
+                    found.append(alias.name)
+    return found
+
+
+class VersionBranchBan(unittest.TestCase):
+    """`sys.version_info` / `sys.hexversion` によるバージョン分岐をリポジトリ全体で禁じる。
+
+    版で通る経路が割れると、その経路は実行した interpreter 側でしか通らず
+    manifest の実行 ID 集合には現れない (run-python-tests.py の docstring が持つ
+    限界)。`sys.version_info` / `sys.hexversion` で明示的に分ける形は禁じる
+    (stdlib の挙動差で暗黙に分かれる経路 [例: except PermissionError の腕] は見ない)。
+    """
+
+    def test_no_version_references_in_repository(self):
+        paths = [
+            p for p in ROOT.rglob("*.py") if not runner.SKIP_DIRS & set(p.relative_to(ROOT).parts)
+        ]
+        self.assertTrue(paths, "*.py が 1 つも見つからない")
+        violations = []
+        for path in paths:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            hits = find_version_references(tree)
+            if hits:
+                violations.append(f"{path.relative_to(ROOT).as_posix()}: {hits}")
+        self.assertEqual(violations, [])
+
+    def test_synthetic_version_check_is_detected(self):
+        # 対照 (陽性): sys.version_info への実参照は Attribute として検出される
+        tree = ast.parse("import sys\nif sys.version_info >= (3, 13):\n    pass\n")
+        self.assertEqual(find_version_references(tree), ["version_info"])
+
+    def test_synthetic_by_name_version_check_is_detected(self):
+        # 対照 (陽性、Name 分岐): `from sys import version_info` の形は
+        # 参照時に Attribute ではなく Name になる。import 文と Name の参照で 2 件。
+        # Name 分岐 (find_version_references の elif) を削除すると 1 件に減って赤になる
+        tree = ast.parse("from sys import version_info\nif version_info >= (3, 13):\n    pass\n")
+        self.assertEqual(find_version_references(tree), ["version_info", "version_info"])
+
+    def test_string_mention_is_not_detected(self):
+        # 対照 (陰性): 文字列中の言及は Constant であって Attribute/Name ではない
+        tree = ast.parse('s = "sys.version_info"\n')
+        self.assertEqual(find_version_references(tree), [])
+
+    def test_synthetic_aliased_import_is_detected(self):
+        # 対照 (陽性、迂回対策): 別名を付けた import (理由は find_version_references の
+        # docstring)
+        tree = ast.parse("from sys import version_info as vi\nif vi >= (3, 13):\n    pass\n")
+        self.assertEqual(find_version_references(tree), ["version_info"])
+
+    def test_unaliased_import_alone_is_detected(self):
+        # 対照 (陽性、ImportFrom 分岐): 別名の有無によらず import 文そのものを数える。
+        # 別名付きだけを数える形に戻すと 0 件になって赤になる
+        tree = ast.parse("from sys import version_info\n")
+        self.assertEqual(find_version_references(tree), ["version_info"])
 
 
 if __name__ == "__main__":
