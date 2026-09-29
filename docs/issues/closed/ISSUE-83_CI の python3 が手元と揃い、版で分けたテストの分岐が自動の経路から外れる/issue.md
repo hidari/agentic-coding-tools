@@ -29,7 +29,7 @@ status: closed
 ## タスク
 
 - [x] 3.13 未満の分岐を自動の経路へ戻すかと、戻し方を決める。候補は、手元の pre-commit で別の版の python3 でもテストを回す、CI に 24.04 の job を残す、など。CI に `setup-python` を置かない方針と CI の費用との兼ね合いも含めて決める
-- [x] `sys.version_info` で期待値を分けたテストが 0 件であることを検査で固定し、残した腕を外すと CI と手元のどちらの版でも赤になることを、変異注入で示す
+- [x] `sys.version_info` で期待値を分けたテストが 0 件であることを検査で固定し、残した腕を外すと手元で測った 3.14.7 と 3.9.6 の両方で赤になることを、変異注入で示す (CI の 3.12 での結果は、この変更の PR の CI が最初の測定)
 
 ## 結果 (2026-09-29)
 
@@ -37,33 +37,43 @@ status: closed
 
 変えたこと:
 
-- 葉のモジュール `jevlint_fs.py` に `stat_or_none` を置いた。無いとき (FileNotFoundError・NotADirectoryError・ValueError) だけ None を返し、ほかの OSError は投げる。確かめられないときに止める場所 (host の再利用、pnpm-workspace.yaml と sgconfig の祖先、展開した木の sgconfig、`--json-out` の保存先) はこれを使う。`count_suffix` だけは上流を呼んで課金した後の要約なので、`os.path.isfile` で止めない
-- パスの解決は `os.path.realpath` にし、`Path.resolve()` の RuntimeError の腕を消した。symlink を通った祖先が解決の後にしか見えない形を、pnpm-workspace.yaml と sgconfig の両方でテストが押さえる
-- 読めない host に対する `host_reusable` は、どの版でも HostError になった (3.13 以上では False から変わった)。確かめられないときの文面は `一時ディレクトリの祖先を確認できない` (sgconfig の祖先) と `--json-out の保存先を確かめられない` (OS のエラーを添える) が加わった
-- 残した腕は、実物の条件 (chmod 0、symlink のループ、symlink を通った祖先) で全版から踏み、腕ごとの文面を pin した。実物では作れない 2 つの条件 (gettempdir が使える候補を持たない、展開した木の sgconfig を stat できない) だけは注入で作った
+- 葉のモジュール `jevlint_fs.py` に `stat_or_none` を置いた。無いとき (FileNotFoundError・NotADirectoryError・ValueError) だけ None を返し、ほかの OSError は投げる。確かめられないときに止める場所 (host の再利用、既存の host を退避する `_replace_host_atomically`、pnpm-workspace.yaml と sgconfig の祖先、展開した木の sgconfig、`--json-out` の保存先) はこれを使う。`count_suffix` は上流を呼んで課金した後の要約なので、`os.path.isfile` で止めない。包含を見る `jevlint_tree.is_inside` も `os.path.samefile` の OSError を飛ばし、止めない
+- 祖先の検査 (pnpm-workspace.yaml と sgconfig) は `jevlint_fs.find_in_ancestors` にまとめた。与えられた表記の祖先と `os.path.realpath` で解決した表記の祖先を、それぞれ近い順に見て、確かめられない候補の OSError はそのまま投げる。呼ぶ側は OSError を「確認できない」に、当たりを「がある」に写すだけにした
+- パスの解決は `os.path.realpath` にし、`Path.resolve()` の RuntimeError の腕を消した。symlink を通った祖先が解決の後にしか見えない形は、`test_jevlint_fs.py` の `FindInAncestorsTests` が押さえる
+- 読めない host に対する `host_reusable` は、測った 3.14.7 と 3.9.6 の両方で HostError になった (3.14 では False から変わった。3.13 は未測定)。確かめられないときの文面は `一時ディレクトリの祖先を確認できない` (sgconfig の祖先) と `--json-out の保存先を確かめられない` (OS のエラーを添える) が加わった
+- 残した腕は、実物の条件 (chmod 0、symlink のループ、symlink を通った祖先) で 3.14.7 と 3.9.6 から踏み、腕ごとの文面を pin した。実物では作れない 2 つの条件 (gettempdir が使える候補を持たない、展開した木の sgconfig を stat できない) だけは注入で作った
 - `scripts/test_run_python_tests.py` の VersionBranchBan が、リポジトリ全体で `sys.version_info` / `sys.hexversion` の明示的な参照 (別名の import を含む) を禁じる。`test_jevlint.py` の PathlibPredicateBan が、jev-lint-curated の製品モジュールで pathlib の 5 つの述語 (`exists` / `is_file` / `is_dir` / `is_symlink` / `resolve`) の参照を禁じる。どちらも stdlib の挙動差で暗黙に分かれる経路は見ない
 
-検証 (0514f5e):
+検証 (7ef43cb):
 
-- 3.14.7: `scripts/run-python-tests.py` が 17 ファイル / 1067 件で manifest と一致し、rc=0
-- 3.9.6 (`/usr/bin/python3`): jev-lint-curated の 6 ファイル 315 件と `scripts/test_run_python_tests.py` の 26 件が OK。リポジトリ全体の runner は、この変更と関係のない test_winvm / test_macvm が `enterContext` (3.11+) で落ちるので 3.9.6 では回していない
-- 3.12 系を自動で走らせるのは、この PR の CI の python-tests (ubuntu-latest の 3.12) だけで、Linux での最初の実行もそこになる
+- 3.14.7: `scripts/run-python-tests.py` が 17 ファイル / 1073 件で manifest と一致し、rc=0
+- 3.9.6 (`/usr/bin/python3`): jev-lint-curated の 6 ファイル 321 件と `scripts/test_run_python_tests.py` の 26 件が OK。リポジトリ全体の runner は、この変更と関係のない test_winvm / test_macvm が `enterContext` (3.11+) で落ちるので 3.9.6 では回していない
+- 3.12 系を自動で走らせるのは、この変更の PR の CI の python-tests (ubuntu-latest の 3.12) だけで、Linux での最初の実行もそこになる
 
-変異注入 (`git archive 0514f5e` を展開した隔離コピー、非 root): 次の 16 の変異は、どれも 3.14.7 と 3.9.6 の両方で赤になり、戻すと両方で緑になった。
+変異注入 (`git archive 7ef43cb` を展開した隔離コピー、uid 501 の非 root): 変異を 1 つずつ当て、製品コードの変異は jev-lint-curated のテスト 6 モジュールすべてを、テストの検出関数の変異はそのモジュールを、3.14.7 と 3.9.6 で走らせた。次の 23 の変異は、どれも両方の版で赤になった。各変異の後で対象ファイルを元のバイト列へ戻し、全変異の後に全モジュールを両方の版で走らせて緑を確かめた。どの実行でもモジュールごとのテストの件数は変異の前と同じだった。版で失敗の集合 (テスト名と FAIL / ERROR の別) が割れたのは N15 だけである。
 
-- M1 `host_reusable` の stat の OSError を False に丸める → `test_permission_denied_host_directory`
-- M2 `_reject_pnpm_workspace_ancestor` から解決後の祖先を落とす → `test_pnpm_workspace_ancestor_found_only_via_realpath_is_rejected`
-- M3 同じ関数の OSError の腕を握りつぶす → `test_permission_denied_ancestor_becomes_hosterror`
-- M4 `stat_or_none` が PermissionError も None にする → `test_permission_denied_raises`
-- M5 `tmpdir_from_env` の gettempdir の OSError を握りつぶす → `test_no_usable_system_temp_dir_is_a_tree_error`
-- M6 `reject_sgconfig_in_ancestors` から解決後の祖先を落とす → RejectSgconfigInAncestorsTests の symlink を通った祖先のテスト
-- M7 同じ関数の OSError の腕を握りつぶす → RejectSgconfigInAncestorsTests の権限のテスト
-- M8 `expanded_commit` の sgconfig の OSError の腕を握りつぶす → 注入のテスト
-- M9 `count_suffix` を fail-closed にする → CountSuffixTests の権限のテスト
-- M10 `_check_out_path` の realpath を `resolve()` に戻す → 3.14.7 では PathlibPredicateBan、3.9.6 では symlink のループの `--json-out` のテスト
-- M11 `_check_out_path` の OSError の腕を握りつぶす → `--json-out` の権限のテスト
-- M12〜M14 VersionBranchBan の検出から属性・名前・別名の import をそれぞれ外す → 対応する陽性の対照
-- M15〜M16 PathlibPredicateBan から `resolve` を外す、呼び出さない参照を見なくする → 対応する陽性の対照
+- N1 `host_reusable` の stat の OSError を False に丸める → `test_permission_denied_host_directory`
+- N2 `stat_or_none` が PermissionError も None にする → `test_permission_denied_raises`、`FindInAncestorsTests.test_permission_denied_ancestor_raises`、`test_permission_denied_host_directory`、`test_unverifiable_ancestor_becomes_a_tree_error`、`--json-out` の権限の 2 本
+- N3 `find_in_ancestors` から解決した表記の祖先を外す → `test_found_only_in_an_ancestor_of_the_resolved_notation`
+- N4 `find_in_ancestors` から与えられた表記の祖先を外す → `test_found_only_in_an_ancestor_of_the_given_notation`
+- N5 `find_in_ancestors` の中で候補の OSError を握りつぶす → `FindInAncestorsTests` の権限とループの 2 本、`test_symlink_loop_in_cache_path_becomes_hosterror`、`test_unverifiable_ancestor_becomes_a_tree_error`
+- N6 `find_in_ancestors` の祖先を遠い順に回す → `test_the_nearest_ancestor_of_the_given_notation_comes_first`
+- N7 `find_in_ancestors` が最初の名前だけを見る → `test_every_name_is_looked_for`、`test_sgconfig_in_an_ancestor_is_rejected_by_its_name`
+- N8 `_reject_pnpm_workspace_ancestor` が OSError を HostError に写さない → `test_symlink_loop_in_cache_path_becomes_hosterror` (ERROR)
+- N9 `_reject_pnpm_workspace_ancestor` が当たりを拒否しない → `test_pnpm_workspace_ancestor_is_rejected`
+- N10 `reject_sgconfig_in_ancestors` が OSError を TreeError に写さない → `test_unverifiable_ancestor_becomes_a_tree_error` (ERROR)
+- N11 `reject_sgconfig_in_ancestors` が当たりを拒否しない → `test_sgconfig_in_an_ancestor_is_rejected_by_its_name`、`expanded_commit` 越しの 2 本 (`test_rejects_when_an_ancestor_of_the_tree_holds_sgconfig`、`test_failure_before_registration_leaves_other_stale_worktrees_alone`)、main の経路の `test_sgconfig_above_the_scratch_is_2_before_any_config_is_loaded`
+- N12 `tmpdir_from_env` の gettempdir の OSError を握りつぶす → `test_no_usable_system_temp_dir_is_a_tree_error`
+- N13 `expanded_commit` の展開後の sgconfig の OSError の腕を握りつぶす → `test_permission_error_on_the_post_materialize_sgconfig_stat_is_a_tree_error`
+- N14 `count_suffix` を fail-closed にする → `test_permission_denied_file_target_does_not_raise_and_counts_zero_for_it` (ERROR)
+- N15 `_check_out_path` の realpath を `resolve()` に戻す → 3.14.7 では PathlibPredicateBan の `test_no_pathlib_predicates_in_product_modules` だけ、3.9.6 ではそれに加えて `test_json_out_through_a_symlink_loop_is_2_before_the_upstream`。3.14.7 だけで回すと、この変異を捕まえるのは禁止のテストだけになる
+- N16 `_check_out_path` の OSError の腕を握りつぶす → `--json-out` の権限の 2 本と symlink のループの 1 本
+- N17 `_replace_host_atomically` が既存の host を退避しない → `test_version_mismatch_rebuilds_host` (ERROR)
+- N18〜N20 VersionBranchBan の検出から属性・名前・import 文の分岐をそれぞれ外す → 対応する陽性の対照 (import 文の分岐を外すと、名前の対照と別名なしの import の対照も落ちる)
+- N21 VersionBranchBan が import 文を別名付きのときだけ数える → `test_synthetic_by_name_version_check_is_detected`、`test_unaliased_import_alone_is_detected`
+- N22〜N23 PathlibPredicateBan から `resolve` を外す、呼び出さない参照を見なくする → 対応する陽性の対照
+
+祖先の検査の腕のうち、解決した表記の祖先 (N3)・与えられた表記の祖先 (N4)・順序 (N6) を捕まえるのは `FindInAncestorsTests` だけで、呼ぶ側のテストが持つのは写し (N8・N10) と拒否 (N9・N11) の文面の pin である。N5 で host のテストが赤になるのは接頭辞の文面を pin しているからである。そのテストの形 (host の経路そのものに symlink のループがある) では、祖先の検査が OSError を握っても、後に続く `host_reusable` の stat が同じ OSError を HostError にして止める。候補そのものだけが確かめられない形 (祖先の pnpm-workspace.yaml が自己ループの symlink である等) では、N5 の下では握りつぶされて取得へ進む。host の側でこの形を捕まえるのは `FindInAncestorsTests` の権限とループのテストだけで、host の呼ぶ側のテスト (`prepare_host` 経由) には無い。tree の呼ぶ側の `test_unverifiable_ancestor_becomes_a_tree_error` は同じ形 (権限の無いディレクトリの下の候補) を使い、後に続く止めが無いので N5 でも落ちる (コードを読んで判断した。この変異の下での文面は記録していない)。
 
 ## 関連
 

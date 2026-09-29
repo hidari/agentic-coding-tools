@@ -1553,10 +1553,10 @@ def find_pathlib_predicate_references(tree: ast.AST) -> list[str]:
 
     見るのは ast.Call ではなく ast.Attribute そのもの。`filter(Path.is_file, xs)` の
     ように述語を呼び出さず関数オブジェクトとして渡す形は、ast.Call を条件にすると
-    見えない。`p.is_file()` の
-    ような通常の呼び出しも `Call(func=Attribute(...))` の内側に同じ Attribute ノードを
-    持つので、Attribute だけを見ても検出は後退しない。`getattr(p, "is_dir")()` は
-    属性名が文字列リテラルで ast.Attribute にならないため、この検出の外 (仕様の外、許容)。
+    見えない。`p.is_file()` のような通常の呼び出しも `Call(func=Attribute(...))` の
+    内側に同じ Attribute ノードを持つので、Attribute だけを見ても検出は後退しない。
+    `getattr(p, "is_dir")()` は属性名が文字列リテラルで ast.Attribute にならないため、
+    この検出の外 (仕様の外、許容)。
     """
     found = []
     for node in ast.walk(tree):
