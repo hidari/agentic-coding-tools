@@ -236,9 +236,9 @@ def repo_root(cwd: Path, env: dict) -> Path:
 def resolve_commit(root: Path, ref: str, env: dict) -> str:
     """`ref` をコミットの SHA (40 桁、SHA-256 のリポジトリなら 64 桁) に解決する。
 
-    `-` で始まる ref は拒否してから git を呼ぶ。`jevlint.py` の位置引数検査は
-    `--commit`/`--base` のようなオプションの値までは見ないため、ここが最後の関門になる
-    (`--all` のような値がオプションとして誤認されるのを防ぐ)。
+    `-` で始まる ref は拒否してから git を呼ぶ。`--commit`/`--base` の値は argparse が
+    オプションの値としてそのまま入れるので、ここが唯一の関門になる (`--all` のような値が
+    git にオプションとして誤認されるのを防ぐ)。
     """
     if ref.startswith("-"):
         raise TreeError(f"'-' で始まる ref は受け付けない: {ref!r}")
@@ -466,8 +466,9 @@ def _discard_worktree(git: _QuietGit, root: Path, tree: Path) -> None:
     # ことは無いが、finally の中で投げると元の例外を隠し一時ディレクトリの削除も飛ぶ)。
     # `worktree remove --force` は worktree の `.git` ファイルが壊れていると終了コード 128
     # でディレクトリを残す (実測: git 2.55.0) ので、そのときはディレクトリを消してから
-    # 登録を prune する。prune も通らなければ利用者のリポジトリに登録が残るので、黙って
-    # 残さず、残った worktree と消し方を stderr に 1 行で告げる
+    # 登録を prune する。prune が通らないか、prune の後もディレクトリが残れば (`_left_behind`)
+    # 利用者のリポジトリに登録が残りうるので、黙って残さず、残った worktree と消し方を
+    # stderr に 1 行で告げる
     try:
         removed = git.run(root, ["worktree", "remove", "--force", str(tree)]).returncode == 0
     except TreeError:
@@ -479,31 +480,54 @@ def _discard_worktree(git: _QuietGit, root: Path, tree: Path) -> None:
         pruned = git.run(root, ["worktree", "prune"]).returncode == 0
     except TreeError:
         pruned = False
-    if not pruned:
-        print(
-            f"worktree の登録を消せなかった: {tree} (本体のリポジトリで `git worktree prune` を"
-            "実行すると消える)",
-            file=sys.stderr,
-        )
+    if pruned and not _left_behind(tree):
+        return
+    print(
+        f"worktree を消し切れなかった: {tree} (ディレクトリが残っていれば消してから、本体の"
+        "リポジトリで `git worktree prune` を実行すると登録も消える)",
+        file=sys.stderr,
+    )
+
+
+def _left_behind(tree: Path) -> bool:
+    """prune の後に `tree` が残っているか。確かめられなければ残ったとみなす。
+
+    prune は `.git` が在る worktree の登録を消さない (実測: git 2.55.0) ので、rmtree が
+    消し残すと prune が成功しても登録が残りうる。逆に remove が作業ツリーの削除で失敗した
+    ときは登録を先に消している (終了コード 255、実測) ので、ディレクトリが残っても登録は
+    無いことがある。ここは登録の有無を見分けず、ディレクトリが残れば告げる。判定不能を
+    「無い」に丸めると黙って残すので、後始末の方針 (失敗を投げない) に沿って告げる側に倒す。
+    """
+    try:
+        return jevlint_fs.stat_or_none(tree) is not None
+    except OSError:
+        return True
 
 
 def tmpdir_from_env(env: dict) -> Path:
     """一時ディレクトリの置き場を、解決した形で返す。解決できなければ `TreeError`。
 
-    `env` の `TMPDIR` が空でない絶対パスならそれ、それ以外は `tempfile.gettempdir()`。
-    `os.environ` ではなく `env` から読むのは、上流に渡す env と同じ値で置き場が決まるように
-    し、テストが置き場を差し替えられるようにするため。空や相対の値を `mkdtemp(dir=...)` に
-    そのまま渡すと cwd の下に作られ、3.11 までは返るパスも相対になる (実測: 3.9.6・3.11.15 は
-    相対のまま [`'jevlint-xxx'` の形]、3.12.12・3.14.7 は cwd を前置した絶対パス)。相対の
-    ままだと `worktree add` は `-C root` の root から、書き出しは cwd から解決して別の場所を
-    指す。
+    `env` の `TMPDIR` が絶対パスならそれ、空か未設定なら `tempfile.gettempdir()`、相対なら
+    `TreeError` (呼び出し側で終了コード 2)。check・review・compat はどれもこの規則で置き場を
+    決める。`os.environ` ではなく `env` から読むのは、上流に渡す env と同じ値で置き場が
+    決まるようにし、テストが置き場を差し替えられるようにするため。
+
+    空や相対の値を `mkdtemp(dir=...)` にそのまま渡すと cwd の下に作られ、3.11 までは返る
+    パスも相対になる (実測: 3.9.6・3.11.15 は相対のまま [`'jevlint-xxx'` の形]、3.12.12・
+    3.14.7 は cwd を前置した絶対パス)。相対のままだと `worktree add` は `-C root` の root
+    から、書き出しは cwd から解決して別の場所を指す。相対を gettempdir に回しても直らない:
+    本番では `os.environ` の TMPDIR も同じ相対の値で、gettempdir はそれを cwd を基準に
+    絶対化して返す (実測: 3.14.7・3.9.6)。cwd は消費側のリポジトリであることが多く、
+    リポジトリの中を拒否する検査を持たない compat の置き場がその下にできる。
 
     解決は `os.path.realpath` で行う (`Path.resolve()` を使わない理由は
     `jevlint_fs.find_in_ancestors` の docstring が持つ)。realpath は symlink のループを
     通り過ぎるので、ループは後段の `mkdtemp` が `OSError` にする。
     """
     candidate = env.get("TMPDIR", "")
-    if not (candidate and os.path.isabs(candidate)):
+    if candidate and not os.path.isabs(candidate):
+        raise TreeError(f"TMPDIR が相対パス: {candidate!r} (絶対パスにするか空にする)")
+    if not candidate:
         try:
             # gettempdir は候補が 1 つも使えないと FileNotFoundError を投げる
             candidate = tempfile.gettempdir()
@@ -625,6 +649,12 @@ def signals_as_exceptions() -> Iterator[None]:
 
     既定のハンドラだとプロセスが即座に終わり `finally` が走らないので、worktree の登録と
     一時ディレクトリが残る。例外にすれば `expanded_commit` の後始末まで届く。
+
+    元のハンドラが `SIG_IGN` か `None` (C の側で入れたもの) のシグナルは置き換えない。
+    `SIG_IGN` を置き換えると、nohup の下で無視されている SIGHUP で中断するようになる。
+    `None` は `signal.signal` へ戻せず TypeError になる。置き換えてから戻す形にすると、
+    その間に届いたシグナルの扱いが変わるので、先に `getsignal` で読んでから決める。
+    `SIG_DFL` は置き換える (既定の動作はプロセスを終わらせ、後始末が走らない)。
     """
 
     def raise_interrupt(signum: int, frame: object) -> None:
@@ -632,6 +662,9 @@ def signals_as_exceptions() -> Iterator[None]:
 
     previous = {}
     for sig in (signal.SIGTERM, signal.SIGHUP):
+        current = signal.getsignal(sig)
+        if current is signal.SIG_IGN or current is None:
+            continue
         previous[sig] = signal.signal(sig, raise_interrupt)
     try:
         yield

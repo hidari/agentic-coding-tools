@@ -53,6 +53,22 @@ def run_bytes(args: list, stdin: bytes = b"") -> bytes:
     return subprocess.run(args, env=ENV, input=stdin, capture_output=True, check=True).stdout
 
 
+@contextlib.contextmanager
+def production_tmpdir(value: str):
+    """本番の形: env だけでなく `os.environ` の TMPDIR も同じ `value` にする。
+
+    gettempdir は結果を `tempfile.tempdir` にキャッシュするので、前のテストの値を見て
+    別の理由で通らないよう None に戻し、抜けるときに元の値を復元する。
+    """
+    saved = tempfile.tempdir
+    tempfile.tempdir = None
+    try:
+        with mock.patch.dict(os.environ, {"TMPDIR": value}):
+            yield
+    finally:
+        tempfile.tempdir = saved
+
+
 def worktree_count(repo: Path) -> int:
     """`git worktree list --porcelain` に載る worktree の数 (本体を含む)。"""
     lines = run(["git", "-C", str(repo), "worktree", "list", "--porcelain"]).stdout.splitlines()
@@ -859,6 +875,54 @@ class ExpandedCommitTests(unittest.TestCase):
         # prune で登録が消えたので、残った登録を告げる行は出ない
         self.assertNotIn("git worktree prune", self.stderr.getvalue())
 
+    def _assert_one_leftover_line(self, tree: Path) -> None:
+        lines = [line for line in self.stderr.getvalue().splitlines() if "git worktree prune" in line]
+        self.assertEqual([f"worktree を消し切れなかった: {tree}"], [line.split(" (")[0] for line in lines])
+
+    def test_leftover_directory_after_prune_is_announced(self):
+        # rmtree が消し残したディレクトリは、prune が成功しても黙って残る。tree を読み取り
+        # 専用にして 2 通りを作る (実測: git 2.55.0)。どちらも前提を先に確かめる
+        # - 登録は消えた: `worktree remove --force` は登録 (.git/worktrees/<id>) を消してから
+        #   作業ツリーの削除に失敗する (終了コード 255)。ディレクトリと古い `.git` が残る
+        # - 登録も残る: `.git` を壊すと remove は検証で失敗して何も消さず (128)、rmtree も
+        #   消せず、prune は `.git` が在るので登録を残す (終了コード 0)
+        for corrupt, registrations in ((False, 1), (True, 2)):
+            with self.subTest(corrupt_dot_git=corrupt):
+                self.stderr.truncate(0)
+                self.stderr.seek(0)
+                _, env = self._private_base()
+                with jevlint_tree.expanded_commit(self.repo.path, self.sha, env) as expanded:
+                    tree = expanded.tree
+                    if corrupt:
+                        (tree / ".git").write_text("garbage\n", encoding="utf-8")
+                    tree.chmod(0o555)
+                # 後始末は _private_base の削除より先に走らせる (addCleanup は後に積んだ方が先)
+                self.addCleanup(self.repo.git, "worktree", "prune")
+                self.addCleanup(shutil.rmtree, tree.parent, True)
+                self.addCleanup(tree.chmod, 0o755)
+                self.assertIsNotNone(jevlint_tree.jevlint_fs.stat_or_none(tree), "前提: ディレクトリが残る")
+                self.assertEqual(registrations, self.repo.worktree_count(), "前提: 登録の数")
+                self._assert_one_leftover_line(tree)
+
+    def test_unverifiable_leftover_after_prune_is_announced(self):
+        # 後始末は失敗を投げないので、ディレクトリの有無を確かめられないときは告げる側に
+        # 倒す。remove を失敗させるために `.git` を壊し (rmtree と prune は通る状態)、tree の
+        # stat だけに権限エラーを注入する
+        original_stat_or_none = jevlint_tree.jevlint_fs.stat_or_none
+
+        def flaky(path):
+            if path.name == "tree":
+                raise PermissionError("denied")
+            return original_stat_or_none(path)
+
+        _, env = self._private_base()
+        with mock.patch("jevlint_tree.jevlint_fs.stat_or_none", side_effect=flaky):
+            with jevlint_tree.expanded_commit(self.repo.path, self.sha, env) as expanded:
+                tree = expanded.tree
+                (tree / ".git").write_text("garbage\n", encoding="utf-8")
+        self.assertEqual(1, self.repo.worktree_count(), "前提: prune で登録は消えた")
+        self._assert_one_leftover_line(tree)
+
     def test_rejects_when_an_ancestor_of_the_tree_holds_sgconfig(self):
         # ast-grep は cwd の祖先も探すので、一時ディレクトリの置き場そのものが
         # 汚染されていたら展開しても安全にならない。置き場は env の TMPDIR で決まる
@@ -900,20 +964,47 @@ class ExpandedCommitTests(unittest.TestCase):
             self.assertEqual(base.resolve(), expanded.tree.parent.parent)
         self.assertEqual([], list(base.iterdir()))
 
-    def test_empty_or_relative_tmpdir_falls_back_to_the_system_temp_dir(self):
-        # 空や相対の TMPDIR を mkdtemp にそのまま渡すと cwd の下に作られ、3.9 では返る
-        # パスも相対になる (実測: 3.9.6 は 'jevlint-xxx'、3.14.7 は cwd を前置した絶対
-        # パス)。相対のままだと worktree add は root から、書き出しは cwd から解決して
-        # 別の場所を指す
-        system = Path(tempfile.gettempdir()).resolve()
-        for value in ("", "rel"):
+    def _production_tmpdir(self, value: str) -> Path:
+        """`production_tmpdir` に入り、cwd を空の一時ディレクトリへ移して返す。
+
+        cwd の下には `rel` を作っておく。gettempdir は実在する候補しか選ばないので、
+        無ければ相対の値が cwd の下を指す退行を見られない。
+        """
+        cwd, _ = self._private_base()
+        (cwd / "rel").mkdir()
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(cwd)
+        context = production_tmpdir(value)
+        context.__enter__()
+        self.addCleanup(context.__exit__, None, None, None)
+        return cwd
+
+    def test_empty_tmpdir_falls_back_to_the_system_temp_dir(self):
+        # 空の TMPDIR を mkdtemp にそのまま渡すと cwd の下に作られ、3.11 までは返るパスも
+        # 相対になる (tmpdir_from_env の docstring)。空は「未設定」として gettempdir に回す
+        cwd = self._production_tmpdir("")
+        system = Path(os.path.realpath(tempfile.gettempdir()))
+        tempfile.tempdir = None
+        env = dict(ENV, TMPDIR="")
+        with jevlint_tree.expanded_commit(self.repo.path, self.sha, env) as expanded:
+            self.assertTrue(expanded.tree.is_absolute())
+            self.assertEqual(system, expanded.tree.parent.parent)
+            self.assertNotIn(cwd.resolve(), expanded.tree.parents)
+        self.assertEqual([], os.listdir(cwd / "rel"))
+
+    def test_relative_tmpdir_is_a_tree_error_and_nothing_is_made_under_cwd(self):
+        # gettempdir に回すと、同じ相対の値を cwd 基準で絶対化して cwd の下に置き場を作る
+        # (実測: 3.14.7・3.9.6)。cwd は消費側のリポジトリであることが多い
+        for value in ("rel", "./rel", "rel/"):
             with self.subTest(TMPDIR=value):
-                env = dict(ENV, TMPDIR=value)
-                with jevlint_tree.expanded_commit(self.repo.path, self.sha, env) as expanded:
-                    self.assertTrue(expanded.tree.is_absolute())
-                    self.assertEqual(system, expanded.tree.parent.parent)
-                    self.assertNotIn(self.repo.path.resolve(), expanded.tree.parents)
-                self.assertFalse(Path("rel").exists(), "cwd の下に相対の置き場が作られた")
+                cwd = self._production_tmpdir(value)
+                with self.assertRaisesRegex(jevlint_tree.TreeError, "TMPDIR"):
+                    with jevlint_tree.expanded_commit(
+                        self.repo.path, self.sha, dict(ENV, TMPDIR=value)
+                    ):
+                        self.fail("相対の TMPDIR で展開が通った")
+                self.assertEqual([], os.listdir(cwd / "rel"))
+                self.assertEqual(1, self.repo.worktree_count())
 
     def test_tmpdir_inside_the_repository_is_refused_and_leaves_nothing_behind(self):
         # 利用者の作業ツリーの中に worktree を作ると、走査対象に自分の展開が混ざる。
@@ -980,6 +1071,24 @@ class ExpandedCommitTests(unittest.TestCase):
                 jevlint_tree.TreeError, "^一時ディレクトリの置き場を解決できない"
             ):
                 jevlint_tree.tmpdir_from_env({})
+
+    def test_tmpdir_from_env_rule_by_value(self):
+        # 絶対はそのまま (解決した形)、空と未設定は gettempdir、相対は TreeError。
+        # gettempdir は注入で目印を返させ、どの値でそちらへ回ったかを見る
+        base, _ = self._private_base()
+        marker = str(base)
+        with mock.patch("jevlint_tree.tempfile.gettempdir", return_value=marker) as fallback:
+            self.assertEqual(base.resolve(), jevlint_tree.tmpdir_from_env({"TMPDIR": str(base)}))
+            self.assertEqual(0, fallback.call_count)
+            for env in ({}, {"TMPDIR": ""}):
+                with self.subTest(env=env):
+                    self.assertEqual(base.resolve(), jevlint_tree.tmpdir_from_env(env))
+            self.assertEqual(2, fallback.call_count)
+            for value in ("rel", "./rel", "../rel"):
+                with self.subTest(TMPDIR=value):
+                    with self.assertRaisesRegex(jevlint_tree.TreeError, "TMPDIR"):
+                        jevlint_tree.tmpdir_from_env({"TMPDIR": value})
+            self.assertEqual(2, fallback.call_count, "相対の値で gettempdir に回った")
 
     def test_missing_blob_during_expansion_is_a_tree_error_and_tears_down(self):
         blob = self.repo.hash_blob(b"x\n")
@@ -1404,15 +1513,16 @@ class SignalsAsExceptionsTests(unittest.TestCase):
         self.assertTrue(issubclass(jevlint_tree.SignalInterrupt, KeyboardInterrupt))
         for sig in (signal.SIGTERM, signal.SIGHUP):
             with self.subTest(signal=sig.name):
-                previous = signal.getsignal(sig)
+                # 出発点を本番の既定 (SIG_DFL) に揃える。受け継いだ扱いのままだと、nohup の下で
+                # SIGHUP が SIG_IGN になっていて置き換えられず、環境によって赤になる
+                self.addCleanup(signal.signal, sig, signal.signal(sig, signal.SIG_DFL))
                 with self.assertRaises(jevlint_tree.SignalInterrupt) as cm:
                     with jevlint_tree.signals_as_exceptions():
-                        self.assertIsNot(previous, signal.getsignal(sig))
                         self.assertTrue(callable(signal.getsignal(sig)))
                         os.kill(os.getpid(), sig)
                         self.fail(f"{sig.name} が例外として届いていない")
                 self.assertEqual(int(sig), cm.exception.signum)
-                self.assertIs(previous, signal.getsignal(sig))
+                self.assertIs(signal.SIG_DFL, signal.getsignal(sig))
 
     def test_handlers_are_restored_after_a_normal_exit(self):
         previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP)}
@@ -1420,6 +1530,57 @@ class SignalsAsExceptionsTests(unittest.TestCase):
             pass
         for sig, handler in previous.items():
             self.assertIs(handler, signal.getsignal(sig))
+
+    def test_ignored_or_c_level_handlers_are_left_untouched_per_signal(self):
+        # 本物の None (C の側で入れたハンドラ) は Python から作れないので、getsignal と
+        # signal を差し替えて呼び出しの列で見る。置き換えないシグナルは入れも戻しもしない。
+        # 置き換える側 (SIG_DFL と関数) も並べ、テストのプロセスが受け継いだ扱いに依らずに見る
+        def handler(signum, frame):
+            pass
+
+        cases = {
+            "SIG_DFL": {signal.SIGTERM: signal.SIG_DFL, signal.SIGHUP: signal.SIG_DFL},
+            "SIG_IGN": {signal.SIGTERM: signal.SIG_IGN, signal.SIGHUP: signal.SIG_IGN},
+            "None": {signal.SIGTERM: None, signal.SIGHUP: None},
+            "関数": {signal.SIGTERM: handler, signal.SIGHUP: handler},
+            "SIGTERM だけ SIG_IGN": {signal.SIGTERM: signal.SIG_IGN, signal.SIGHUP: handler},
+        }
+        for name, initial in cases.items():
+            with self.subTest(case=name):
+                current = dict(initial)
+                calls = []
+
+                def fake_signal(sig, new):
+                    calls.append((sig, new))
+                    old, current[sig] = current[sig], new
+                    return old
+
+                with mock.patch("jevlint_tree.signal.getsignal", side_effect=current.get), \
+                        mock.patch("jevlint_tree.signal.signal", side_effect=fake_signal):
+                    with jevlint_tree.signals_as_exceptions():
+                        inside = dict(current)
+                self.assertEqual(initial, current, "抜けた後のハンドラが元と違う")
+                for sig, before in initial.items():
+                    sig_calls = [new for called, new in calls if called == sig]
+                    if before is signal.SIG_IGN or before is None:
+                        self.assertEqual([], sig_calls, f"{sig.name} を置き換えた")
+                        continue
+                    self.assertEqual(2, len(sig_calls), sig_calls)
+                    installed, restored = sig_calls
+                    self.assertIs(installed, inside[sig])
+                    self.assertIs(before, restored)
+                    with self.assertRaises(jevlint_tree.SignalInterrupt) as cm:
+                        installed(int(sig), None)
+                    self.assertEqual(int(sig), cm.exception.signum)
+
+    def test_sighup_ignored_as_under_nohup_stays_ignored_inside(self):
+        # nohup の形を本物のシグナルで見る。無視されている SIGHUP は中でも無視されたまま
+        previous = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        self.addCleanup(signal.signal, signal.SIGHUP, previous)
+        with jevlint_tree.signals_as_exceptions():
+            self.assertIs(signal.SIG_IGN, signal.getsignal(signal.SIGHUP))
+            os.kill(os.getpid(), signal.SIGHUP)
+        self.assertIs(signal.SIG_IGN, signal.getsignal(signal.SIGHUP))
 
 
 class CountSuffixTests(unittest.TestCase):

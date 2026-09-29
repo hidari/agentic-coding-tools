@@ -49,7 +49,7 @@ import jevlint_host
 import jevlint_result
 import jevlint_tree
 from test_jevlint_fs import deny_all_access
-from test_jevlint_tree import GitRepo, worktree_count
+from test_jevlint_tree import GitRepo, production_tmpdir, worktree_count
 
 HERE = Path(__file__).resolve().parent
 
@@ -234,11 +234,14 @@ class ParseArgsTests(unittest.TestCase):
                 ["check", "a.py", "--thresh", "python/var-name-describes-value=0.6"]
             )
 
-    def test_rejects_dash_positional_after_double_dash(self):
-        with self.assertRaises(jevlint.UsageError):
-            jevlint.parse_args(["check", "--", "-x"])
+    def test_double_dash_passes_dash_positionals_through_to_the_canonical_checks(self):
+        # 入口は `--` の後ろの `-` 始まりを位置引数として通す。拒否は `parse_args` の docstring が
+        # 名指す canonical で見て、終了コードへの写しは MainRejectionTests と MainCompatTests が持つ
+        self.assertEqual(jevlint.parse_args(["check", "--", "-x"]).paths, ["-x"])
+        self.assertEqual(jevlint.parse_args(["compat", "--", "-0.7.0"]).version, "-0.7.0")
 
     def test_rejects_dash_positional_without_double_dash(self):
+        # `--` が無ければ argparse が未知のオプションとして止める
         with self.assertRaises(jevlint.UsageError):
             jevlint.parse_args(["check", "-x"])
 
@@ -535,8 +538,23 @@ class MainKeyTests(_MainTestCase):
             out.splitlines(),
             [
                 f"commit {self.sha}  jev-lint {jevlint.UPSTREAM_VERSION}",
-                "見積もり: subject 5 件、費用 $0.00420",
+                "見積もり: subject 5 件、費用 $0.00420 "
+                f"(1 パス分。{jevlint_host.RETRY_PASSES} パスで最大 "
+                f"${0.0042 * jevlint_host.RETRY_PASSES:.5f})",
             ],
+        )
+
+    def test_dry_run_estimate_uses_the_passes_given_to_upstream(self):
+        # 見積もりに掛けるパス数と上流の `--retry` が同じ定数から来ていることを、定数を
+        # 別の値に変えて見る (本物の値のままでは、入口が literal を渡しても区別できない)
+        with mock.patch.object(jevlint_host, "RETRY_PASSES", 2):
+            code, out, _ = self.run_main(["check", "--dry-run", "sub/file.py"])
+        self.assertEqual(code, 0)
+        argv = self.upstream.calls[0]["argv"]
+        self.assertEqual(argv[argv.index("--retry") + 1], "2")
+        self.assertIn(
+            "見積もり: subject 5 件、費用 $0.00420 (1 パス分。2 パスで最大 $0.00840)",
+            out.splitlines(),
         )
 
     def test_missing_or_blank_key_is_2_before_the_expansion(self):
@@ -704,6 +722,18 @@ class MainRejectionTests(_MainTestCase):
         self.assertEqual(code, 0)
         self.assertTrue(self.git_calls())
 
+    def test_dash_paths_after_double_dash_are_2_from_the_path_check_before_the_host(self):
+        # 拒否するのは `parse_args` の docstring が名指すパスの canonical。`./-x` は生の文字列では
+        # `.` 始まりなので、正規化した後の形で見ていることをこのケースが見る
+        for path in ("-x", "./-x", "-"):
+            with self.subTest(path=path):
+                code, out, err = self.run_main(["check", "--dry-run", "--", path])
+                self.assertEqual(code, 2)
+                self.assertEqual(out, "")
+                self.assertIn(f"'-' で始まるパスは受け付けない: {path!r}", err)
+                self.assertEqual(self.pnpm.calls, [])
+                self.assertEqual(self.upstream.version_calls + self.upstream.calls, [])
+
     def test_path_missing_from_the_commit_is_2_before_the_host(self):
         self.repo.write("untracked.py", "untracked = 1\n")
         for path in ("nope.py", "untracked.py", "../outside.py", "/abs.py"):
@@ -755,6 +785,24 @@ class MainRejectionTests(_MainTestCase):
         code, _, _ = self.run_main(["check", "--dry-run", "sub/file.py"])
         self.assertEqual(code, 0)
         self.assertFalse(marker.exists())
+
+    def test_relative_tmpdir_is_2_for_check_and_review_and_nothing_is_made_under_cwd(self):
+        # compat と同じ規則 (MainCompatTests の相対の TMPDIR のテスト)。本番の形として os.environ の
+        # TMPDIR も同じ値にし、gettempdir のキャッシュ (tempfile.tempdir) を外して呼ぶ。
+        # cwd (setUp で base) の下に rel を作っておかないと、gettempdir は相対の候補を
+        # 飛ばすので退行を見られない
+        (self.base / "rel").mkdir()
+        environ = dict(self.environ, TMPDIR="rel")
+        for argv in (["check", "--dry-run", "sub/file.py"], ["review", "--dry-run", "--base", "HEAD"]):
+            with self.subTest(argv=argv):
+                with production_tmpdir("rel"):
+                    code, out, err = self.run_main(argv, environ=environ)
+                self.assertEqual(code, 2)
+                self.assertEqual(out, "")
+                self.assertIn("TMPDIR", err)
+                self.assertEqual(os.listdir(self.base / "rel"), [])
+                self.assertEqual(self.upstream.calls, [])
+                self.assertEqual(self.repo.worktree_count(), 1)
 
     def test_unresolvable_node_is_2_before_any_node_process(self):
         code, out, err = self.run_main(
@@ -1181,8 +1229,13 @@ class _CompatTestCase(unittest.TestCase):
     def fake_upstream(self, **kwargs) -> _FakeCompatUpstream:
         return _FakeCompatUpstream(self.versions, **kwargs)
 
-    def run_compat(self, version=COMPAT_NEW, *, upstream=None, pnpm=None, which=shutil.which):
-        """main() の compat を呼び、(終了コード, stdout, stderr) を返す。偽物は self に残す。"""
+    def run_compat(
+        self, version=COMPAT_NEW, *, argv=None, upstream=None, pnpm=None, which=shutil.which
+    ):
+        """main() の compat を呼び、(終了コード, stdout, stderr) を返す。偽物は self に残す。
+
+        `argv` を渡すと `["compat", version]` の代わりにそのまま main() に渡す (`--` を挟む形など)。
+        """
         self.runs += 1
         self.cache = self.base / f"cache-{self.runs}"
         self.environ["XDG_CACHE_HOME"] = str(self.cache)
@@ -1191,7 +1244,7 @@ class _CompatTestCase(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = jevlint.main(
-                ["compat", version],
+                ["compat", version] if argv is None else argv,
                 environ=self.environ,
                 cwd=self.base,
                 run_pnpm=self.pnpm,
@@ -1421,6 +1474,21 @@ class MainCompatTests(_CompatTestCase):
         self.assertEqual(code, 0)
         self.assertEqual(len(self.upstream.check_calls), 2)
 
+    def test_relative_tmpdir_is_2_and_nothing_is_made_under_cwd(self):
+        # compat はリポジトリを使わないので「置き場がリポジトリの中」の検査を持たない。
+        # 相対の TMPDIR を gettempdir に回すと cwd (消費側のリポジトリであることが多い) の
+        # 下に置き場ができるので、check / review と同じく相対そのものを拒否する
+        (self.base / "rel").mkdir()
+        self.environ["TMPDIR"] = "rel"
+        with production_tmpdir("rel"):
+            code, out, err = self.run_compat()
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("TMPDIR", err)
+        self.assertEqual(os.listdir(self.base / "rel"), [])
+        self.assertEqual(self.upstream.rules_calls, [])
+        self.assertEqual(self.upstream.check_calls, [])
+
     def test_malformed_version_is_2_before_any_child_process(self):
         for version in ("latest", "0.7", "v0.7.0"):
             with self.subTest(version=version):
@@ -1430,6 +1498,16 @@ class MainCompatTests(_CompatTestCase):
                 self.assertIn(version, err)
                 self.assertEqual(self.pnpm.calls, [])
                 self.assertEqual(self.upstream.all_calls(), [])
+
+    def test_dash_version_after_double_dash_is_2_from_parse_version_before_any_child_process(self):
+        # 拒否するのは `parse_args` の docstring が名指す版の canonical。argparse は `--` の
+        # 後ろの値を位置引数に入れるので、そこまで届く
+        code, out, err = self.run_compat(argv=["compat", "--", "-0.7.0"])
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("版は X.Y.Z の数字の形にすること: '-0.7.0'", err)
+        self.assertEqual(self.pnpm.calls, [])
+        self.assertEqual(self.upstream.all_calls(), [])
 
 
 class JsonOutTargetsTests(unittest.TestCase):

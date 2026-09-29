@@ -1,8 +1,8 @@
 """jevlint_host.py (env、host、node、上流の起動) の仕様。
 
-見るのは次の 13 の入口: `build_env`、`install_env`、`key_status`、`host_dir`、
+見るのは次の入口: `build_env`、`install_env`、`key_status`、`host_dir`、
 `prepare_host`、`host_reusable`、`parse_node_version`、`engines_ok`、`read_engines`、
-`cli_path`、`package_json_path`、`upstream_argv`、`fixed_tail`。`prepare_host` のテスト
+`cli_path`、`package_json_path`、`lock_path`、`upstream_argv`、`fixed_tail`。`prepare_host` のテスト
 だけが `run` を偽物に差し替えて副作用 (argv・cwd・env・ファイルの生成) を見る。ネットワーク・pnpm 本体・node 本体・
 実際のキーには依存しない。
 
@@ -11,16 +11,27 @@
 テストの `source` は `os.environ` を直接使わず、`XDG_CACHE_HOME` を差し替えた辞書を渡す
 (host の置き場をテストごとに隔離するため)。cwd の検査は `os.chdir` で「消費側のリポジトリ」
 を模した別ディレクトリへ一時的に移動し、`run` に渡った cwd がそれと一致しないことで見る。
+
+host の入れ替えを直列にするロック (`PrepareHostLockTests`) は、時間待ちを使わずに見る。
+flock のロックは open file description に属するので、同じプロセスの別の `open()` から
+`LOCK_SH | LOCK_NB` を試すと、排他ロックの保持中なら `BlockingIOError` になる (実測: 3.9.6・
+3.14.7、macOS)。`prepare_host` の各段 (再利用の確認・取得・再確認・どかす rename・置く replace) に
+spy を挟んでその時点の保持を記録し、順序ごと比べる。
 """
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import json
 import os
+import shutil
+import stat
 import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import jevlint_host
 from test_jevlint_fs import deny_all_access
@@ -321,10 +332,11 @@ class HostDirTests(unittest.TestCase):
                     jevlint_host.host_dir(version, {"HOME": "/home/user"})
 
 
-def _populate_fake_package(root: Path, version: str) -> None:
+def _populate_fake_package(root: Path, version: str, cli_text: str = "// fake cli\n") -> None:
+    """`root` に取得済みの jev-lint の形を作る。`cli_text` は誰が置いたかを見分ける目印。"""
     cli = jevlint_host.cli_path(root)
     cli.parent.mkdir(parents=True, exist_ok=True)
-    cli.write_text("// fake cli\n", encoding="utf-8")
+    cli.write_text(cli_text, encoding="utf-8")
     jevlint_host.package_json_path(root).write_text(
         json.dumps({"version": version, "engines": {"node": ">=24"}}),
         encoding="utf-8",
@@ -347,7 +359,30 @@ class _FakeRun:
         return types.SimpleNamespace(returncode=self.returncode)
 
 
-class PrepareHostTests(unittest.TestCase):
+def _lock_held_elsewhere(lock: Path) -> bool:
+    """`lock` の排他ロックを誰かが持っているか。新しい `open()` から `LOCK_SH | LOCK_NB` を試す。
+
+    共有ロックで試すのは、排他ロックが持たれているときだけ取れないため。`LOCK_EX` で試すと
+    共有ロックにも取れなくなるので、`_host_lock` が共有ロックに弱まっても「持たれている」と
+    読んで見逃す。取れたときはすぐ閉じて解放する。閉じ忘れると、同じテストの次の
+    `prepare_host` が blocking の `LOCK_EX` で永久に待つ (赤ではなく hang で返る)。ファイルが
+    まだ無ければ誰も保持していないので False。読み取り専用で開いても flock は取れる (実測)。
+    """
+    try:
+        fd = os.open(lock, os.O_RDONLY)
+    except FileNotFoundError:
+        return False
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        return False
+    finally:
+        os.close(fd)
+
+
+class _PrepareHostCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
@@ -360,6 +395,18 @@ class PrepareHostTests(unittest.TestCase):
         self.addCleanup(os.chdir, self._orig_cwd)
         self.source = {"XDG_CACHE_HOME": str(self.cache_home)}
 
+    def leftovers(self, host: Path) -> list:
+        """host の親に残った、host 自身とロックファイル以外の名前 (`.tmp-` / `.old-` の残骸)。
+
+        ロックファイルは消さない設計 (理由は `PrepareHostLockTests`) なので残骸に数えない。
+        """
+        if not host.parent.exists():
+            return []
+        keep = {host.name, jevlint_host.lock_path(host).name}
+        return sorted(p.name for p in host.parent.iterdir() if p.name not in keep)
+
+
+class PrepareHostTests(_PrepareHostCase):
     def test_argv_shape_places_package_spec_after_pnpm_add(self):
         run = _FakeRun("0.7.0")
         jevlint_host.prepare_host("0.7.0", self.source, run=run)
@@ -392,8 +439,7 @@ class PrepareHostTests(unittest.TestCase):
             jevlint_host.prepare_host("0.7.0", self.source, run=run)
         host = jevlint_host.host_dir("0.7.0", self.source)
         self.assertFalse(host.exists())
-        remaining = list(host.parent.iterdir()) if host.parent.exists() else []
-        self.assertEqual(remaining, [])
+        self.assertEqual(self.leftovers(host), [])
 
     def test_successful_run_renames_temp_into_host(self):
         run = _FakeRun("0.7.0")
@@ -401,8 +447,7 @@ class PrepareHostTests(unittest.TestCase):
         self.assertTrue((host / "node_modules/jev-lint/dist/cli.js").is_file())
         self.assertEqual(len(run.calls), 1)
         # rename の残骸 (`.tmp-` の一時ディレクトリ) が親に残っていない
-        siblings = [p.name for p in host.parent.iterdir()]
-        self.assertEqual(siblings, [host.name])
+        self.assertEqual(self.leftovers(host), [])
 
     def test_reusable_host_skips_run(self):
         run1 = _FakeRun("0.7.0")
@@ -427,8 +472,7 @@ class PrepareHostTests(unittest.TestCase):
             (host / "node_modules/jev-lint/package.json").read_text(encoding="utf-8")
         )
         self.assertEqual(package_json["version"], "0.7.0")
-        leftovers = [p.name for p in host.parent.iterdir() if p.name != host.name]
-        self.assertEqual(leftovers, [])
+        self.assertEqual(self.leftovers(host), [])
 
     def test_pnpm_runs_in_a_tmp_dir_not_directly_in_host(self):
         # 「一時ディレクトリで取得してから host の名前へ置く」設計そのものを pin する。
@@ -448,39 +492,32 @@ class PrepareHostTests(unittest.TestCase):
         self.assertTrue(seen["cwd"].name.startswith(".tmp-"), seen["cwd"].name)
         self.assertFalse(seen["host_existed_during_run"])
 
-    def test_concurrent_winner_already_placed_host_is_respected(self):
-        # 2 プロセスが同時に「再利用できない」と判定して pnpm を走らせた場面を模す。
-        # 自分の run が返る前に、別プロセス (勝者) が同じ version を host に直接
-        # 置いてしまっている。tmp.replace(host) は host が非空になっていて競合するが、
-        # prepare_host は host を再確認して勝者に譲り、例外を出さない。
+    def test_lockless_writer_placed_host_during_run_is_respected(self):
+        # 自分の run が返る前に、ロックを取らない書き手が同じ version を host の名前へ直接
+        # 置く。host は run の前には無いので、`_replace_host_atomically` の手順 1 の再確認が
+        # それを拾って譲り、tmp.replace には進まない (置く replace が競合する分岐は
+        # test_failed_replace_yields_to_a_lockless_writer_that_placed_the_same_version が見る)。
         #
-        # 勝者と自分の取得物を同じ内容にすると、「再確認して譲る」と「確認せず自分の
+        # 書き手と自分の取得物を同じ内容にすると、「再確認して譲る」と「確認せず自分の
         # もので上書きする」が区別できない (両方とも最終的に妥当な 0.7.0 の host になり、
         # post-pnpm の再確認を消す変異でも緑になる。変異注入で実測)。そこで cli.js の中身を
-        # 勝者と自分とで変えて区別する
+        # 書き手と自分とで変えて区別する
         host = jevlint_host.host_dir("0.7.0", self.source)
-        winner_marker = "// winner cli (別プロセスが置いた)\n"
+        lockless_marker = "// lockless writer cli\n"
 
-        def winner_run(argv, cwd, env):
-            winner_cli = jevlint_host.cli_path(host)
-            winner_cli.parent.mkdir(parents=True, exist_ok=True)
-            winner_cli.write_text(winner_marker, encoding="utf-8")
-            jevlint_host.package_json_path(host).write_text(
-                json.dumps({"version": "0.7.0", "engines": {"node": ">=24"}}),
-                encoding="utf-8",
-            )
+        def lockless_writer_run(argv, cwd, env):
+            _populate_fake_package(host, "0.7.0", lockless_marker)
             _populate_fake_package(Path(cwd), "0.7.0")  # 自分の tmp 側も揃える
             return types.SimpleNamespace(returncode=0)
 
-        result = jevlint_host.prepare_host("0.7.0", self.source, run=winner_run)
+        result = jevlint_host.prepare_host("0.7.0", self.source, run=lockless_writer_run)
         self.assertEqual(result, host)
         self.assertEqual(
             (host / "node_modules/jev-lint/dist/cli.js").read_text(encoding="utf-8"),
-            winner_marker,
+            lockless_marker,
         )
-        # 自分の tmp が host の隣に残っていない (勝者の host だけが残る)
-        siblings = [p.name for p in host.parent.iterdir()]
-        self.assertEqual(siblings, [host.name])
+        # 自分の tmp が host の隣に残っていない (書き手の host だけが残る)
+        self.assertEqual(self.leftovers(host), [])
 
     def test_run_succeeds_but_leaves_incomplete_package(self):
         # pnpm が rc=0 を返しても、取得物の形が想定と違えば (populate=False) 再利用
@@ -491,8 +528,7 @@ class PrepareHostTests(unittest.TestCase):
             jevlint_host.prepare_host("0.7.0", self.source, run=run)
         host = jevlint_host.host_dir("0.7.0", self.source)
         self.assertFalse(host.exists())
-        remaining = list(host.parent.iterdir()) if host.parent.exists() else []
-        self.assertEqual(remaining, [])
+        self.assertEqual(self.leftovers(host), [])
 
     # 祖先の検査のうち、どの祖先を見るか (与えられた表記と解決した表記、順序、確かめられない
     # ときに投げること) は test_jevlint_fs.py の FindInAncestorsTests が持つ。ここの 2 本は
@@ -525,9 +561,9 @@ class PrepareHostTests(unittest.TestCase):
         # 「無い」(None) に丸める。そのため _reject_pnpm_workspace_ancestor の
         # candidate の stat も host_reusable の 2 つの stat もどちらも「無い」と
         # 判定して素通りし (prepare_host の呼び出し順は
-        # _reject_pnpm_workspace_ancestor → host_reusable → parent.mkdir())、
-        # 実際に止めるのは後段の parent.mkdir() (既存のディレクトリが無い場所に
-        # ファイルがあるので mkdir が FileExistsError) だけになる。
+        # _reject_pnpm_workspace_ancestor → host_reusable → parent.mkdir() → ロック →
+        # host_reusable の再確認)、実際に止めるのは parent.mkdir() (既存のディレクトリが
+        # 無い場所にファイルがあるので mkdir が FileExistsError) になる。
         # ENOTDIR → None の丸めがここまで一貫して効くことを end to end で pin する。
         # run が一度も呼ばれないことで、取得を試みる前に止まっていることも確認する
         parent = jevlint_host.host_dir("0.7.0", self.source).parent
@@ -560,8 +596,217 @@ class PrepareHostTests(unittest.TestCase):
             jevlint_host.prepare_host("0.7.0", self.source, run=raising_run)
         host = jevlint_host.host_dir("0.7.0", self.source)
         self.assertFalse(host.exists())
-        remaining = list(host.parent.iterdir()) if host.parent.exists() else []
-        self.assertEqual(remaining, [])
+        self.assertEqual(self.leftovers(host), [])
+
+
+class PrepareHostLockTests(_PrepareHostCase):
+    """host の入れ替えを直列にするロックと、どかしてから置く手順。
+
+    同時に 2 つの実行が host を用意すると、再利用の確認とどかす rename の間、どかす rename と
+    置く replace の間に窓があり、finally がどかした良い host を消して host の名前が空のまま
+    残る経路と、同時の rename で偽の終了コード 2 になる経路がある。ここでは
+    再利用の確認から入れ替えまでが 1 つのロックの内側で起きること、そのロックが戻った後は
+    解放されること、ロックの外の書き手が置いたものへ譲る再確認が残ることを見る。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.host = jevlint_host.host_dir("0.7.0", self.source)
+        self.lock = jevlint_host.lock_path(self.host)
+
+    def _label(self, path: Path) -> str:
+        if path == self.host:
+            return "host"
+        for prefix in (".tmp-", ".old-"):
+            if path.name.startswith(prefix):
+                return prefix.strip(".-")
+        return str(path)
+
+    def test_reusable_host_is_returned_without_the_lock_the_lock_file_or_the_parent_mkdir(self):
+        # ロックの外の最初の確認 (double-checked。理由は `prepare_host` の docstring)。再利用
+        # できる host なら、読み取り専用の親でもロックもロックファイルの作成も mkdir もせずに
+        # 返る。root は権限ビットを無視するが、ロックファイルが無いことと mkdir が呼ばれない
+        # ことは root でも見える
+        _populate_fake_package(self.host, "0.7.0")
+        parent = self.host.parent
+        self.addCleanup(os.chmod, parent, stat.S_IRWXU)
+        os.chmod(parent, stat.S_IRUSR | stat.S_IXUSR)
+        real_mkdir = Path.mkdir
+        mkdir_calls = []
+
+        def spying_mkdir(path, *args, **kwargs):
+            mkdir_calls.append(path)
+            return real_mkdir(path, *args, **kwargs)
+
+        run = _FakeRun("0.7.0")
+        with mock.patch.object(Path, "mkdir", spying_mkdir):
+            result = jevlint_host.prepare_host("0.7.0", self.source, run=run)
+        self.assertEqual(result, self.host)
+        self.assertEqual(run.calls, [])
+        self.assertEqual(mkdir_calls, [])
+        self.assertFalse(self.lock.exists())
+
+    def test_check_fetch_recheck_and_swap_happen_in_that_order_under_one_lock(self):
+        # 既存の host を別の版にして、どかす rename まで通る経路にする。各段の spy は
+        # 「その時点で別の open からロックが取れないこと」を記録する。順序も一緒に比べる
+        # ので、どかす rename が置く replace より前にあること (どかさずに消す形に戻す変異で
+        # 赤になること) もここで pin される。最初の確認だけはロックの外 (double-checked、
+        # 理由は `prepare_host` の docstring) で、ロックの内側の再確認から先がすべて保持中に起きる
+        _populate_fake_package(self.host, "0.6.9")
+        real_reusable = jevlint_host.host_reusable
+        real_rename, real_replace = Path.rename, Path.replace
+        events = []
+
+        def spying_reusable(path, version):
+            events.append((f"check:{self._label(path)}", _lock_held_elsewhere(self.lock)))
+            return real_reusable(path, version)
+
+        def spying_run(argv, cwd, env):
+            events.append(("run", _lock_held_elsewhere(self.lock)))
+            _populate_fake_package(Path(cwd), "0.7.0")
+            return types.SimpleNamespace(returncode=0)
+
+        def spying_rename(path, target):
+            label = f"rename:{self._label(path)}->{self._label(Path(target))}"
+            events.append((label, _lock_held_elsewhere(self.lock)))
+            return real_rename(path, target)
+
+        def spying_replace(path, target):
+            label = f"replace:{self._label(path)}->{self._label(Path(target))}"
+            events.append((label, _lock_held_elsewhere(self.lock)))
+            return real_replace(path, target)
+
+        # 対照: 呼ぶ前はロックファイルが無く、誰も保持していない
+        self.assertFalse(_lock_held_elsewhere(self.lock))
+        with mock.patch.object(jevlint_host, "host_reusable", spying_reusable), mock.patch.object(
+            Path, "rename", spying_rename
+        ), mock.patch.object(Path, "replace", spying_replace):
+            result = jevlint_host.prepare_host("0.7.0", self.source, run=spying_run)
+        self.assertEqual(result, self.host)
+        self.assertEqual(
+            events,
+            [
+                ("check:host", False),
+                ("check:host", True),
+                ("run", True),
+                ("check:tmp", True),
+                ("check:host", True),
+                ("rename:host->old", True),
+                ("replace:tmp->host", True),
+            ],
+        )
+        # 戻った後は解放されている
+        self.assertFalse(_lock_held_elsewhere(self.lock))
+        self.assertTrue(jevlint_host.host_reusable(self.host, "0.7.0"))
+        self.assertEqual(self.leftovers(self.host), [])
+
+    def test_existing_host_is_moved_aside_intact_and_deleted_only_after_the_new_one_is_placed(self):
+        # どかした古い host は、置く replace の時点ではまだ中身ごと在り (消したのではなく
+        # どかした)、消すのは新しい host が名前に置かれた後。どかす前に消す形や、置く前に
+        # どかしたものを消す形に戻す変異で赤になる
+        _populate_fake_package(self.host, "0.6.9")
+        real_replace, real_rmtree = Path.replace, shutil.rmtree
+        seen = {}
+
+        def spying_replace(path, target):
+            olds = [p for p in self.host.parent.iterdir() if p.name.startswith(".old-")]
+            seen["old_holds_the_previous_version_at_replace"] = [
+                jevlint_host.host_reusable(p, "0.6.9") for p in olds
+            ]
+            seen["host_name_is_free_at_replace"] = not self.host.exists()
+            return real_replace(path, target)
+
+        def spying_rmtree(path, ignore_errors=False, **kwargs):
+            if Path(path).name.startswith(".old-"):
+                seen["host_is_the_new_version_when_old_is_deleted"] = jevlint_host.host_reusable(
+                    self.host, "0.7.0"
+                )
+            return real_rmtree(path, ignore_errors=ignore_errors, **kwargs)
+
+        with mock.patch.object(Path, "replace", spying_replace), mock.patch.object(
+            jevlint_host.shutil, "rmtree", spying_rmtree
+        ):
+            jevlint_host.prepare_host("0.7.0", self.source, run=_FakeRun("0.7.0"))
+        self.assertEqual(
+            seen,
+            {
+                "old_holds_the_previous_version_at_replace": [True],
+                "host_name_is_free_at_replace": True,
+                "host_is_the_new_version_when_old_is_deleted": True,
+            },
+        )
+        self.assertEqual(self.leftovers(self.host), [])
+
+    def test_lock_is_released_but_the_lock_file_is_kept_after_failure_and_after_success(self):
+        # ロックファイルを消すと、次の実行が別の inode を作り、2 つの実行が別々の inode に
+        # 別々のロックを取って両方とも進む。消さずに置いておく。解放は fd を閉じることで
+        # 行い、失敗の経路でも成功の経路でも戻った後には別の open から取れる
+        with self.assertRaises(jevlint_host.HostError):
+            jevlint_host.prepare_host(
+                "0.7.0", self.source, run=_FakeRun("0.7.0", returncode=1, populate=False)
+            )
+        self.assertTrue(self.lock.is_file())
+        self.assertFalse(_lock_held_elsewhere(self.lock))
+        jevlint_host.prepare_host("0.7.0", self.source, run=_FakeRun("0.7.0"))
+        self.assertTrue(self.lock.is_file())
+        self.assertFalse(_lock_held_elsewhere(self.lock))
+
+    def _rename_then_foreign_write(self, version: str, marker: str):
+        """どかす rename の直後に、ロックを取らない書き手が host の名前へ直接置く spy。
+
+        その後の実物の `tmp.replace(host)` は host が非空のディレクトリなので OSError
+        (ENOTEMPTY) になり、置き換えの失敗の再確認の分岐に入る。
+        """
+        real_rename = Path.rename
+
+        def spying_rename(path, target):
+            result = real_rename(path, target)
+            _populate_fake_package(self.host, version, marker)
+            return result
+
+        return mock.patch.object(Path, "rename", spying_rename)
+
+    def test_failed_replace_yields_to_a_lockless_writer_that_placed_the_same_version(self):
+        _populate_fake_package(self.host, "0.6.9")
+        marker = "// lockless writer cli\n"
+        run = _FakeRun("0.7.0")
+        with self._rename_then_foreign_write("0.7.0", marker):
+            result = jevlint_host.prepare_host("0.7.0", self.source, run=run)
+        self.assertEqual(result, self.host)
+        self.assertEqual(len(run.calls), 1)
+        self.assertEqual(jevlint_host.cli_path(self.host).read_text(encoding="utf-8"), marker)
+        self.assertEqual(self.leftovers(self.host), [])
+
+    def test_failed_replace_is_a_host_error_when_a_lockless_writer_placed_another_version(self):
+        _populate_fake_package(self.host, "0.6.9")
+        marker = "// lockless writer cli of another version\n"
+        with self._rename_then_foreign_write("0.6.8", marker):
+            with self.assertRaisesRegex(jevlint_host.HostError, "^host の設置に失敗した"):
+                jevlint_host.prepare_host("0.7.0", self.source, run=_FakeRun("0.7.0"))
+        # 置いたものには触らず、自分の取得物とどかしたものだけを片付ける
+        self.assertEqual(jevlint_host.cli_path(self.host).read_text(encoding="utf-8"), marker)
+        self.assertEqual(self.leftovers(self.host), [])
+        self.assertFalse(_lock_held_elsewhere(self.lock))
+
+    def test_unopenable_lock_file_is_a_host_error_before_the_fetch(self):
+        # ロックの位置にディレクトリがあると os.open は IsADirectoryError (実測)
+        self.lock.mkdir(parents=True)
+        run = _FakeRun("0.7.0")
+        with self.assertRaisesRegex(jevlint_host.HostError, "^host のロックファイルを開けない"):
+            jevlint_host.prepare_host("0.7.0", self.source, run=run)
+        self.assertEqual(run.calls, [])
+
+    def test_flock_failure_is_a_host_error_before_the_fetch(self):
+        # flock 自体の失敗 (ロックを持たないファイルシステムの ENOLCK 等) はローカルの
+        # ディスクでは決定的に起こせないので、この 1 本だけ OS の境界に OSError を注入する
+        def refusing_flock(fd, operation):
+            raise OSError(errno.ENOLCK, "No locks available")
+
+        run = _FakeRun("0.7.0")
+        with mock.patch.object(jevlint_host.fcntl, "flock", refusing_flock):
+            with self.assertRaisesRegex(jevlint_host.HostError, "^host のロックを取れない"):
+                jevlint_host.prepare_host("0.7.0", self.source, run=run)
+        self.assertEqual(run.calls, [])
 
 
 class HostReusableTests(unittest.TestCase):
@@ -665,6 +910,14 @@ class HostLayoutTests(unittest.TestCase):
             Path("/cache/jev-lint-curated/0.7.0/node_modules/jev-lint/package.json"),
         )
 
+    def test_lock_file_is_a_dot_lock_sibling_named_after_the_host(self):
+        # 親の中の兄弟で、`.lock-` の接頭辞は取得の `.tmp-` とどかす `.old-` のどちらとも
+        # 版の値によらず衝突しない。版ごとに分けるのは、別の版の取得 (compat) を待たせないため
+        host = Path("/cache/jev-lint-curated/0.7.0")
+        self.assertEqual(
+            jevlint_host.lock_path(host), Path("/cache/jev-lint-curated/.lock-0.7.0")
+        )
+
 
 class FixedTailTests(unittest.TestCase):
     def test_eleven_elements_in_fixed_order(self):
@@ -679,7 +932,7 @@ class FixedTailTests(unittest.TestCase):
                 "--cache",
                 "none",
                 "--retry",
-                "3",
+                str(jevlint_host.RETRY_PASSES),
                 "--model",
                 "jev-latest",
                 "--base-url",
@@ -687,6 +940,14 @@ class FixedTailTests(unittest.TestCase):
             ],
         )
         self.assertEqual(len(tail), 11)
+
+    def test_retry_value_is_the_passes_constant(self):
+        # 要約の見積もりは同じ定数でパス数を掛けるので、`--retry` に渡す値がこの定数から
+        # 来ていることを、定数を別の値に変えて見る (定数と同じ literal を書いた形では、
+        # 値が一致している間は区別できないため)
+        with mock.patch.object(jevlint_host, "RETRY_PASSES", 7):
+            tail = jevlint_host.fixed_tail(Path("/tmp/x/config.json"))
+        self.assertEqual(tail[tail.index("--retry") + 1], "7")
 
 
 class UpstreamArgvTests(unittest.TestCase):
