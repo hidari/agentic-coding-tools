@@ -11,7 +11,7 @@ permissions:
 jobs:
   leak-guard:
     name: gitleaks (leak guard)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -40,7 +40,7 @@ jobs:
 
   package-shape:
     name: パッケージの形と命名規約
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       # runner の python3 を使う。スクリプトは標準ライブラリのみで、
@@ -72,14 +72,14 @@ jobs:
 
   readme-drift:
     name: README の drift
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - run: python3 scripts/gen-readme.py --check
 
   python-tests:
     name: Python テスト (stdlib unittest)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
