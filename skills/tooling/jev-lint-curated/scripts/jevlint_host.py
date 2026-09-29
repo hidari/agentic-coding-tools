@@ -307,7 +307,8 @@ def _host_lock(path: Path) -> Iterator[None]:
     ロックファイルは消さない。消すと、次の実行が同じ名前で別の inode を作り、2 つの実行が
     別々の inode に別々のロックを取って両方とも入れ替えに進む。解放は fd を閉じることで
     行う (flock のロックは open file description に属し、最後の fd が閉じると解放される。
-    実測: 3.9.6・3.14.7、macOS)。`os.open` の fd は継承されない (PEP 446) ので、内側で
+    実測: 3.9.6・3.14.7、macOS)。ロックを持ったまま落ちても fd と一緒に解放されるので、
+    残ったロックを消す手順は要らない。`os.open` の fd は継承されない (PEP 446) ので、内側で
     起動する `pnpm add` にロックが渡ることも、その子が閉じ忘れて解放が遅れることも無い。
 
     開けない (位置にディレクトリがある、親に書けない等) ときと `flock` 自体が失敗する
@@ -337,10 +338,10 @@ def _replace_host_atomically(host: Path, tmp: Path, version: str) -> None:
 
     直接 `shutil.rmtree(host)` してから `rename` すると、`rmtree` は atomic でないため
     (a) 別プロセスが使用中の host を削除してしまう (b) 2 つの `rmtree` が競合して
-    `FileNotFoundError` になる、の 2 通りの競合を生む。実測 (ロックを入れる前): 2 プロセスが
-    同時に「再利用できない」と判定して `pnpm add` を走らせたとき、先に `tmp.replace(host)` が
+    `FileNotFoundError` になる、の 2 通りの競合を生む。同じ名前へ同時に置く 2 つの書き手
+    (上に挙げたロックを取らない書き手とこの関数など) では、先に `tmp.replace(host)` が
     通った側が host を置いたあと、後から `tmp.replace(host)` を呼んだ側は host が既に
-    非空のディレクトリになっていて `OSError` (`ENOTEMPTY`、macOS で errno 66) になる。
+    非空のディレクトリになっていて `OSError` (`ENOTEMPTY`、macOS で errno 66) になる (実測)。
 
     手順:
 
@@ -407,22 +408,21 @@ def prepare_host(
     置くのは、途中で切れた取得 (ネットワーク断・プロセス kill 等) が host として再利用
     されるのを防ぐため。
 
-    再利用できないと読んだ後の再確認から入れ替えまでを、版ごとのロック (`lock_path`、
-    `_host_lock`) の内側で行う。同時に走った 2 つの実行が両方とも「再利用できない」と読んで
-    取得と入れ替えに進むと、どかす rename と置く replace の間の窓で、片方の finally がもう
-    片方の良い host を消して host の名前が空のまま残る経路と、同時の rename で偽の終了コード
-    2 になる経路がある。`pnpm add` もロックの内側に置く。外に出すと、後から来た
-    実行が同じ版をもう一度取得してから (ネットワークと時間を使ってから) 譲ることになる。
-    内側なら、待った後の再確認が先の実行の host を拾い、取得は 1 回で済む。ロックは版ごと
-    なので、待つのは自分が要る版を誰かが用意しているときに限る。ロックを持ったまま落ちても
-    fd と一緒に解放されるので、残ったロックを消す手順は要らない。
+    再利用できないと読んだ後の再確認から入れ替えまでを、版ごとのロックの内側で行う (待ち方と
+    解放は `_host_lock`、版ごとに分ける理由は `lock_path` の docstring)。同時に走った 2 つの
+    実行が両方とも「再利用できない」と読んで取得と入れ替えに進むと、どかす rename と置く
+    replace の間の窓で、片方の finally がもう片方の良い host を消して host の名前が空のまま
+    残る経路と、同時の rename で偽の終了コード 2 になる経路がある。`pnpm add` もロックの
+    内側に置く。外に出すと、後から来た実行が同じ版をもう一度取得してから (ネットワークと
+    時間を使ってから) 譲ることになる。内側なら、待った後の再確認が先の実行の host を拾い、
+    取得は 1 回で済む。
 
     最初の確認だけはロックの外で行い、再利用できればロックもロックファイルの作成も親の
     mkdir もせずに返す (double-checked)。再利用できる同じ版の host は誰も入れ替えない
     (入れ替えるのは再利用できないと判定した側だけで、その判定と入れ替えはロックの内側に
     ある) ので、ロックの外の確認は窓を作らない。先にロックを取る形は、親が読み取り専用で
-    host だけ再利用できる配置でロックファイルの `O_CREAT` が `EACCES` になり、以前は 0 で
-    通った実行を 2 にする。
+    host だけ再利用できる配置でロックファイルの `O_CREAT` が `EACCES` になり、再利用できる
+    host があるのに 2 で終わる。
     """
     host = host_dir(version, source)
     _reject_pnpm_workspace_ancestor(host)
@@ -436,8 +436,7 @@ def prepare_host(
         raise HostError(f"host の親ディレクトリを作れない: {parent}: {error}") from None
 
     with _host_lock(lock_path(host)):
-        # ロックの内側の再確認。待っている間に別の実行が同じ版を置いていれば取得せずそれを
-        # 使う。外の確認とここの間には別の実行の入れ替えが入りうるので、外の確認では代わらない
+        # double-checked の内側の再確認
         if host_reusable(host, version):
             return host
         try:
@@ -445,46 +444,7 @@ def prepare_host(
         except OSError as error:
             raise HostError(f"host の取得用の一時ディレクトリを作れない: {error}") from None
         try:
-            try:
-                (tmp / "package.json").write_text(
-                    json.dumps({"private": True}), encoding="utf-8"
-                )
-            except OSError as error:
-                raise HostError(
-                    f"host の取得用の package.json を書けない: {tmp / 'package.json'}: {error}"
-                ) from None
-            # `--allow-build=@ast-grep/cli` は、jev-lint の依存で唯一ビルドの許可が要る
-            # `@ast-grep/cli` の postinstall を許す。pnpm 12 は許可の無い postinstall を持つ
-            # 依存を入れると `ERR_PNPM_IGNORED_BUILDS` で止まり (実測: pnpm 12.3.4、jev-lint
-            # 0.7.0、macOS arm64 と Linux x64 の両方で rc 1)、ここでは終了コード 2 になる。
-            # postinstall は、パッケージの中の `ast-grep` (Node のスクリプト) をネイティブの
-            # バイナリへ置き換える。上流は、`build_env` が渡さない `JEV_LINT_AST_GREP` を除けば、
-            # パッケージの位置の `ast-grep` を最初に起動する (上流の `dist/scan.js` の
-            # `astGrepBin`)。走ったかは `--version` の rc では分からない (置き換わらなくても
-            # スクリプトがバイナリを探して起動し rc 0 になる。実測)。見分けられるのは、
-            # パッケージの中の `ast-grep` がネイティブのバイナリ (macOS は Mach-O、Linux は ELF)
-            # か Node のスクリプトかと、`--version` の stderr の `postinstall script did not run`
-            # の警告の有無である。pnpm の出力の `postinstall` の行は目印にならない: 温まった
-            # store から取るときは、この行が無いのにバイナリになっていた (side-effects cache。
-            # 実測: macOS)
-            argv = ["pnpm", "add", "--allow-build=@ast-grep/cli", f"jev-lint@{version}"]
-            try:
-                proc = run(argv, cwd=str(tmp), env=install_env(source))
-            except OSError as error:
-                # `pnpm` が PATH に無いときの `subprocess.run` は非 0 の returncode ではなく
-                # OSError (実測: FileNotFoundError) を投げる。素の例外で抜けると Python は
-                # 終了コード 1 で終わり、ラッパの「1 = finding あり」と衝突する
-                # (`jevlint_tree.py` の `materialize` が書き出しの OSError を `TreeError` に
-                # 変える理由と同じ)。ここで HostError に変えて fail closed にする
-                raise HostError(f"pnpm を起動できない: {error}") from None
-            if proc.returncode != 0:
-                raise HostError(
-                    f"pnpm add jev-lint@{version} が失敗した (終了コード {proc.returncode})"
-                )
-            if not host_reusable(tmp, version):
-                raise HostError(
-                    f"pnpm add jev-lint@{version} は成功したが取得物の形が想定と違う"
-                )
+            _install_into(tmp, version, source, run)
             _replace_host_atomically(host, tmp, version)
         finally:
             # `_replace_host_atomically` が成功すると tmp はその名前ではもう存在しない
@@ -492,6 +452,48 @@ def prepare_host(
             # なる。どの失敗経路でも tmp の残骸を必ず片付けるために分岐を作らず常に呼ぶ
             shutil.rmtree(tmp, ignore_errors=True)
     return host
+
+
+def _install_into(tmp: Path, version: str, source: Mapping[str, str], run: Callable) -> None:
+    """`tmp` を cwd にして `pnpm add` で jev-lint を取得し、再利用できる形かを確かめる。
+
+    cwd を選ぶ理由は `prepare_host`、env を組み立てる理由は `install_env` の docstring。
+    どの失敗も `HostError` にする。
+    """
+    try:
+        (tmp / "package.json").write_text(json.dumps({"private": True}), encoding="utf-8")
+    except OSError as error:
+        raise HostError(
+            f"host の取得用の package.json を書けない: {tmp / 'package.json'}: {error}"
+        ) from None
+    # `--allow-build=@ast-grep/cli` は、jev-lint の依存で唯一ビルドの許可が要る
+    # `@ast-grep/cli` の postinstall を許す。pnpm 12 は許可の無い postinstall を持つ
+    # 依存を入れると `ERR_PNPM_IGNORED_BUILDS` で止まり (実測: pnpm 12.3.4、jev-lint
+    # 0.7.0、macOS arm64 と Linux x64 の両方で rc 1)、ここでは終了コード 2 になる。
+    # postinstall は、パッケージの中の `ast-grep` (Node のスクリプト) をネイティブの
+    # バイナリへ置き換える。上流は、`build_env` が渡さない `JEV_LINT_AST_GREP` を除けば、
+    # パッケージの位置の `ast-grep` を最初に起動する (上流の `dist/scan.js` の
+    # `astGrepBin`)。走ったかは `--version` の rc では分からない (置き換わらなくても
+    # スクリプトがバイナリを探して起動し rc 0 になる。実測)。見分けられるのは、
+    # パッケージの中の `ast-grep` がネイティブのバイナリ (macOS は Mach-O、Linux は ELF)
+    # か Node のスクリプトかと、`--version` の stderr の `postinstall script did not run`
+    # の警告の有無である。pnpm の出力の `postinstall` の行は目印にならない: 温まった
+    # store から取るときは、この行が無いのにバイナリになっていた (side-effects cache。
+    # 実測: macOS)
+    argv = ["pnpm", "add", "--allow-build=@ast-grep/cli", f"jev-lint@{version}"]
+    try:
+        proc = run(argv, cwd=str(tmp), env=install_env(source))
+    except OSError as error:
+        # `pnpm` が PATH に無いときの `subprocess.run` は非 0 の returncode ではなく
+        # OSError (実測: FileNotFoundError) を投げる。素の例外で抜けると Python は
+        # 終了コード 1 で終わり、ラッパの「1 = finding あり」と衝突する
+        # (`jevlint_tree.py` の `materialize` が書き出しの OSError を `TreeError` に
+        # 変える理由と同じ)。ここで HostError に変えて fail closed にする
+        raise HostError(f"pnpm を起動できない: {error}") from None
+    if proc.returncode != 0:
+        raise HostError(f"pnpm add jev-lint@{version} が失敗した (終了コード {proc.returncode})")
+    if not host_reusable(tmp, version):
+        raise HostError(f"pnpm add jev-lint@{version} は成功したが取得物の形が想定と違う")
 
 
 _NODE_VERSION_RE = re.compile(r"v(\d+)\.(\d+)\.(\d+)")

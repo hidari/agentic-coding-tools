@@ -216,9 +216,8 @@ def _missing_breakdown(record: dict, missing: int) -> str:
     )
     if total == missing:
         return f" ({per_file})"
-    if not per_file:
-        return f" (記録で値が無い答え {total} 件)"
-    return f" (記録で値が無い答え {total} 件: {per_file})"
+    detail = f": {per_file}" if per_file else ""
+    return f" (記録で値が無い答え {total} 件{detail})"
 
 
 def _mbt_lines(mbt_count: int) -> "list[str]":
@@ -250,11 +249,14 @@ def summarize(
     if dry_run:
         # `subjects` は classify の `_dry_run_ok` が既に検査済みなので直接引ける。`usd` は
         # 判定に使わない (REQUIRED の対象外の) 記述用の値なので、他の記述用フィールドと
-        # 同じく寛容な既定値で読む。上流の `usd` は 1 パス分で、パス数を掛けていない。実測では
-        # 実行の費用が見積もりの約 2.5 倍になり、掛けていない値だけを出すと予算を読み違える。
-        # 上流の値はそのまま残し (上流の出力と突き合わせられるように)、掛けた値を上限として
-        # 足す。上限と呼ぶのは、上流の費用は成功した request だけを数え、上流は直せない
-        # 失敗の後の batch とパスを送らないため (`dist/run.js`)
+        # 同じく寛容な既定値で読む。上流の `usd` がパス数を掛けていないこと (と、その実測) は
+        # `jevlint_host.RETRY_PASSES` のコメントが持つ。実測では実行の費用が見積もりの約 2.5 倍
+        # になり、掛けていない値だけを出すと予算を読み違える。上流の値はそのまま残し (上流の
+        # 出力と突き合わせられるように)、掛けた値を上限として足す。上限と呼ぶのは、上流の費用は
+        # 成功した request だけを数え (`dist/jev.js` の `calls`)、上流は直せない失敗の後の batch
+        # とパスを送らないため (`dist/run.js` の `refused`)。ここを `src/*.ts` ではなく `dist/`
+        # で引くのは、配布される jev-lint (host に入るもの) が `src/` を含まず、読めたのが
+        # `dist/*.js` だけだったため
         usd = doc.get("usd", 0)
         lines.append(
             f"見積もり: subject {doc['subjects']} 件、費用 ${usd:.5f} "

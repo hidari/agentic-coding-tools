@@ -23,7 +23,8 @@
 - `src/gate.ts` `decide`: 答えの無い subject は `value`・`confidence` が null で、`kind`・`arm`
   を持たない
 - `src/cli/dry-run.ts` `dryRunDocument`: `usd` は batch の token の和から出す 1 パス分の値で、
-  `retry` を掛けていない
+  `retry` を掛けていない (配布される jev-lint は `src/` を含まないので、確かめたのは
+  `dist/cli/dry-run.js`)
 
 `classify` の判定順 (canonical は `jevlint.py` のモジュール docstring。spec の「結果の要約と
 終了コード」節では項目 2〜9 に当たる) を、次のデシジョンテーブルの行ごとにテストする (テストの
@@ -67,6 +68,21 @@ CURATED_SAMPLE = (
 # import しないのは、このモジュールのテストを jevlint_result だけに閉じるため。入口が本物の
 # 値を渡すことは test_jevlint.py が見る
 PASSES_SAMPLE = 3
+
+
+def _summarize(outcome, **overrides) -> str:
+    """`summarize` を見本の引数で呼ぶ。テストが見る引数だけを `overrides` で差し替える。"""
+    kwargs = {
+        "sha": "s",
+        "version": "v",
+        "curated": CURATED_SAMPLE,
+        "passes": PASSES_SAMPLE,
+        "mbt_count": 0,
+        "dry_run": False,
+    }
+    kwargs.update(overrides)
+    return jevlint_result.summarize(outcome, **kwargs)
+
 
 FINDING_ROW = {
     # report.ts formatJson の row() がそのまま持つキー一式。
@@ -372,14 +388,7 @@ class ClassifyTests(unittest.TestCase):
 class SummarizeCommonTests(unittest.TestCase):
     def test_sha_and_version_appear(self):
         outcome = jevlint_result.classify(0, json.dumps(_doc()), _record(), dry_run=False)
-        text = jevlint_result.summarize(
-            outcome,
-            sha="abc1234",
-            version="0.7.0",
-            curated=CURATED_SAMPLE,
-            passes=PASSES_SAMPLE, mbt_count=0,
-            dry_run=False,
-        )
+        text = _summarize(outcome, sha="abc1234", version="0.7.0")
         self.assertIn("abc1234", text)
         self.assertIn("0.7.0", text)
 
@@ -387,27 +396,21 @@ class SummarizeCommonTests(unittest.TestCase):
         outcome = jevlint_result.classify(
             0, json.dumps(_doc()), _record(model="jev-latest-20260901"), dry_run=False
         )
-        text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
-        )
+        text = _summarize(outcome)
         self.assertIn("jev-latest-20260901", text)
 
     def test_model_null_shows_no_response(self):
         outcome = jevlint_result.classify(
             0, json.dumps(_doc()), _record(model=None), dry_run=False
         )
-        text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
-        )
+        text = _summarize(outcome)
         self.assertIn("応答なし", text)
 
     def test_dry_run_has_no_model_line(self):
         stdout = '{"dryRun": true, "subjects": 5, "usd": 0.01, "ignored": null, ' \
             '"unpaired": null, "idleLanguages": [], "silentRules": []}'
         outcome = jevlint_result.classify(0, stdout, None, dry_run=True)
-        text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=True
-        )
+        text = _summarize(outcome, dry_run=True)
         self.assertNotIn("応答したモデル", text)
         self.assertNotIn("応答なし", text)
 
@@ -439,9 +442,7 @@ class SummarizeCommonTests(unittest.TestCase):
             spent={"calls": 7, "inputTokens": 5000, "usd": 0.1234},
         )
         outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
-        text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
-        )
+        text = _summarize(outcome)
         self.assertIn("subject 42 件", text)  # stats.subjects
         self.assertIn("2 ファイル", text)  # len(stats.byFile)
         self.assertIn("未回答: 2 件", text)  # stats.missing
@@ -459,9 +460,7 @@ class SummarizeCommonTests(unittest.TestCase):
             idleLanguages=[{"language": "rust", "rules": 5}],
         )
         outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
-        text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
-        )
+        text = _summarize(outcome)
         self.assertIn("3 件を見送った、1 ファイルを丸ごと", text)
         self.assertIn("2 件 (paired)", text)
         # silentRules は curated に含まれるものだけ (curated に無い go/... は出ない)
@@ -474,9 +473,7 @@ class SummarizeCommonTests(unittest.TestCase):
         # あれば「聞く前に落とした量」として出す
         doc = _doc(ignored={"subjects": 0, "files": ["a.py"], "unknownRules": []})
         outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
-        text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
-        )
+        text = _summarize(outcome)
         self.assertIn("jev-lint-ignore コメントで 0 件を見送った、1 ファイルを丸ごと", text.splitlines())
 
     def test_ignored_and_unpaired_hidden_when_zero(self):
@@ -485,32 +482,24 @@ class SummarizeCommonTests(unittest.TestCase):
             unpaired={"subjects": 0, "files": []},
         )
         outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
-        text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
-        )
+        text = _summarize(outcome)
         self.assertNotIn("見送った", text)
 
     def test_silent_rules_filtered_out_entirely_shows_no_line(self):
         doc = _doc(silentRules=["go/not-curated-rule"])
         outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
-        text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
-        )
+        text = _summarize(outcome)
         self.assertNotIn("go/not-curated-rule", text)
         self.assertNotIn("一致しなかった", text)
 
     def test_mbt_count_nonzero_shown(self):
         outcome = jevlint_result.classify(0, json.dumps(_doc()), _record(), dry_run=False)
-        text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=2, dry_run=False
-        )
+        text = _summarize(outcome, mbt_count=2)
         self.assertIn(".mbt 2 本は parser が無いので見ていない", text)
 
     def test_mbt_count_zero_not_shown(self):
         outcome = jevlint_result.classify(0, json.dumps(_doc()), _record(), dry_run=False)
-        text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
-        )
+        text = _summarize(outcome)
         self.assertNotIn(".mbt", text)
 
     def test_finding_line_format_and_japanese_filename_with_space(self):
@@ -521,9 +510,7 @@ class SummarizeCommonTests(unittest.TestCase):
         finding["cutoff"] = 0.7
         doc = _doc(findings=[finding])
         outcome = jevlint_result.classify(1, json.dumps(doc), _record(), dry_run=False)
-        text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
-        )
+        text = _summarize(outcome)
         self.assertIn(
             "src/日本語 ファイル.py:7 var-name-describes-value 0.91/0.70", text
         )
@@ -547,9 +534,7 @@ class SummarizeCommonTests(unittest.TestCase):
         )
         outcome = jevlint_result.classify(1, json.dumps(doc), _record(), dry_run=False)
         self.assertEqual(outcome.code, 3)
-        text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
-        )
+        text = _summarize(outcome)
         self.assertIn("3 件は答えが無い", text)
         self.assertIn("エラー: 1 件", text)
 
@@ -566,9 +551,7 @@ class SummarizeCommonTests(unittest.TestCase):
         )
         outcome = jevlint_result.classify(1, json.dumps(doc), _record(), dry_run=False)
         self.assertEqual(outcome.code, 3)
-        text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
-        )
+        text = _summarize(outcome)
         self.assertIn("0 件は答えが無い", text)
         self.assertIn("エラー: 1 件 (例: explain: HTTP 402)", text)
 
@@ -587,9 +570,7 @@ class SummarizeCommonTests(unittest.TestCase):
         )
         outcome = jevlint_result.classify(1, json.dumps(doc), _record(), dry_run=False)
         self.assertEqual(outcome.code, 3)
-        text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
-        )
+        text = _summarize(outcome)
         missing_pos = text.index("4 件は答えが無い")
         finding_pos = text.index("src/foo.py:12")
         self.assertLess(missing_pos, finding_pos)
@@ -615,10 +596,7 @@ class SummarizeMissingBreakdownTests(unittest.TestCase):
             }
         )
         outcome = jevlint_result.classify(0, json.dumps(doc), record, dry_run=False)
-        text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE,
-            mbt_count=0, dry_run=False,
-        )
+        text = _summarize(outcome)
         lines = [line for line in text.splitlines() if line.startswith("未回答: ")]
         self.assertEqual(len(lines), 1)
         return lines[0]
@@ -717,9 +695,7 @@ class SummarizeDryRunTests(unittest.TestCase):
             '"silentRules": ["typescript/pure-name-is-pure"]}'
         )
         outcome = jevlint_result.classify(0, stdout, None, dry_run=True)
-        text = jevlint_result.summarize(
-            outcome, sha="deadbee", version="0.7.0", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=1, dry_run=True
-        )
+        text = _summarize(outcome, sha="deadbee", version="0.7.0", mbt_count=1, dry_run=True)
         self.assertIn("deadbee", text)
         self.assertIn("0.7.0", text)
         self.assertIn("subject 8 件", text)  # subjects
@@ -733,10 +709,7 @@ class SummarizeDryRunTests(unittest.TestCase):
     def _estimate_line(self, usd: float, passes: int) -> str:
         stdout = json.dumps({"dryRun": True, "subjects": 1009, "usd": usd, "retry": passes})
         outcome = jevlint_result.classify(0, stdout, None, dry_run=True)
-        text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=passes, mbt_count=0,
-            dry_run=True,
-        )
+        text = _summarize(outcome, passes=passes, dry_run=True)
         return text.splitlines()[1]
 
     def test_estimate_shows_the_upstream_usd_as_one_pass_and_the_bound_for_all_passes(self):

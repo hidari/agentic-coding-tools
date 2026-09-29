@@ -970,8 +970,7 @@ class ExpandedCommitTests(unittest.TestCase):
         cwd の下には `rel` を作っておく。gettempdir は実在する候補しか選ばないので、
         無ければ相対の値が cwd の下を指す退行を見られない。
         """
-        cwd = Path(tempfile.mkdtemp(prefix="jevlint-cwd-"))
-        self.addCleanup(lambda: shutil.rmtree(cwd, ignore_errors=True))
+        cwd, _ = self._private_base()
         (cwd / "rel").mkdir()
         self.addCleanup(os.chdir, os.getcwd())
         os.chdir(cwd)
@@ -1514,15 +1513,16 @@ class SignalsAsExceptionsTests(unittest.TestCase):
         self.assertTrue(issubclass(jevlint_tree.SignalInterrupt, KeyboardInterrupt))
         for sig in (signal.SIGTERM, signal.SIGHUP):
             with self.subTest(signal=sig.name):
-                previous = signal.getsignal(sig)
+                # 出発点を本番の既定 (SIG_DFL) に揃える。受け継いだ扱いのままだと、nohup の下で
+                # SIGHUP が SIG_IGN になっていて置き換えられず、環境によって赤になる
+                self.addCleanup(signal.signal, sig, signal.signal(sig, signal.SIG_DFL))
                 with self.assertRaises(jevlint_tree.SignalInterrupt) as cm:
                     with jevlint_tree.signals_as_exceptions():
-                        self.assertIsNot(previous, signal.getsignal(sig))
                         self.assertTrue(callable(signal.getsignal(sig)))
                         os.kill(os.getpid(), sig)
                         self.fail(f"{sig.name} が例外として届いていない")
                 self.assertEqual(int(sig), cm.exception.signum)
-                self.assertIs(previous, signal.getsignal(sig))
+                self.assertIs(signal.SIG_DFL, signal.getsignal(sig))
 
     def test_handlers_are_restored_after_a_normal_exit(self):
         previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP)}
@@ -1533,11 +1533,13 @@ class SignalsAsExceptionsTests(unittest.TestCase):
 
     def test_ignored_or_c_level_handlers_are_left_untouched_per_signal(self):
         # 本物の None (C の側で入れたハンドラ) は Python から作れないので、getsignal と
-        # signal を差し替えて呼び出しの列で見る。置き換えないシグナルは入れも戻しもしない
+        # signal を差し替えて呼び出しの列で見る。置き換えないシグナルは入れも戻しもしない。
+        # 置き換える側 (SIG_DFL と関数) も並べ、テストのプロセスが受け継いだ扱いに依らずに見る
         def handler(signum, frame):
             pass
 
         cases = {
+            "SIG_DFL": {signal.SIGTERM: signal.SIG_DFL, signal.SIGHUP: signal.SIG_DFL},
             "SIG_IGN": {signal.SIGTERM: signal.SIG_IGN, signal.SIGHUP: signal.SIG_IGN},
             "None": {signal.SIGTERM: None, signal.SIGHUP: None},
             "関数": {signal.SIGTERM: handler, signal.SIGHUP: handler},

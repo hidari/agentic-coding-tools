@@ -235,10 +235,8 @@ class ParseArgsTests(unittest.TestCase):
             )
 
     def test_double_dash_passes_dash_positionals_through_to_the_canonical_checks(self):
-        # argparse は `--` の後ろの `-x` を位置引数に入れる。入口は `-` 始まりを見ず、
-        # パスは `jevlint_tree.normalize_path` (正規化した後の形で見るので `./-x` も止まる)、
-        # 版は `parse_version` (数字の形しか通さない) が止める。終了コードへの写しは
-        # MainRejectionTests と MainCompatTests が持つ
+        # 入口は `--` の後ろの `-` 始まりを位置引数として通す。拒否は `parse_args` の docstring が
+        # 名指す canonical で見て、終了コードへの写しは MainRejectionTests と MainCompatTests が持つ
         self.assertEqual(jevlint.parse_args(["check", "--", "-x"]).paths, ["-x"])
         self.assertEqual(jevlint.parse_args(["compat", "--", "-0.7.0"]).version, "-0.7.0")
 
@@ -725,8 +723,8 @@ class MainRejectionTests(_MainTestCase):
         self.assertTrue(self.git_calls())
 
     def test_dash_paths_after_double_dash_are_2_from_the_path_check_before_the_host(self):
-        # `-` 始まりの拒否の canonical は jevlint_tree.normalize_path で、入口には無い。
-        # `./-x` は生の文字列では `.` 始まりなので、正規化した後で見る canonical でしか止まらない
+        # 拒否するのは `parse_args` の docstring が名指すパスの canonical。`./-x` は生の文字列では
+        # `.` 始まりなので、正規化した後の形で見ていることをこのケースが見る
         for path in ("-x", "./-x", "-"):
             with self.subTest(path=path):
                 code, out, err = self.run_main(["check", "--dry-run", "--", path])
@@ -1502,8 +1500,8 @@ class MainCompatTests(_CompatTestCase):
                 self.assertEqual(self.upstream.all_calls(), [])
 
     def test_dash_version_after_double_dash_is_2_from_parse_version_before_any_child_process(self):
-        # `-` 始まりの拒否の canonical は parse_version (X.Y.Z の数字の形しか通さない) で、
-        # 入口には無い。argparse は `--` の後ろの値を位置引数に入れるので、そこまで届く
+        # 拒否するのは `parse_args` の docstring が名指す版の canonical。argparse は `--` の
+        # 後ろの値を位置引数に入れるので、そこまで届く
         code, out, err = self.run_compat(argv=["compat", "--", "-0.7.0"])
         self.assertEqual(code, 2)
         self.assertEqual(out, "")
