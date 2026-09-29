@@ -7,9 +7,9 @@
 だけから行う (spec の「結果の要約と終了コード」節)。終了コードの意味そのものは
 `jevlint.py` のモジュール docstring が canonical で、ここでは数値を再掲するだけに留める。
 
-このモジュールは他の jevlint* モジュールを import しない。`curated` (`jevlint.CURATED`)
-と `version` (`jevlint.UPSTREAM_VERSION`) は呼び出し側から引数で受け取る (依存は入口から
-下流へ一方向に流し、循環と pin の二重管理を防ぐため)。
+このモジュールは他の jevlint* モジュールを import しない。`curated` (`jevlint.CURATED`)、
+`version` (`jevlint.UPSTREAM_VERSION`)、`passes` (`jevlint_host.RETRY_PASSES`) は呼び出し側から
+引数で受け取る (依存は入口から下流へ一方向に流し、循環と pin の二重管理を防ぐため)。
 
 `classify` と `summarize` はどちらも print しない。利用者への出力 (stdout に要約、stderr に
 上流の stderr をそのまま流す) は呼び出し側 (`jevlint.py` の `main`) の責務であり、このモジュールは
@@ -180,6 +180,47 @@ def _dropped_before_asking(doc: dict, curated: "tuple[str, ...]") -> "list[str]"
     return lines
 
 
+def _missing_breakdown(record: dict, missing: int) -> str:
+    """「未回答」の行に足す、答えの無い subject のファイルごとの件数 (括弧付き)。
+
+    指摘が出なかったとき、答えが無かったのか cutoff に届かなかったのかは要約の件数だけでは
+    分からず、どのファイルの subject に答えが無いかが要る。数えるのは `--record` の記録の
+    `answers` のうち `value` が null の要素で、上流 (0.7.0 の `buildRecord`) は答えの無い
+    subject をこの形で持つ。要素はパスごとではなく subject ごとに 1 つで、実測では `--retry 3`
+    の実行でも null の要素の数 (133) が `stats.missing` と一致した。
+
+    記録の `answers` は判定に使わない記述用の値なので、形が想定と違っても止めずに内訳を
+    出さない (空文字を返す)。数えた合計が `stats.missing` と食い違うときは、どちらかで他方を
+    置き換えず、記録から数えた合計を内訳の側に添えて両方を読めるようにする。
+    """
+    answers = record.get("answers")
+    if not isinstance(answers, list):
+        return ""
+    counts: "dict[str, int]" = {}
+    for answer in answers:
+        # `value` の無い要素は null の答えと区別できないので、推測で数えずに形の違いとみなす
+        if (
+            not isinstance(answer, dict)
+            or "value" not in answer
+            or not isinstance(answer.get("file"), str)
+        ):
+            return ""
+        if answer["value"] is None:
+            counts[answer["file"]] = counts.get(answer["file"], 0) + 1
+    total = sum(counts.values())
+    if total == 0 and missing == 0:
+        return ""
+    per_file = ", ".join(
+        f"{file} {count}"
+        for file, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    )
+    if total == missing:
+        return f" ({per_file})"
+    if not per_file:
+        return f" (記録で値が無い答え {total} 件)"
+    return f" (記録で値が無い答え {total} 件: {per_file})"
+
+
 def _mbt_lines(mbt_count: int) -> "list[str]":
     if mbt_count:
         return [f".mbt {mbt_count} 本は parser が無いので見ていない"]
@@ -192,12 +233,15 @@ def summarize(
     sha: str,
     version: str,
     curated: "tuple[str, ...]",
+    passes: int,
     mbt_count: int,
     dry_run: bool,
 ) -> str:
     """要約の本文 (利用者へ出す日本語)。呼び出し側は `outcome.code` が 2 でないときにだけ
     呼ぶ (`doc` が判定に使える文書として存在する Outcome にだけ呼ぶ、という classify の
     契約をここで assert して守る)。
+
+    `passes` は上流に `--retry` で渡したパス数で、dry-run の見積もりの上限にだけ使う。
     """
     doc = outcome.doc
     assert doc is not None, "summarize は code が 2 でない Outcome にだけ呼ぶ"
@@ -206,8 +250,16 @@ def summarize(
     if dry_run:
         # `subjects` は classify の `_dry_run_ok` が既に検査済みなので直接引ける。`usd` は
         # 判定に使わない (REQUIRED の対象外の) 記述用の値なので、他の記述用フィールドと
-        # 同じく寛容な既定値で読む。
-        lines.append(f"見積もり: subject {doc['subjects']} 件、費用 ${doc.get('usd', 0):.5f}")
+        # 同じく寛容な既定値で読む。上流の `usd` は 1 パス分で、パス数を掛けていない。実測では
+        # 実行の費用が見積もりの約 2.5 倍になり、掛けていない値だけを出すと予算を読み違える。
+        # 上流の値はそのまま残し (上流の出力と突き合わせられるように)、掛けた値を上限として
+        # 足す。上限と呼ぶのは、上流の費用は成功した request だけを数え、上流は直せない
+        # 失敗の後の batch とパスを送らないため (`dist/run.js`)
+        usd = doc.get("usd", 0)
+        lines.append(
+            f"見積もり: subject {doc['subjects']} 件、費用 ${usd:.5f} "
+            f"(1 パス分。{passes} パスで最大 ${usd * passes:.5f})"
+        )
         lines.extend(_dropped_before_asking(doc, curated))
         lines.extend(_mbt_lines(mbt_count))
         return "\n".join(lines)
@@ -226,7 +278,7 @@ def summarize(
     spent = doc.get("spent", {})
 
     lines.append(f"見た対象: subject {subjects} 件 ({len(by_file)} ファイル)")
-    lines.append(f"未回答: {missing} 件")
+    lines.append(f"未回答: {missing} 件{_missing_breakdown(record, missing)}")
     if errors:
         lines.append(f"エラー: {len(errors)} 件 (例: {errors[0].get('error', '')})")
     else:

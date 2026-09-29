@@ -415,6 +415,7 @@ def _run(
                     sha=sha,
                     version=UPSTREAM_VERSION,
                     curated=CURATED,
+                    passes=jevlint_host.RETRY_PASSES,
                     mbt_count=mbt_count,
                     dry_run=args.dry_run,
                 )

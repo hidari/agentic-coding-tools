@@ -947,7 +947,7 @@ class FixedTailTests(unittest.TestCase):
                 "--cache",
                 "none",
                 "--retry",
-                "3",
+                str(jevlint_host.RETRY_PASSES),
                 "--model",
                 "jev-latest",
                 "--base-url",
@@ -955,6 +955,14 @@ class FixedTailTests(unittest.TestCase):
             ],
         )
         self.assertEqual(len(tail), 11)
+
+    def test_retry_value_is_the_passes_constant(self):
+        # 要約の見積もりは同じ定数でパス数を掛けるので、`--retry` に渡す値がこの定数から
+        # 来ていることを、定数を別の値に変えて見る (定数と同じ literal を書いた形では、
+        # 値が一致している間は区別できないため)
+        with mock.patch.object(jevlint_host, "RETRY_PASSES", 7):
+            tail = jevlint_host.fixed_tail(Path("/tmp/x/config.json"))
+        self.assertEqual(tail[tail.index("--retry") + 1], "7")
 
 
 class UpstreamArgvTests(unittest.TestCase):

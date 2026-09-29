@@ -526,6 +526,15 @@ def read_engines(host: Path) -> str:
     return engines["node"]
 
 
+# 上流に `--retry` で渡すパス数。上流 (0.7.0 の `dist/run.js`) は matcher と planner を 1 回だけ
+# 走らせ、同じ batch をこの回数だけ聞き直して値の平均で判定する。dry-run の見積もり `usd` は
+# batch の token の和から出す 1 パス分の値で、この回数を掛けていない (`dist/cli/dry-run.js` の
+# `dryRunDocument`)。キーを使った実測では、dry-run の requests 45 × 3 = 135 が、実行の課金
+# 126 回とエラー 9 件の和に一致した。要約の見積もりもこの定数でパス数を掛けるので、値を
+# ここ以外に書かない
+RETRY_PASSES = 3
+
+
 def fixed_tail(config: Path) -> list:
     """上流の起動 argv の末尾、固定部分 (11 要素)。
 
@@ -540,7 +549,7 @@ def fixed_tail(config: Path) -> list:
         "--cache",
         "none",
         "--retry",
-        "3",
+        str(RETRY_PASSES),
         "--model",
         "jev-latest",
         "--base-url",

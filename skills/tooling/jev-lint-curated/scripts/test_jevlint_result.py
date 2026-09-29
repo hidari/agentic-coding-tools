@@ -18,7 +18,12 @@
 - `src/cli/dry-run.ts` `dryRunDocument`: `dryRun: true`、`subjects` は数値、`usd`、
   `ignored`・`unpaired`・`idleLanguages`・`silentRules` は check/review と同じ形
 - `src/run.ts` `buildRecord`: `model` は `result.servedModel ?? null` (何も応答が無ければ
-  null)、`schema` は `"jev-lint-run-1"`
+  null)、`schema` は `"jev-lint-run-1"`、`answers` の各要素は `rule`・`ruleKey`・`file`・`line`・
+  `endLine`・`kind`・`value`・`confidence`・`arm` を持つ
+- `src/gate.ts` `decide`: 答えの無い subject は `value`・`confidence` が null で、`kind`・`arm`
+  を持たない
+- `src/cli/dry-run.ts` `dryRunDocument`: `usd` は batch の token の和から出す 1 パス分の値で、
+  `retry` を掛けていない
 
 `classify` の判定順 (canonical は `jevlint.py` のモジュール docstring。spec の「結果の要約と
 終了コード」節では項目 2〜9 に当たる) を、次のデシジョンテーブルの行ごとにテストする (テストの
@@ -57,6 +62,11 @@ CURATED_SAMPLE = (
     "typescript/var-name-describes-value",
     "rust/var-name-describes-value",
 )
+
+# summarize の `passes` (上流が各 batch を聞く回数) の見本。本物の値 (jevlint_host の定数) を
+# import しないのは、このモジュールのテストを jevlint_result だけに閉じるため。入口が本物の
+# 値を渡すことは test_jevlint.py が見る
+PASSES_SAMPLE = 3
 
 FINDING_ROW = {
     # report.ts formatJson の row() がそのまま持つキー一式。
@@ -129,6 +139,26 @@ def _record(**overrides):
     }
     base.update(overrides)
     return json.dumps(base)
+
+
+def _answer(file: str, value: "float | None") -> dict:
+    """buildRecord (run.ts) の `answers` の 1 要素。
+
+    答えの無い subject は gate.ts の `decide` が `value`・`confidence` を null にし、`kind` と
+    `arm` を持たない形で作るので、buildRecord の `?? null` で 4 つとも null になる。
+    """
+    missing = value is None
+    return {
+        "rule": "var-name-describes-value",
+        "ruleKey": "python/var-name-describes-value",
+        "file": file,
+        "line": 1,
+        "endLine": 1,
+        "kind": None if missing else "score",
+        "value": value,
+        "confidence": None if missing else 0.9,
+        "arm": None if missing else "solo",
+    }
 
 
 class RequiredConstantTests(unittest.TestCase):
@@ -347,7 +377,7 @@ class SummarizeCommonTests(unittest.TestCase):
             sha="abc1234",
             version="0.7.0",
             curated=CURATED_SAMPLE,
-            mbt_count=0,
+            passes=PASSES_SAMPLE, mbt_count=0,
             dry_run=False,
         )
         self.assertIn("abc1234", text)
@@ -358,7 +388,7 @@ class SummarizeCommonTests(unittest.TestCase):
             0, json.dumps(_doc()), _record(model="jev-latest-20260901"), dry_run=False
         )
         text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, mbt_count=0, dry_run=False
+            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
         )
         self.assertIn("jev-latest-20260901", text)
 
@@ -367,7 +397,7 @@ class SummarizeCommonTests(unittest.TestCase):
             0, json.dumps(_doc()), _record(model=None), dry_run=False
         )
         text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, mbt_count=0, dry_run=False
+            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
         )
         self.assertIn("応答なし", text)
 
@@ -376,7 +406,7 @@ class SummarizeCommonTests(unittest.TestCase):
             '"unpaired": null, "idleLanguages": [], "silentRules": []}'
         outcome = jevlint_result.classify(0, stdout, None, dry_run=True)
         text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, mbt_count=0, dry_run=True
+            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=True
         )
         self.assertNotIn("応答したモデル", text)
         self.assertNotIn("応答なし", text)
@@ -410,7 +440,7 @@ class SummarizeCommonTests(unittest.TestCase):
         )
         outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
         text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, mbt_count=0, dry_run=False
+            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
         )
         self.assertIn("subject 42 件", text)  # stats.subjects
         self.assertIn("2 ファイル", text)  # len(stats.byFile)
@@ -430,7 +460,7 @@ class SummarizeCommonTests(unittest.TestCase):
         )
         outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
         text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, mbt_count=0, dry_run=False
+            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
         )
         self.assertIn("3 件を見送った、1 ファイルを丸ごと", text)
         self.assertIn("2 件 (paired)", text)
@@ -445,7 +475,7 @@ class SummarizeCommonTests(unittest.TestCase):
         doc = _doc(ignored={"subjects": 0, "files": ["a.py"], "unknownRules": []})
         outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
         text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, mbt_count=0, dry_run=False
+            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
         )
         self.assertIn("jev-lint-ignore コメントで 0 件を見送った、1 ファイルを丸ごと", text.splitlines())
 
@@ -456,7 +486,7 @@ class SummarizeCommonTests(unittest.TestCase):
         )
         outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
         text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, mbt_count=0, dry_run=False
+            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
         )
         self.assertNotIn("見送った", text)
 
@@ -464,7 +494,7 @@ class SummarizeCommonTests(unittest.TestCase):
         doc = _doc(silentRules=["go/not-curated-rule"])
         outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
         text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, mbt_count=0, dry_run=False
+            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
         )
         self.assertNotIn("go/not-curated-rule", text)
         self.assertNotIn("一致しなかった", text)
@@ -472,14 +502,14 @@ class SummarizeCommonTests(unittest.TestCase):
     def test_mbt_count_nonzero_shown(self):
         outcome = jevlint_result.classify(0, json.dumps(_doc()), _record(), dry_run=False)
         text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, mbt_count=2, dry_run=False
+            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=2, dry_run=False
         )
         self.assertIn(".mbt 2 本は parser が無いので見ていない", text)
 
     def test_mbt_count_zero_not_shown(self):
         outcome = jevlint_result.classify(0, json.dumps(_doc()), _record(), dry_run=False)
         text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, mbt_count=0, dry_run=False
+            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
         )
         self.assertNotIn(".mbt", text)
 
@@ -492,7 +522,7 @@ class SummarizeCommonTests(unittest.TestCase):
         doc = _doc(findings=[finding])
         outcome = jevlint_result.classify(1, json.dumps(doc), _record(), dry_run=False)
         text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, mbt_count=0, dry_run=False
+            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
         )
         self.assertIn(
             "src/日本語 ファイル.py:7 var-name-describes-value 0.91/0.70", text
@@ -518,7 +548,7 @@ class SummarizeCommonTests(unittest.TestCase):
         outcome = jevlint_result.classify(1, json.dumps(doc), _record(), dry_run=False)
         self.assertEqual(outcome.code, 3)
         text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, mbt_count=0, dry_run=False
+            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
         )
         self.assertIn("3 件は答えが無い", text)
         self.assertIn("エラー: 1 件", text)
@@ -537,7 +567,7 @@ class SummarizeCommonTests(unittest.TestCase):
         outcome = jevlint_result.classify(1, json.dumps(doc), _record(), dry_run=False)
         self.assertEqual(outcome.code, 3)
         text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, mbt_count=0, dry_run=False
+            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
         )
         self.assertIn("0 件は答えが無い", text)
         self.assertIn("エラー: 1 件 (例: explain: HTTP 402)", text)
@@ -558,11 +588,123 @@ class SummarizeCommonTests(unittest.TestCase):
         outcome = jevlint_result.classify(1, json.dumps(doc), _record(), dry_run=False)
         self.assertEqual(outcome.code, 3)
         text = jevlint_result.summarize(
-            outcome, sha="s", version="v", curated=CURATED_SAMPLE, mbt_count=0, dry_run=False
+            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=0, dry_run=False
         )
         missing_pos = text.index("4 件は答えが無い")
         finding_pos = text.index("src/foo.py:12")
         self.assertLess(missing_pos, finding_pos)
+
+
+class SummarizeMissingBreakdownTests(unittest.TestCase):
+    """「未回答」の行に、記録の答えから数えたファイルごとの件数を足す。
+
+    未回答か cutoff 未満かを見分けるのに要るのは、どのファイルの subject に答えが無いかで
+    ある。記録の `answers` は答えの無い subject を value が null の要素として持つ。
+    """
+
+    def _missing_line(self, missing: int, record: str) -> str:
+        doc = _doc(
+            stats={
+                "subjects": 20,
+                "reported": 0,
+                "missing": missing,
+                "unsure": 0,
+                "review": 0,
+                "byRule": {},
+                "byFile": {},
+            }
+        )
+        outcome = jevlint_result.classify(0, json.dumps(doc), record, dry_run=False)
+        text = jevlint_result.summarize(
+            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE,
+            mbt_count=0, dry_run=False,
+        )
+        lines = [line for line in text.splitlines() if line.startswith("未回答: ")]
+        self.assertEqual(len(lines), 1)
+        return lines[0]
+
+    def test_one_file(self):
+        # 同じファイルに答えのある要素 (0.0 も答え) を混ぜ、値の有無で数えていることを見る
+        answers = [
+            _answer("scripts/test_a.py", None),
+            _answer("scripts/test_a.py", 0.0),
+            _answer("scripts/test_a.py", None),
+            _answer("scripts/test_a.py", 0.5),
+            _answer("scripts/test_a.py", None),
+        ]
+        self.assertEqual(
+            self._missing_line(3, _record(answers=answers)),
+            "未回答: 3 件 (scripts/test_a.py 3)",
+        )
+
+    def test_several_files_by_count_then_path(self):
+        # 件数の多い順と、パスの順とが食い違う並び。同数の m.py と a.py は、記録に出てくる
+        # 順 (m.py が先) ではなくパスの順に並ぶ
+        answers = [
+            _answer("src/m.py", None),
+            _answer("src/a.py", 0.4),
+            _answer("src/m.py", None),
+            _answer("src/a.py", None),
+            _answer("src/z.py", None),
+            _answer("src/z.py", None),
+            _answer("src/a.py", None),
+            _answer("src/z.py", None),
+            _answer("src/b.py", 0.9),
+        ]
+        self.assertEqual(
+            self._missing_line(7, _record(answers=answers)),
+            "未回答: 7 件 (src/z.py 3, src/a.py 2, src/m.py 2)",
+        )
+
+    def test_count_disagreeing_with_stats_missing_shows_both(self):
+        # どちらかで他方を置き換えない。stats.missing を行の件数に保ち、記録から数えた
+        # 合計を内訳の側に並べる
+        cases = [
+            (
+                5,
+                [_answer("src/a.py", None)] * 3 + [_answer("src/a.py", 0.5)],
+                "未回答: 5 件 (記録で値が無い答え 3 件: src/a.py 3)",
+            ),
+            (
+                0,
+                [_answer("src/a.py", None), _answer("src/b.py", None), _answer("src/b.py", None)],
+                "未回答: 0 件 (記録で値が無い答え 3 件: src/b.py 2, src/a.py 1)",
+            ),
+            (
+                3,
+                [_answer("src/a.py", 0.5)],
+                "未回答: 3 件 (記録で値が無い答え 0 件)",
+            ),
+        ]
+        for missing, answers, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(self._missing_line(missing, _record(answers=answers)), expected)
+
+    def test_answers_absent_or_malformed_show_only_the_count(self):
+        # 記録の答えは判定に使わない記述用の値なので、形が違っても止めずに内訳だけを出さない。
+        # 各場合とも、形が正しければ内訳が出る要素 (値の無い答え) を含めておく
+        good = _answer("src/a.py", None)
+        no_value = {key: val for key, val in good.items() if key != "value"}
+        cases = {
+            "answers が null": _record(answers=None),
+            "answers が list でない": _record(answers={"src/a.py": good}),
+            "要素が数値": _record(answers=[good, 1]),
+            "要素が文字列": _record(answers=[good, "src/a.py"]),
+            "file が str でない": _record(answers=[good, dict(good, file=None)]),
+            "value が無い": _record(answers=[good, no_value]),
+        }
+        for label, record in cases.items():
+            with self.subTest(label=label):
+                self.assertEqual(self._missing_line(2, record), "未回答: 2 件")
+
+    def test_answers_key_missing_from_the_record_shows_only_the_count(self):
+        record = json.loads(_record())
+        del record["answers"]
+        self.assertEqual(self._missing_line(2, json.dumps(record)), "未回答: 2 件")
+
+    def test_zero_missing_shows_no_breakdown(self):
+        answers = [_answer("src/a.py", 0.5), _answer("src/b.py", 0.1)]
+        self.assertEqual(self._missing_line(0, _record(answers=answers)), "未回答: 0 件")
 
 
 class SummarizeDryRunTests(unittest.TestCase):
@@ -576,7 +718,7 @@ class SummarizeDryRunTests(unittest.TestCase):
         )
         outcome = jevlint_result.classify(0, stdout, None, dry_run=True)
         text = jevlint_result.summarize(
-            outcome, sha="deadbee", version="0.7.0", curated=CURATED_SAMPLE, mbt_count=1, dry_run=True
+            outcome, sha="deadbee", version="0.7.0", curated=CURATED_SAMPLE, passes=PASSES_SAMPLE, mbt_count=1, dry_run=True
         )
         self.assertIn("deadbee", text)
         self.assertIn("0.7.0", text)
@@ -587,6 +729,29 @@ class SummarizeDryRunTests(unittest.TestCase):
         self.assertIn("typescript/pure-name-is-pure", text)  # silentRules ∩ curated
         self.assertIn("rust (5)", text)  # idleLanguages
         self.assertIn(".mbt 1 本は parser が無いので見ていない", text)
+
+    def _estimate_line(self, usd: float, passes: int) -> str:
+        stdout = json.dumps({"dryRun": True, "subjects": 1009, "usd": usd, "retry": passes})
+        outcome = jevlint_result.classify(0, stdout, None, dry_run=True)
+        text = jevlint_result.summarize(
+            outcome, sha="s", version="v", curated=CURATED_SAMPLE, passes=passes, mbt_count=0,
+            dry_run=True,
+        )
+        return text.splitlines()[1]
+
+    def test_estimate_shows_the_upstream_usd_as_one_pass_and_the_bound_for_all_passes(self):
+        # 上流の `usd` は batch の token の和から出す 1 パス分の値で、パス数を掛けていない。
+        # 値はキーを使った実測の dry-run のもの (subject 1009 件、$0.05370)
+        self.assertEqual(
+            self._estimate_line(0.0537, 3),
+            "見積もり: subject 1009 件、費用 $0.05370 (1 パス分。3 パスで最大 $0.16110)",
+        )
+
+    def test_estimate_bound_follows_the_passes_argument(self):
+        self.assertEqual(
+            self._estimate_line(0.01, 5),
+            "見積もり: subject 1009 件、費用 $0.01000 (1 パス分。5 パスで最大 $0.05000)",
+        )
 
 
 if __name__ == "__main__":

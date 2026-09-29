@@ -540,8 +540,23 @@ class MainKeyTests(_MainTestCase):
             out.splitlines(),
             [
                 f"commit {self.sha}  jev-lint {jevlint.UPSTREAM_VERSION}",
-                "見積もり: subject 5 件、費用 $0.00420",
+                "見積もり: subject 5 件、費用 $0.00420 "
+                f"(1 パス分。{jevlint_host.RETRY_PASSES} パスで最大 "
+                f"${0.0042 * jevlint_host.RETRY_PASSES:.5f})",
             ],
+        )
+
+    def test_dry_run_estimate_uses_the_passes_given_to_upstream(self):
+        # 見積もりに掛けるパス数と上流の `--retry` が同じ定数から来ていることを、定数を
+        # 別の値に変えて見る (本物の値のままでは、入口が literal を渡しても区別できない)
+        with mock.patch.object(jevlint_host, "RETRY_PASSES", 2):
+            code, out, _ = self.run_main(["check", "--dry-run", "sub/file.py"])
+        self.assertEqual(code, 0)
+        argv = self.upstream.calls[0]["argv"]
+        self.assertEqual(argv[argv.index("--retry") + 1], "2")
+        self.assertIn(
+            "見積もり: subject 5 件、費用 $0.00420 (1 パス分。2 パスで最大 $0.00840)",
+            out.splitlines(),
         )
 
     def test_missing_or_blank_key_is_2_before_the_expansion(self):
