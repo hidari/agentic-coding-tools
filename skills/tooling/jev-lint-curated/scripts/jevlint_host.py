@@ -453,6 +453,20 @@ def prepare_host(
                 raise HostError(
                     f"host の取得用の package.json を書けない: {tmp / 'package.json'}: {error}"
                 ) from None
+            # `--allow-build=@ast-grep/cli` は、jev-lint の依存で唯一ビルドの許可が要る
+            # `@ast-grep/cli` の postinstall を許す。pnpm 12 は許可の無い postinstall を持つ
+            # 依存を入れると `ERR_PNPM_IGNORED_BUILDS` で止まり (実測: pnpm 12.3.4、jev-lint
+            # 0.7.0、macOS arm64 と Linux x64 の両方で rc 1)、ここでは終了コード 2 になる。
+            # postinstall は、パッケージの中の `ast-grep` (Node のスクリプト) をネイティブの
+            # バイナリへ置き換える。上流は、`build_env` が渡さない `JEV_LINT_AST_GREP` を除けば、
+            # パッケージの位置の `ast-grep` を最初に起動する (上流の `dist/scan.js` の
+            # `astGrepBin`)。走ったかは `--version` の rc では分からない (置き換わらなくても
+            # スクリプトがバイナリを探して起動し rc 0 になる。実測)。見分けられるのは、
+            # パッケージの中の `ast-grep` がネイティブのバイナリ (macOS は Mach-O、Linux は ELF)
+            # か Node のスクリプトかと、`--version` の stderr の `postinstall script did not run`
+            # の警告の有無である。pnpm の出力の `postinstall` の行は目印にならない: 温まった
+            # store から取るときは、この行が無いのにバイナリになっていた (side-effects cache。
+            # 実測: macOS)
             argv = ["pnpm", "add", "--allow-build=@ast-grep/cli", f"jev-lint@{version}"]
             try:
                 proc = run(argv, cwd=str(tmp), env=install_env(source))
