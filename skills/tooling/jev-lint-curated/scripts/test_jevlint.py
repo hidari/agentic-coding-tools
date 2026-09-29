@@ -234,11 +234,16 @@ class ParseArgsTests(unittest.TestCase):
                 ["check", "a.py", "--thresh", "python/var-name-describes-value=0.6"]
             )
 
-    def test_rejects_dash_positional_after_double_dash(self):
-        with self.assertRaises(jevlint.UsageError):
-            jevlint.parse_args(["check", "--", "-x"])
+    def test_double_dash_passes_dash_positionals_through_to_the_canonical_checks(self):
+        # argparse は `--` の後ろの `-x` を位置引数に入れる。入口は `-` 始まりを見ず、
+        # パスは `jevlint_tree.normalize_path` (正規化した後の形で見るので `./-x` も止まる)、
+        # 版は `parse_version` (数字の形しか通さない) が止める。終了コードへの写しは
+        # MainRejectionTests と MainCompatTests が持つ
+        self.assertEqual(jevlint.parse_args(["check", "--", "-x"]).paths, ["-x"])
+        self.assertEqual(jevlint.parse_args(["compat", "--", "-0.7.0"]).version, "-0.7.0")
 
     def test_rejects_dash_positional_without_double_dash(self):
+        # `--` が無ければ argparse が未知のオプションとして止める
         with self.assertRaises(jevlint.UsageError):
             jevlint.parse_args(["check", "-x"])
 
@@ -703,6 +708,18 @@ class MainRejectionTests(_MainTestCase):
         code, _, _ = self.run_main(["check", "--dry-run", "sub/file.py"])
         self.assertEqual(code, 0)
         self.assertTrue(self.git_calls())
+
+    def test_dash_paths_after_double_dash_are_2_from_the_path_check_before_the_host(self):
+        # `-` 始まりの拒否の canonical は jevlint_tree.normalize_path で、入口には無い。
+        # `./-x` は生の文字列では `.` 始まりなので、正規化した後で見る canonical でしか止まらない
+        for path in ("-x", "./-x", "-"):
+            with self.subTest(path=path):
+                code, out, err = self.run_main(["check", "--dry-run", "--", path])
+                self.assertEqual(code, 2)
+                self.assertEqual(out, "")
+                self.assertIn(f"'-' で始まるパスは受け付けない: {path!r}", err)
+                self.assertEqual(self.pnpm.calls, [])
+                self.assertEqual(self.upstream.version_calls + self.upstream.calls, [])
 
     def test_path_missing_from_the_commit_is_2_before_the_host(self):
         self.repo.write("untracked.py", "untracked = 1\n")
@@ -1199,8 +1216,13 @@ class _CompatTestCase(unittest.TestCase):
     def fake_upstream(self, **kwargs) -> _FakeCompatUpstream:
         return _FakeCompatUpstream(self.versions, **kwargs)
 
-    def run_compat(self, version=COMPAT_NEW, *, upstream=None, pnpm=None, which=shutil.which):
-        """main() の compat を呼び、(終了コード, stdout, stderr) を返す。偽物は self に残す。"""
+    def run_compat(
+        self, version=COMPAT_NEW, *, argv=None, upstream=None, pnpm=None, which=shutil.which
+    ):
+        """main() の compat を呼び、(終了コード, stdout, stderr) を返す。偽物は self に残す。
+
+        `argv` を渡すと `["compat", version]` の代わりにそのまま main() に渡す (`--` を挟む形など)。
+        """
         self.runs += 1
         self.cache = self.base / f"cache-{self.runs}"
         self.environ["XDG_CACHE_HOME"] = str(self.cache)
@@ -1209,7 +1231,7 @@ class _CompatTestCase(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = jevlint.main(
-                ["compat", version],
+                ["compat", version] if argv is None else argv,
                 environ=self.environ,
                 cwd=self.base,
                 run_pnpm=self.pnpm,
@@ -1463,6 +1485,16 @@ class MainCompatTests(_CompatTestCase):
                 self.assertIn(version, err)
                 self.assertEqual(self.pnpm.calls, [])
                 self.assertEqual(self.upstream.all_calls(), [])
+
+    def test_dash_version_after_double_dash_is_2_from_parse_version_before_any_child_process(self):
+        # `-` 始まりの拒否の canonical は parse_version (X.Y.Z の数字の形しか通さない) で、
+        # 入口には無い。argparse は `--` の後ろの値を位置引数に入れるので、そこまで届く
+        code, out, err = self.run_compat(argv=["compat", "--", "-0.7.0"])
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("版は X.Y.Z の数字の形にすること: '-0.7.0'", err)
+        self.assertEqual(self.pnpm.calls, [])
+        self.assertEqual(self.upstream.all_calls(), [])
 
 
 class JsonOutTargetsTests(unittest.TestCase):

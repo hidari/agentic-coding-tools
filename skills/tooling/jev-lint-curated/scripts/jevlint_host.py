@@ -15,7 +15,10 @@
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
+import os
 import re
 import shutil
 import stat
@@ -24,7 +27,7 @@ import sys
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import Callable, Iterator, Mapping
 
 import jevlint_fs
 
@@ -238,6 +241,18 @@ def cli_path(host: Path) -> Path:
     return _package_dir(host) / "dist" / "cli.js"
 
 
+def lock_path(host: Path) -> Path:
+    """`host` の用意を直列にするロックファイル。host と同じ親の中の兄弟で、版ごとに 1 つ。
+
+    `.lock-` の接頭辞は、取得の一時ディレクトリ (`.tmp-`) とどかした古い host (`.old-`) の
+    どちらとも、版の値によらず衝突しない。host の名前 (版) は `.` で始まらない
+    (`jevlint.py` の `parse_version` が数字の形に絞る) ので host とも衝突しない。
+    版ごとに分けるのは、別の版の取得 (compat が用意する引数の版) を、温まった pin の版を
+    使うだけの実行が待たされないようにするため。
+    """
+    return host.parent / f".lock-{host.name}"
+
+
 def host_reusable(host: Path, version: str) -> bool:
     """`host` を作り直さずに使えるか。`package.json` の `version` が一致し `cli.js` がある。
 
@@ -280,30 +295,68 @@ def _reject_pnpm_workspace_ancestor(host: Path) -> None:
         raise HostError(f"host の祖先に pnpm-workspace.yaml がある: {found}")
 
 
+@contextlib.contextmanager
+def _host_lock(path: Path) -> Iterator[None]:
+    """`path` への排他の `flock` を持っている間だけ本体を走らせる。取れるまで待つ。
+
+    待つ (`LOCK_NB` を付けない) のは、同時に走った別の実行が同じ版を用意している最中なら、
+    待った後の再利用の確認がそれを拾うので、待つことが取得の代わりになるため。取れない
+    ことを即座に 2 で返すと、このロックが塞ぐ「同時の実行で偽の終了コード 2」が形を変えて
+    残る。
+
+    ロックファイルは消さない。消すと、次の実行が同じ名前で別の inode を作り、2 つの実行が
+    別々の inode に別々のロックを取って両方とも入れ替えに進む。解放は fd を閉じることで
+    行う (flock のロックは open file description に属し、最後の fd が閉じると解放される。
+    実測: 3.9.6・3.14.7、macOS)。`os.open` の fd は継承されない (PEP 446) ので、内側で
+    起動する `pnpm add` にロックが渡ることも、その子が閉じ忘れて解放が遅れることも無い。
+
+    開けない (位置にディレクトリがある、親に書けない等) ときと `flock` 自体が失敗する
+    (ロックを持たないファイルシステムの `ENOLCK` 等) ときは `HostError`。どちらも
+    `pnpm add` を走らせる前に止まる。
+    """
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError as error:
+        raise HostError(f"host のロックファイルを開けない: {path}: {error}") from None
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError as error:
+            raise HostError(f"host のロックを取れない: {path}: {error}") from None
+        yield
+    finally:
+        os.close(fd)
+
+
 def _replace_host_atomically(host: Path, tmp: Path, version: str) -> None:
-    """再利用可能な `tmp` を host の名前へ置く。複数プロセスが同時に取得したときは勝者に譲る。
+    """再利用可能な `tmp` を host の名前へ置く。ロックの外で置かれたものがあれば譲る。
+
+    呼び出し側 (`prepare_host`) は `_host_lock` を持っているので、このラッパの実行どうしは
+    ここへ同時に入らない。それでも再確認を残すのは、ロックを取らない書き手 (ロックを持たない
+    旧版のラッパ、手で置いた host) が同じ名前へ置く経路が消えないため。
 
     直接 `shutil.rmtree(host)` してから `rename` すると、`rmtree` は atomic でないため
     (a) 別プロセスが使用中の host を削除してしまう (b) 2 つの `rmtree` が競合して
-    `FileNotFoundError` になる、の 2 通りの競合を生む。実測: 2 プロセスが同時に
-    「再利用できない」と判定して `pnpm add` を走らせたとき、先に `tmp.replace(host)` が
+    `FileNotFoundError` になる、の 2 通りの競合を生む。実測 (ロックを入れる前): 2 プロセスが
+    同時に「再利用できない」と判定して `pnpm add` を走らせたとき、先に `tmp.replace(host)` が
     通った側が host を置いたあと、後から `tmp.replace(host)` を呼んだ側は host が既に
     非空のディレクトリになっていて `OSError` (`ENOTEMPTY`、macOS で errno 66) になる。
 
     手順:
 
-    1. host を再確認する。既に他プロセスが同じ version を置いていれば (`host_reusable`
-       が真) 何もせず勝者に譲る (呼び出し側が `tmp` を消す)
+    1. host を再確認する。既に同じ version が置かれていれば (`host_reusable` が真) 何もせず
+       譲る (呼び出し側が `tmp` を消す)
     2. 既存の host (別 version か壊れた取得物) があれば、同じ親の中で重複しない名前
        (`.old-<uuid>`) へ `rename` で「どかして」から `tmp.replace(host)` する。個々の
        rename は同一ファイルシステム上で atomic だが、2 回の rename の間には host の名前が
-       無い瞬間がある。その間に別プロセスが host を見ると「無い」と読む
-    3. どかす rename と置く replace のどちらかが競合で失敗したら host を再確認し、
-       他プロセスが勝っていればそちらに譲り、そうでなければ `HostError`
+       無い瞬間がある。その間にロックの外から host を見ると「無い」と読む
+    3. どかす rename と置く replace のどちらかが失敗したら host を再確認し、ロックの外の
+       書き手が同じ version を置いていればそちらに譲り、そうでなければ `HostError`
     4. どかした古いディレクトリは最後に消す。POSIX では使用中のファイルの unlink も成功
        するので、古い host で動いている別プロセスがいても消える (開いたままのファイルは
        読めるが、後から開くファイルは無い)。`ignore_errors` が握るのは消せなかったときの
-       OSError だけ
+       OSError だけ。どかしたものは手順 1 で再利用できないと確かめた host なので、3 で
+       `HostError` になる経路で消しても、良い host を失うことは無い
 
     呼び出されるのは `host_reusable(tmp, version)` が真であることを確認した後だけ。
     """
@@ -352,7 +405,24 @@ def prepare_host(
 
     一時ディレクトリを host と同じ親に作り、取得の成功を確認してから host の名前に
     置くのは、途中で切れた取得 (ネットワーク断・プロセス kill 等) が host として再利用
-    されるのを防ぐため。host への設置自体の競合耐性は `_replace_host_atomically` が持つ。
+    されるのを防ぐため。
+
+    再利用できないと読んだ後の再確認から入れ替えまでを、版ごとのロック (`lock_path`、
+    `_host_lock`) の内側で行う。同時に走った 2 つの実行が両方とも「再利用できない」と読んで
+    取得と入れ替えに進むと、どかす rename と置く replace の間の窓で、片方の finally がもう
+    片方の良い host を消して host の名前が空のまま残る経路と、同時の rename で偽の終了コード
+    2 になる経路がある。`pnpm add` もロックの内側に置く。外に出すと、後から来た
+    実行が同じ版をもう一度取得してから (ネットワークと時間を使ってから) 譲ることになる。
+    内側なら、待った後の再確認が先の実行の host を拾い、取得は 1 回で済む。ロックは版ごと
+    なので、待つのは自分が要る版を誰かが用意しているときに限る。ロックを持ったまま落ちても
+    fd と一緒に解放されるので、残ったロックを消す手順は要らない。
+
+    最初の確認だけはロックの外で行い、再利用できればロックもロックファイルの作成も親の
+    mkdir もせずに返す (double-checked)。再利用できる同じ版の host は誰も入れ替えない
+    (入れ替えるのは再利用できないと判定した側だけで、その判定と入れ替えはロックの内側に
+    ある) ので、ロックの外の確認は窓を作らない。先にロックを取る形は、親が読み取り専用で
+    host だけ再利用できる配置でロックファイルの `O_CREAT` が `EACCES` になり、以前は 0 で
+    通った実行を 2 にする。
     """
     host = host_dir(version, source)
     _reject_pnpm_workspace_ancestor(host)
@@ -364,44 +434,49 @@ def prepare_host(
         parent.mkdir(parents=True, exist_ok=True)
     except OSError as error:
         raise HostError(f"host の親ディレクトリを作れない: {parent}: {error}") from None
-    try:
-        tmp = Path(tempfile.mkdtemp(dir=str(parent), prefix=".tmp-"))
-    except OSError as error:
-        raise HostError(f"host の取得用の一時ディレクトリを作れない: {error}") from None
 
-    try:
+    with _host_lock(lock_path(host)):
+        # ロックの内側の再確認。待っている間に別の実行が同じ版を置いていれば取得せずそれを
+        # 使う。外の確認とここの間には別の実行の入れ替えが入りうるので、外の確認では代わらない
+        if host_reusable(host, version):
+            return host
         try:
-            (tmp / "package.json").write_text(
-                json.dumps({"private": True}), encoding="utf-8"
-            )
+            tmp = Path(tempfile.mkdtemp(dir=str(parent), prefix=".tmp-"))
         except OSError as error:
-            raise HostError(
-                f"host の取得用の package.json を書けない: {tmp / 'package.json'}: {error}"
-            ) from None
-        argv = ["pnpm", "add", "--allow-build=@ast-grep/cli", f"jev-lint@{version}"]
+            raise HostError(f"host の取得用の一時ディレクトリを作れない: {error}") from None
         try:
-            proc = run(argv, cwd=str(tmp), env=install_env(source))
-        except OSError as error:
-            # `pnpm` が PATH に無いときの `subprocess.run` は非 0 の returncode ではなく
-            # OSError (実測: FileNotFoundError) を投げる。素の例外で抜けると Python は
-            # 終了コード 1 で終わり、ラッパの「1 = finding あり」と衝突する
-            # (`jevlint_tree.py` の `materialize` が書き出しの OSError を `TreeError` に
-            # 変える理由と同じ)。ここで HostError に変えて fail closed にする
-            raise HostError(f"pnpm を起動できない: {error}") from None
-        if proc.returncode != 0:
-            raise HostError(
-                f"pnpm add jev-lint@{version} が失敗した (終了コード {proc.returncode})"
-            )
-        if not host_reusable(tmp, version):
-            raise HostError(
-                f"pnpm add jev-lint@{version} は成功したが取得物の形が想定と違う"
-            )
-        _replace_host_atomically(host, tmp, version)
-    finally:
-        # `_replace_host_atomically` が成功すると tmp はその名前ではもう存在しない
-        # (host の名前へ rename 済み) ので、ここでの rmtree は無視されるだけの no-op に
-        # なる。どの失敗経路でも tmp の残骸を必ず片付けるために分岐を作らず常に呼ぶ
-        shutil.rmtree(tmp, ignore_errors=True)
+            try:
+                (tmp / "package.json").write_text(
+                    json.dumps({"private": True}), encoding="utf-8"
+                )
+            except OSError as error:
+                raise HostError(
+                    f"host の取得用の package.json を書けない: {tmp / 'package.json'}: {error}"
+                ) from None
+            argv = ["pnpm", "add", "--allow-build=@ast-grep/cli", f"jev-lint@{version}"]
+            try:
+                proc = run(argv, cwd=str(tmp), env=install_env(source))
+            except OSError as error:
+                # `pnpm` が PATH に無いときの `subprocess.run` は非 0 の returncode ではなく
+                # OSError (実測: FileNotFoundError) を投げる。素の例外で抜けると Python は
+                # 終了コード 1 で終わり、ラッパの「1 = finding あり」と衝突する
+                # (`jevlint_tree.py` の `materialize` が書き出しの OSError を `TreeError` に
+                # 変える理由と同じ)。ここで HostError に変えて fail closed にする
+                raise HostError(f"pnpm を起動できない: {error}") from None
+            if proc.returncode != 0:
+                raise HostError(
+                    f"pnpm add jev-lint@{version} が失敗した (終了コード {proc.returncode})"
+                )
+            if not host_reusable(tmp, version):
+                raise HostError(
+                    f"pnpm add jev-lint@{version} は成功したが取得物の形が想定と違う"
+                )
+            _replace_host_atomically(host, tmp, version)
+        finally:
+            # `_replace_host_atomically` が成功すると tmp はその名前ではもう存在しない
+            # (host の名前へ rename 済み) ので、ここでの rmtree は無視されるだけの no-op に
+            # なる。どの失敗経路でも tmp の残骸を必ず片付けるために分岐を作らず常に呼ぶ
+            shutil.rmtree(tmp, ignore_errors=True)
     return host
 
 

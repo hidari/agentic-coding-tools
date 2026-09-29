@@ -236,9 +236,9 @@ def repo_root(cwd: Path, env: dict) -> Path:
 def resolve_commit(root: Path, ref: str, env: dict) -> str:
     """`ref` をコミットの SHA (40 桁、SHA-256 のリポジトリなら 64 桁) に解決する。
 
-    `-` で始まる ref は拒否してから git を呼ぶ。`jevlint.py` の位置引数検査は
-    `--commit`/`--base` のようなオプションの値までは見ないため、ここが最後の関門になる
-    (`--all` のような値がオプションとして誤認されるのを防ぐ)。
+    `-` で始まる ref は拒否してから git を呼ぶ。`--commit`/`--base` の値は argparse が
+    オプションの値としてそのまま入れるので、ここが唯一の関門になる (`--all` のような値が
+    git にオプションとして誤認されるのを防ぐ)。
     """
     if ref.startswith("-"):
         raise TreeError(f"'-' で始まる ref は受け付けない: {ref!r}")

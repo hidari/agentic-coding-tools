@@ -189,28 +189,17 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _reject_dash_positionals(args: argparse.Namespace) -> None:
-    # argparse は `--` の後ろに来た `-x` のような値をオプションとして解釈せず、位置引数に
-    # 入れる。`-` 始まりの拒否の canonical はここではない。パスは `jevlint_tree.normalize_path`
-    # (正規化した後の形で見るので `./-x` も拒否する)、版は `parse_version` (数字の形しか
-    # 通さない) が持つ。この関数は git や host に触れる前の引数の段で止めるための写しで、
-    # 生の文字列の先頭しか見ない
-    for name in ("paths", "version"):
-        value = getattr(args, name, None)
-        if value is None:
-            continue
-        candidates = value if isinstance(value, list) else [value]
-        for candidate in candidates:
-            if candidate.startswith("-"):
-                raise UsageError(f"'-' で始まる位置引数は受け付けない: {candidate!r}")
-
-
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    """コマンドライン引数を検査する。誤りはすべて `UsageError` にする。"""
+    """コマンドライン引数を検査する。誤りはすべて `UsageError` にする。
+
+    argparse は `--` の後ろに来た `-x` のような値をオプションとして解釈せず、位置引数に
+    入れる。その `-` 始まりの拒否はここでは見ない。パスは `jevlint_tree.normalize_path`
+    (正規化した後の形で見るので `./-x` も止まる)、版は `parse_version` (数字の形しか
+    通さない) が canonical で、生の文字列を見る写しをここへ置くと `./-x` を素通しした上で
+    エラーの時点と文面が 2 通りになる。
+    """
     parser = _build_parser()
-    args = parser.parse_args(argv)
-    _reject_dash_positionals(args)
-    return args
+    return parser.parse_args(argv)
 
 
 def _committed_paths(root: Path, sha: str, texts: list, env: dict) -> list:
