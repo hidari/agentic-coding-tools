@@ -292,8 +292,9 @@ def _check_out_path(path: Path, shown: str, expanded: jevlint_tree.Expanded) -> 
 
     展開の worktree と scratch の中は、抜けるときに消えるので拒否する。包含の判定は
     `jevlint_tree.is_inside` (inode で見る) に任せる。解決は `os.path.realpath` で行う
-    (`jevlint_tree.tmpdir_from_env` と同じ理由)。親ディレクトリと保存先自身の判定は
-    `jevlint_fs.stat_or_none` で行い、判定不能 (権限エラー等) は「無い」に丸めない。
+    (`Path.resolve()` を使わない理由は `jevlint_fs.find_in_ancestors` の docstring が持つ)。
+    親ディレクトリと保存先自身の判定は `jevlint_fs.stat_or_none` で行い、判定不能
+    (権限エラー等) は「無い」に丸めない。
     """
     resolved = Path(os.path.realpath(path))
     if any(jevlint_tree.is_inside(resolved, inside) for inside in (expanded.tree, expanded.scratch)):

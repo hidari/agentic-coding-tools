@@ -11,23 +11,19 @@
 テストの `source` は `os.environ` を直接使わず、`XDG_CACHE_HOME` を差し替えた辞書を渡す
 (host の置き場をテストごとに隔離するため)。cwd の検査は `os.chdir` で「消費側のリポジトリ」
 を模した別ディレクトリへ一時的に移動し、`run` に渡った cwd がそれと一致しないことで見る。
-
-権限 0 のディレクトリを使うテストは root では意味を失う (root は権限ビットを無視して
-読めてしまうため) ので、root で走らせると赤になる。CI の runner と検証コンテナは
-非 root で走る前提。
 """
 
 from __future__ import annotations
 
 import json
 import os
-import stat
 import tempfile
 import types
 import unittest
 from pathlib import Path
 
 import jevlint_host
+from test_jevlint_fs import deny_all_access
 
 
 class BuildEnvTests(unittest.TestCase):
@@ -498,50 +494,31 @@ class PrepareHostTests(unittest.TestCase):
         remaining = list(host.parent.iterdir()) if host.parent.exists() else []
         self.assertEqual(remaining, [])
 
+    # 祖先の検査のうち、どの祖先を見るか (与えられた表記と解決した表記、順序、確かめられない
+    # ときに投げること) は test_jevlint_fs.py の FindInAncestorsTests が持つ。ここの 2 本は
+    # 結果を HostError の文面へ写す形を見る。文面まで見るのは、どの腕が止めたかを pin する
+    # ため。型だけ (assertRaises) だと、別の腕 (例えば後段の host_reusable や
+    # parent.mkdir()) が拾うようになっても、HostError であることは変わらないので緑のまま
+    # 気づけない
+
     def test_pnpm_workspace_ancestor_is_rejected(self):
         self.cache_home.mkdir(parents=True, exist_ok=True)
         (self.cache_home / "pnpm-workspace.yaml").write_text("packages: []\n", encoding="utf-8")
         run = _FakeRun("0.7.0")
-        with self.assertRaises(jevlint_host.HostError):
+        with self.assertRaisesRegex(
+            jevlint_host.HostError, r"^host の祖先に pnpm-workspace\.yaml がある: "
+        ):
             jevlint_host.prepare_host("0.7.0", self.source, run=run)
         self.assertEqual(run.calls, [])
 
-    def test_pnpm_workspace_ancestor_found_only_via_realpath_is_rejected(self):
-        # host.parents (未解決の表記) には現れず、os.path.realpath で解決した表記の
-        # 祖先としてしか見えない pnpm-workspace.yaml を検出できることを pin する。
-        # XDG_CACHE_HOME を symlink (link) にし、実体 (real/cache) の親 (real) に
-        # pnpm-workspace.yaml を置く。host.parents は link を辿らないので real は
-        # 現れないが、realpath(host).parents には real が現れる
-        real_cache = self.cache_home.parent / "real" / "cache"
-        real_cache.mkdir(parents=True)
-        (real_cache.parent / "pnpm-workspace.yaml").write_text("packages: []\n", encoding="utf-8")
-        link = self.cache_home.parent / "link"
-        link.symlink_to(real_cache)
-        source = {"XDG_CACHE_HOME": str(link)}
-        run = _FakeRun("0.7.0")
-        with self.assertRaisesRegex(
-            jevlint_host.HostError, "^host の祖先に pnpm-workspace.yaml がある"
-        ):
-            jevlint_host.prepare_host("0.7.0", source, run=run)
-        self.assertEqual(run.calls, [])
-
     def test_symlink_loop_in_cache_path_becomes_hosterror(self):
-        # 文面まで見るのは、どの腕が止めたかを pin するため。型だけ (assertRaises) だと、
-        # stdlib の挙動が変わって別の腕 (例えば後段の parent.mkdir()) が拾うように
-        # なっても、HostError であることは変わらないので緑のまま気づけない
         loop = self.cache_home.parent / "loop"
         loop.symlink_to(loop)
         source = {"XDG_CACHE_HOME": str(loop / "cache")}
-        with self.assertRaisesRegex(jevlint_host.HostError, "^host の祖先を確認できない"):
-            jevlint_host.prepare_host("0.7.0", source, run=_FakeRun("0.7.0"))
-
-    def test_permission_denied_ancestor_becomes_hosterror(self):
-        # 文面まで見る理由は test_symlink_loop_in_cache_path_becomes_hosterror と同じ
-        self.cache_home.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.cache_home, 0)
-        self.addCleanup(os.chmod, self.cache_home, stat.S_IRWXU)
-        with self.assertRaisesRegex(jevlint_host.HostError, "^host の祖先を確認できない"):
-            jevlint_host.prepare_host("0.7.0", self.source, run=_FakeRun("0.7.0"))
+        run = _FakeRun("0.7.0")
+        with self.assertRaisesRegex(jevlint_host.HostError, "^host の祖先を確認できない: "):
+            jevlint_host.prepare_host("0.7.0", source, run=run)
+        self.assertEqual(run.calls, [])
 
     def test_host_parent_that_is_a_file_becomes_hosterror(self):
         # 親が通常ファイルの成分は NotADirectoryError になり、stat_or_none はそれを
@@ -614,8 +591,7 @@ class HostReusableTests(unittest.TestCase):
         # host_reusable は単独の関数で、prepare_host のように downstream の mkdir で
         # 例外を収束させる仕組みが無い。stat_or_none は権限エラーをどの版でも
         # そのまま投げるので、host_reusable はどの版でも HostError にする
-        os.chmod(self.host, 0)
-        self.addCleanup(os.chmod, self.host, stat.S_IRWXU)
+        deny_all_access(self, self.host)
         with self.assertRaisesRegex(jevlint_host.HostError, "^host を確認できない"):
             jevlint_host.host_reusable(self.host, "0.7.0")
 

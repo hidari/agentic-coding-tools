@@ -36,9 +36,9 @@ scripts/test_run_python_tests.py が検証する構造のため、次の 3 形�
 CI へ第 2 の取り付けを足せば塞がるが、取り付け literal の二重管理と引き換えに
 なるため採らず、レビューを防衛層とする (ユーザー判断)。
 
-テストの中で `sys.version_info` / `sys.hexversion` で明示的に分ける経路は ID の集合に
-現れない。その形は test_run_python_tests.py の VersionBranchBan が禁じる (stdlib の
-挙動差で暗黙に分かれる経路 [例: except PermissionError の腕] は見ない)。
+テストの中で版によって通る経路が分かれると、走らせた interpreter が通らない側の経路は
+ID の集合に現れない。明示的に版で分ける形は test_run_python_tests.py の VersionBranchBan
+が禁じる (何を見て何を見ないかはその docstring が持つ)。
 """
 from __future__ import annotations
 
@@ -104,7 +104,7 @@ sys.exit(0 if result.wasSuccessful() else 1)
 
 
 def discover(root: Path) -> list[Path]:
-    # ディレクトリの列挙 (旧 SEARCH_DIRS) ではなく root 全体を走査して除外を列挙
+    # ディレクトリの列挙ではなく root 全体を走査して除外を列挙
     # する。列挙方式は「列挙に無いディレクトリは無検査」という穴をディレクトリが
     # 増えるたびに再発させる (実際 scripts/ 配下が長く無検査のまま残っていた)。
     # 除外判定は root 相対の parts で行う。絶対パスの parts で見ると、リポジトリ

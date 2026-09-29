@@ -448,25 +448,16 @@ def reject_sgconfig_in_ancestors(path: Path) -> None:
     上流は ast-grep を起動し、ast-grep は cwd と親ディレクトリから sgconfig を探して、
     `customLanguages` の動的ライブラリを読み込む。共有の一時ディレクトリには別の利用者も
     ファイルを置けるので、キーを使わない起動でも利用者の権限で任意のコードが走りうる。
-    上流を起動する子プロセスの cwd は解決済みの形 (macOS では `/var` が `/private/var`) に
-    なるので、与えられた形と解決した形の両方の祖先を見る。
 
-    解決は `os.path.realpath` で行う (`tmpdir_from_env` と同じ理由: `Path.resolve()` の
-    symlink ループの扱いが版で違う)。祖先の stat は `jevlint_fs.stat_or_none` で行い、
-    判定不能 (権限エラー等) は「無い」に丸めず `TreeError` にする。
+    どの祖先を見るか (与えられた表記と解決した表記) は `jevlint_fs.find_in_ancestors` が
+    持つ。判定不能 (権限エラー等) は「無い」に丸めず `TreeError` にする。
     """
-    ancestors = set(path.parents) | set(Path(os.path.realpath(path)).parents)
-    for ancestor in ancestors:
-        for name in _SGCONFIG_NAMES:
-            candidate = ancestor / name
-            try:
-                found = jevlint_fs.stat_or_none(candidate) is not None
-            except OSError as error:
-                raise TreeError(
-                    f"一時ディレクトリの祖先を確認できない: {candidate}: {error}"
-                ) from None
-            if found:
-                raise TreeError(f"一時ディレクトリの祖先に {name} がある: {candidate}")
+    try:
+        found = jevlint_fs.find_in_ancestors(path, _SGCONFIG_NAMES)
+    except OSError as error:
+        raise TreeError(f"一時ディレクトリの祖先を確認できない: {error}") from None
+    if found is not None:
+        raise TreeError(f"一時ディレクトリの祖先に {found.name} がある: {found}")
 
 
 def _discard_worktree(git: _QuietGit, root: Path, tree: Path) -> None:
@@ -507,12 +498,9 @@ def tmpdir_from_env(env: dict) -> Path:
     ままだと `worktree add` は `-C root` の root から、書き出しは cwd から解決して別の場所を
     指す。
 
-    解決は `os.path.realpath` で行う。`Path.resolve()` は symlink のループを 3.12 までは
-    `RuntimeError` にし、3.14 では投げない (実測: 3.9.6・3.11.15・3.12.12・3.14.7)。
-    `realpath` は symlink のループでは投げない (実測: 3.9.6・3.11.15・3.12.12・3.14.7)。
-    embedded NUL を含む表記では 3.14.7 の `realpath` が `ValueError` を投げ、3.9.6 は
-    NUL を含んだままの絶対パスを返す (実測)。argv と environ は C 文字列なので、この経路には
-    CLI からは到達しない。ループは後段の `mkdtemp` が `OSError` にする。
+    解決は `os.path.realpath` で行う (`Path.resolve()` を使わない理由は
+    `jevlint_fs.find_in_ancestors` の docstring が持つ)。realpath は symlink のループを
+    通り過ぎるので、ループは後段の `mkdtemp` が `OSError` にする。
     """
     candidate = env.get("TMPDIR", "")
     if not (candidate and os.path.isabs(candidate)):
@@ -605,7 +593,6 @@ def expanded_commit(root: Path, sha: str, env: dict) -> Iterator[Expanded]:
                 # 返らず、コミットした symlink ループでもこの OSError の腕には実際の
                 # コミット内容から到達できない。テストは `jevlint_fs.stat_or_none` に
                 # PermissionError を注入してこの腕を pin する
-                # (test_jevlint_tree.py の ExpandedCommitTests)
                 candidate_stat = jevlint_fs.stat_or_none(candidate)
             except OSError as error:
                 raise TreeError(f"{name} を確認できない: {candidate}: {error}") from None
