@@ -58,7 +58,32 @@ GitHub の告知 (main の CI の注釈と https://github.com/actions/runner-ima
 
 - Docker の server は 29.4.0 (OrbStack、aarch64)。ホストは arm64 なので、`--platform linux/amd64` のコンテナはエミュレーションで動いている。runner の実機 (x86_64) とは CPU の実装が違う
 - base image は `ubuntu:26.04`。`docker pull --platform linux/amd64 ubuntu:26.04` の digest は `sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78` で、`docker image inspect` の Architecture は `amd64`
-- Dockerfile は apt で python3・git・curl・ca-certificates を `--no-install-recommends` で入れ、uid 1001 の `runner` を作って `USER runner` にした。リポジトリは `/src` に `:ro` で bind mount し、`git -c safe.directory=/src clone --no-local /src /home/runner/work/repo` で全履歴 (shallow でない、82 コミット) を clone した。`safe.directory` を渡したのは、`/src` がホストの uid の所有で、clone 元の所有者検査に当たるため
+- リポジトリは `/src` に `:ro` で bind mount し、コンテナの中で全履歴 (shallow でない、82 コミット) を clone した。clone に `safe.directory` を渡したのは、`/src` がホストの uid の所有で、clone 元の所有者検査に当たるため
+
+Dockerfile:
+
+```
+FROM ubuntu:26.04
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 git curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+# runner と同じく非 root で回す (root は chmod で作った権限エラーを無視して読める)
+RUN useradd --create-home --uid 1001 --shell /bin/bash runner
+USER runner
+WORKDIR /home/runner
+CMD ["sleep", "infinity"]
+```
+
+各段は別々に実行し、直後の `echo "rc=$?"` で rc を取った。docker の段は出力を `.cache/<段>.log` へ向けた。`/src/.cache/` の下のスクリプトは、bind mount 越しに見えるリポジトリの `.cache/` に置いた書き捨てである。
+
+```
+docker pull --platform linux/amd64 ubuntu:26.04   # rc=0
+docker build --platform linux/amd64 -f .cache/Dockerfile.ubuntu2604 -t act-ubuntu2604:issue82 .cache   # rc=0
+docker run -d --name act-issue82 --platform linux/amd64 -v "$PWD":/src:ro act-ubuntu2604:issue82   # rc=0
+docker exec act-issue82 bash /src/.cache/clone.sh   # rc=0 (中身は git -c safe.directory=/src clone --no-local /src /home/runner/work/repo と、shallow かとコミット数の表示)
+docker exec act-issue82 bash /src/.cache/env.sh   # rc=0 (下の表の値)
+docker exec act-issue82 bash /src/.cache/run-ci.sh   # rc=0 (次の節)
+```
 
 同じコンテナで run の前に取った値:
 
@@ -77,6 +102,56 @@ clone は runs-on を変える前の HEAD なので、ci.yml の run の行は�
 ### ci.yml の run (完了の定義の 2)
 
 `grep -E '^[[:space:]]+(- )?run: ' .github/workflows/ci.yml` で 12 件を抽出し、`run:` を含んで `runs-on` を含まない行の数 (12) と一致したので、複数行の `run: |` の取りこぼしは無い。抽出した行から `run: ` までを落とし、ci.yml の順に Actions の既定の shell (`bash --noprofile --norc -eo pipefail -c`) で実行した。`RUNNER_TEMP` と `GITHUB_PATH` はコンテナの中の書き込める場所を指し、各 run の前に `GITHUB_PATH` のファイルの行を PATH の先頭に足した。4 job を 1 つの clone で続けて回したので、job ごとの checkout (package-shape などの fetch-depth 1) は再現していない。
+
+`run-ci.sh`:
+
+```
+#!/usr/bin/env bash
+# ci.yml の run を手で写さず grep で抽出し、ci.yml の順に実行する。
+# 各 run は Actions の既定 shell (bash --noprofile --norc -eo pipefail) で回す。
+repo=/home/runner/work/repo
+cd "$repo" || exit 1
+export RUNNER_TEMP=/home/runner/work/_temp
+export GITHUB_PATH=/home/runner/work/_github_path
+mkdir -p "$RUNNER_TEMP"
+: > "$GITHUB_PATH"
+
+mapfile -t runs < <(grep -E '^[[:space:]]+(- )?run: ' .github/workflows/ci.yml | sed -E 's/^[[:space:]]+(- )?run: //')
+echo "extracted=${#runs[@]}"
+
+executed=0
+failed=0
+for cmd in "${runs[@]}"; do
+    # GITHUB_PATH に追記された行を PATH の先頭へ足す (Actions が step 間で行うことの代わり)
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        case ":$PATH:" in *":$p:"*) ;; *) PATH="$p:$PATH" ;; esac
+    done < "$GITHUB_PATH"
+    export PATH
+    echo "=== RUN[$((executed + 1))]: $cmd"
+    bash --noprofile --norc -eo pipefail -c "$cmd"
+    rc=$?
+    executed=$((executed + 1))
+    echo "=== RC[$executed]=$rc"
+    [ "$rc" -eq 0 ] || failed=$((failed + 1))
+    case "$cmd" in
+        scripts/ci/install-gitleaks.sh)
+            echo "--- GITHUB_PATH:"; cat "$GITHUB_PATH"
+            while IFS= read -r p; do
+                [ -n "$p" ] || continue
+                case ":$PATH:" in *":$p:"*) ;; *) PATH="$p:$PATH" ;; esac
+            done < "$GITHUB_PATH"
+            export PATH
+            echo "--- command -v gitleaks: $(command -v gitleaks)"
+            echo "--- gitleaks version: $(gitleaks version)"
+            ;;
+    esac
+done
+echo "executed=$executed extracted=${#runs[@]} failed=$failed"
+[ "$executed" -eq "${#runs[@]}" ] && [ "$failed" -eq 0 ]
+```
+
+RUNNER_TEMP と GITHUB_PATH を 4 job で共有したので、10 の `install-gitleaks.sh` は同じ行を `GITHUB_PATH` に 2 度目として追記した (PATH には重複して足さない)。
 
 | # | run | rc |
 |---|---|---|
@@ -113,10 +188,11 @@ clone は runs-on を変える前の HEAD なので、ci.yml の run の行は�
 |---|---|---|
 | ISSUE-66 の 17・27・38・51・57 行 (`/home/runner` と `ubuntu-latest`) | 残す | 27 行の表は main の run での観測の記録。ほかは合成した入力の例示とルールの検討で、57 行はすでにこの Issue へ PR のコメントを指している |
 | ISSUE-83 (closed) の 13・16・51 行 (`ubuntu-latest` (24.04) の 3.12 系) | 残す | 閉じた Issue の、その時点の状態の記録 |
+| ISSUE-83 (closed) の 81 行 (`ubuntu-26.04`) | 残す | 関連節からこの Issue を指す行で、移行先の名前を持つだけ。移したあとも真 |
 | ISSUE-84 の 36 行 (`runs-on` の数) | 残す | 判定役の読み違いの記録 |
 | `scripts/test_leak_guard_attachment.py` の 78 行 (`SCAN_JOB_KEYS` の `runs-on`) | 残す | job のキーの名前で、label の値を持たない |
 
-2 つ目のヒットは 80 件で、大半は `runner` を「テストの runner (`run-python-tests.py`)」や変数名の意味で使っている。CI の runner を指すのは ci.yml のコメント、CLAUDE.md の 59 行、`install-gitleaks.sh`、`run-python-tests.py` の docstring、`test_macvm.py` と `test_winvm.py` の 4 行、`test_macvm.py` の 338 行 (`CI は Linux`)、`test_jevlint_fs.py` の 25 行 (非 root で走る)、`test_jevlint_tree.py` の 767 行 (`CI の git の版は分からない`) で、どれも label と版を持たず、26.04 でも成り立つので残した。`install-gitleaks.sh` の `linux_x64` は runner の arch で、26.04 でも x86_64 なので残した。3.12 のヒット (`jevlint_fs.py` などの実測の版の列挙、`markdown-to-pdf` の `requires-python`) は CI の runner と関係しない。
+2 つ目のヒットは 80 件で、大半は `runner` を「テストの runner (`run-python-tests.py`)」や変数名の意味で使っている。CI の runner を指すのは ci.yml のコメント、CLAUDE.md の 59 行、`install-gitleaks.sh`、`run-python-tests.py` の docstring、`test_macvm.py` と `test_winvm.py` の 4 行、`test_macvm.py` の 338 行 (`CI は Linux`)、`test_jevlint_fs.py` の 25 行 (非 root で走る)、`test_jevlint_tree.py` の 767 行 (`CI の git の版は分からない`)、in-repo-issue の `SKILL.md` の 30 行 (`CI runner も skill を読み込まない`) で、どれも label と版を持たず、26.04 でも成り立つので残した。`ci-runner` の許可ケース (`check-leak-guard-rules.py` の 171 行、`leak-guard.gitleaks.toml` の 72 行の許可の `runner`、`leak-guard-cases-manifest.txt` の 5 行) は macOS の runner のホームの形 (`/Users/runner`) を許可するもので、Ubuntu の label とも版とも関係しないので残した。`install-gitleaks.sh` の `linux_x64` は runner の arch で、26.04 でも x86_64 なので残した。3.12 のヒット (`jevlint_fs.py` などの実測の版の列挙、`markdown-to-pdf` の `requires-python`) は CI の runner と関係しない。
 
 ### python3 の版
 
