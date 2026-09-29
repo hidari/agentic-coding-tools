@@ -1,5 +1,5 @@
 ---
-status: open
+status: closed
 ---
 
 # ci: CI の runner を ubuntu-26.04 へ移す
@@ -16,9 +16,9 @@ GitHub の告知 (main の CI の注釈と https://github.com/actions/runner-ima
 
 ## タスク
 
-- [ ] 完了の定義の 1〜2 (ローカルの確認) を満たす
-- [ ] 完了の定義の 3 (runs-on の変更と、runner を事実として書いた記述の扱い) を満たす
-- [ ] 完了の定義の 4 が挙げる項目を「結果」節に記録する
+- [x] 完了の定義の 1〜2 (ローカルの確認) を満たす
+- [x] 完了の定義の 3 (runs-on の変更と、runner を事実として書いた記述の扱い) を満たす
+- [x] 完了の定義の 4 が挙げる項目を「結果」節に記録する
 
 ## 完了の定義
 
@@ -52,7 +52,7 @@ GitHub の告知 (main の CI の注釈と https://github.com/actions/runner-ima
 
 ## 結果
 
-2026-09-30 にローカルのコンテナで実測した。完了の定義の 1〜4 を満たし、5 は PR のコメントに残す。
+2026-09-29 (UTC) にローカルのコンテナで実測した。完了の定義の 1〜4 を満たし、5 は PR のコメントに残す。
 
 ### 環境 (完了の定義の 1)
 
@@ -198,7 +198,7 @@ RUNNER_TEMP と GITHUB_PATH を 4 job で共有したので、10 の `install-gi
 
 | 経路 | 版 |
 |---|---|
-| CI (ubuntu-26.04、python-tests の job の `python3 --version`) | (PR の CI の run から取る) |
+| CI (ubuntu-26.04、python-tests の job の `python3 --version`) | `Python 3.14.4` (PR 75 の最初の run 36603235212) |
 | ローカルの ubuntu:26.04 のコンテナ | `Python 3.14.4` |
 | 手元 (開発機の pre-commit が使う `python3`) | `Python 3.14.7` |
 
