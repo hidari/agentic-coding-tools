@@ -50,6 +50,82 @@ GitHub の告知 (main の CI の注釈と https://github.com/actions/runner-ima
 - コミット・PR のタイトルと本文・PR のコメントに、ホストの絶対パスも、その区切りをダッシュに置き換えた形も書かない
 ```
 
+## 結果
+
+2026-09-30 にローカルのコンテナで実測した。完了の定義の 1〜4 を満たし、5 は PR のコメントに残す。
+
+### 環境 (完了の定義の 1)
+
+- Docker の server は 29.4.0 (OrbStack、aarch64)。ホストは arm64 なので、`--platform linux/amd64` のコンテナはエミュレーションで動いている。runner の実機 (x86_64) とは CPU の実装が違う
+- base image は `ubuntu:26.04`。`docker pull --platform linux/amd64 ubuntu:26.04` の digest は `sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78` で、`docker image inspect` の Architecture は `amd64`
+- Dockerfile は apt で python3・git・curl・ca-certificates を `--no-install-recommends` で入れ、uid 1001 の `runner` を作って `USER runner` にした。リポジトリは `/src` に `:ro` で bind mount し、`git -c safe.directory=/src clone --no-local /src /home/runner/work/repo` で全履歴 (shallow でない、82 コミット) を clone した。`safe.directory` を渡したのは、`/src` がホストの uid の所有で、clone 元の所有者検査に当たるため
+
+同じコンテナで run の前に取った値:
+
+| 項目 | 値 |
+|---|---|
+| `/etc/os-release` の PRETTY_NAME | `Ubuntu 26.04.1 LTS` |
+| `uname -m` | `x86_64` |
+| `dpkg --print-architecture` | `amd64` |
+| `id -u` | `1001` (`runner`) |
+| `python3 --version` | `Python 3.14.4` |
+| `git --version` | `git version 2.53.0` |
+| clone の `git rev-parse HEAD` | `0818e2c10e674a0a1246fd08d564e3e9f1e82615` (ホストの HEAD と一致) |
+
+clone は runs-on を変える前の HEAD なので、ci.yml の run の行は変更後と同じである (この変更は runs-on の 4 行だけ)。
+
+### ci.yml の run (完了の定義の 2)
+
+`grep -E '^[[:space:]]+(- )?run: ' .github/workflows/ci.yml` で 12 件を抽出し、`run:` を含んで `runs-on` を含まない行の数 (12) と一致したので、複数行の `run: |` の取りこぼしは無い。抽出した行から `run: ` までを落とし、ci.yml の順に Actions の既定の shell (`bash --noprofile --norc -eo pipefail -c`) で実行した。`RUNNER_TEMP` と `GITHUB_PATH` はコンテナの中の書き込める場所を指し、各 run の前に `GITHUB_PATH` のファイルの行を PATH の先頭に足した。4 job を 1 つの clone で続けて回したので、job ごとの checkout (package-shape などの fetch-depth 1) は再現していない。
+
+| # | run | rc |
+|---|---|---|
+| 1 | `scripts/ci/install-gitleaks.sh` | 0 |
+| 2 | `python3 scripts/check-leak-guard-rules.py` | 0 |
+| 3 | `gitleaks git ... -c .../leak-guard.gitleaks.toml` | 0 |
+| 4 | `gitleaks git ... -c .../leak-guard-default.gitleaks.toml` | 0 |
+| 5 | `python3 scripts/check-package-shape.py` | 0 |
+| 6 | `python3 .../issue-id.py --check` | 0 |
+| 7 | `python3 scripts/check-related-refs.py` | 0 |
+| 8 | `python3 scripts/check-issue-closure.py` | 0 |
+| 9 | `python3 scripts/gen-readme.py --check` | 0 |
+| 10 | `scripts/ci/install-gitleaks.sh` | 0 |
+| 11 | `python3 --version` | 0 |
+| 12 | `python3 scripts/run-python-tests.py` | 0 |
+
+- 実行した数 12、抽出した数 12、rc が 0 でないもの 0
+- 1 と 10 のあと、`command -v gitleaks` は `RUNNER_TEMP` の下の `gitleaks`、`gitleaks version` は `8.30.1`
+- 3 と 4 はどちらも `82 commits scanned.` / `scanned ~3174030 bytes` / `no leaks found`
+- 12 は `検査した Python テスト: 17 ファイル / テスト 1073 件 (manifest と一致) / 違反なし`
+
+### runner を事実として書いた記述 (完了の定義の 3)
+
+`grep -n 'runs-on:' .github/workflows/ci.yml` は 14・43・75・82 行の 4 件で、すべて `ubuntu-latest` だったので `ubuntu-26.04` にした。workflow は ci.yml の 1 本だけである。
+
+記述は次の 2 つの `git grep` で探した (この Issue 自身は検索から外した)。
+
+- `git grep -nIE 'ubuntu-latest|ubuntu-2[0-9]\.04|ubuntu:2[0-9]\.04|Ubuntu 2[0-9]|runs-on|/home/runner|ImageOS|runner-images'`
+- `git grep -nIE 'runner|3\.12|Linux の CI|CI は Linux|x86_64|linux_x64' -- . ':!docs/issues'`
+
+1 つ目のヒットは ci.yml の 4 行のほかに 11 件で、すべて残した。
+
+| ヒット | 扱い | 理由 |
+|---|---|---|
+| ISSUE-66 の 17・27・38・51・57 行 (`/home/runner` と `ubuntu-latest`) | 残す | 27 行の表は main の run での観測の記録。ほかは合成した入力の例示とルールの検討で、57 行はすでにこの Issue へ PR のコメントを指している |
+| ISSUE-83 (closed) の 13・16・51 行 (`ubuntu-latest` (24.04) の 3.12 系) | 残す | 閉じた Issue の、その時点の状態の記録 |
+| ISSUE-84 の 36 行 (`runs-on` の数) | 残す | 判定役の読み違いの記録 |
+| `scripts/test_leak_guard_attachment.py` の 78 行 (`SCAN_JOB_KEYS` の `runs-on`) | 残す | job のキーの名前で、label の値を持たない |
+
+2 つ目のヒットは 80 件で、大半は `runner` を「テストの runner (`run-python-tests.py`)」や変数名の意味で使っている。CI の runner を指すのは ci.yml のコメント、CLAUDE.md の 59 行、`install-gitleaks.sh`、`run-python-tests.py` の docstring、`test_macvm.py` と `test_winvm.py` の 4 行、`test_macvm.py` の 338 行 (`CI は Linux`)、`test_jevlint_fs.py` の 25 行 (非 root で走る)、`test_jevlint_tree.py` の 767 行 (`CI の git の版は分からない`) で、どれも label と版を持たず、26.04 でも成り立つので残した。`install-gitleaks.sh` の `linux_x64` は runner の arch で、26.04 でも x86_64 なので残した。3.12 のヒット (`jevlint_fs.py` などの実測の版の列挙、`markdown-to-pdf` の `requires-python`) は CI の runner と関係しない。
+
+### python3 の版
+
+| 経路 | 版 |
+|---|---|
+| CI (ubuntu-26.04、python-tests の job の `python3 --version`) | (PR の CI の run から取る) |
+| ローカルの ubuntu:26.04 のコンテナ | `Python 3.14.4` |
+| 手元 (開発機の pre-commit が使う `python3`) | `Python 3.14.7` |
+
 ## 関連
 
 ISSUE-66 (本文が CI の runner の label を観測の記録として書いている)
