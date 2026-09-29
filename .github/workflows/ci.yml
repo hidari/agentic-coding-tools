@@ -90,4 +90,8 @@ jobs:
       - name: Install gitleaks
         run: scripts/ci/install-gitleaks.sh
 
+      # runner の python3 の版は image で変わるが、run-python-tests.py の出力にも
+      # Set up job のログにも出ないので、どの版でテストが通ったかを記録に残すために出す
+      - run: python3 --version
+
       - run: python3 scripts/run-python-tests.py
