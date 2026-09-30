@@ -727,5 +727,65 @@ class SummarizeDryRunTests(unittest.TestCase):
         )
 
 
+class SummarizeTargetListTests(unittest.TestCase):
+    """件数の行の下に、どの対象かを 1 件 1 行で出す。記録の JSON は実行後に消えるので、
+    要約に出なければ利用者はどの対象が degraded / 見送りになったかを確かめられない。"""
+
+    def test_degraded_batches_are_listed_under_the_count(self):
+        doc = _doc(
+            degraded=[
+                {
+                    "file": "src/foo.py",
+                    "rule": "var-name-describes-value",
+                    "subjects": 2,
+                    "from": "paired",
+                    "to": "solo",
+                    "reason": "no related test",
+                },
+                # rule でまとめない batch は上流が rule を null で出す
+                {
+                    "file": "src/bar.py",
+                    "rule": None,
+                    "subjects": 5,
+                    "from": "full",
+                    "to": "graph",
+                    "reason": "state budget",
+                },
+            ]
+        )
+        outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
+        lines = _summarize(outcome).splitlines()
+        start = lines.index("degraded: 2 件")
+        self.assertEqual(
+            lines[start + 1 : start + 3],
+            [
+                "  src/foo.py var-name-describes-value: 2 件を paired から solo へ (no related test)",
+                "  src/bar.py: 5 件を full から graph へ (state budget)",
+            ],
+        )
+
+    def test_no_degraded_lines_when_nothing_degraded(self):
+        outcome = jevlint_result.classify(0, json.dumps(_doc()), _record(), dry_run=False)
+        lines = _summarize(outcome).splitlines()
+        start = lines.index("degraded: 0 件")
+        self.assertFalse(lines[start + 1].startswith("  "))
+
+    def test_unpaired_files_are_listed_under_the_count(self):
+        doc = _doc(unpaired={"subjects": 3, "files": ["b.py", "c.py", "d.py", "e.py"]})
+        outcome = jevlint_result.classify(0, json.dumps(doc), _record(), dry_run=False)
+        lines = _summarize(outcome).splitlines()
+        start = lines.index("関連テストが無く 3 件 (paired) を見送った")
+        # 上流の人向けの出力は先頭 3 件で切るが、ここでは全部を出す
+        self.assertEqual(lines[start + 1 : start + 5], ["  b.py", "  c.py", "  d.py", "  e.py"])
+
+    def test_unpaired_files_are_listed_in_dry_run(self):
+        # dry-run はキーを使わずエージェントが自分で回せるので、見送る対象を送る前に確かめられる
+        stdout = json.dumps({"dryRun": True, "subjects": 8, "usd": 0.05, "unpaired": {"subjects": 1, "files": ["b.py"]}})
+        outcome = jevlint_result.classify(0, stdout, None, dry_run=True)
+        lines = _summarize(outcome, dry_run=True).splitlines()
+        start = lines.index("関連テストが無く 1 件 (paired) を見送った")
+        self.assertEqual(lines[start + 1 : start + 2], ["  b.py"])
+
+
 if __name__ == "__main__":
     unittest.main()

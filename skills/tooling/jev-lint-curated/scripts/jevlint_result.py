@@ -165,6 +165,8 @@ def _dropped_before_asking(doc: dict, curated: "tuple[str, ...]") -> "list[str]"
     unpaired = doc.get("unpaired")
     if isinstance(unpaired, dict) and unpaired.get("subjects", 0):
         lines.append(f"関連テストが無く {unpaired['subjects']} 件 (paired) を見送った")
+        # 上流の人向けの出力は先頭 3 件で切るが、記録は実行後に消えるので要約に全部を出す
+        lines.extend(f"  {file}" for file in unpaired.get("files", []))
 
     # silentRules は上流の全 rule を含みうるので、厳選 (curated) に絞る
     # (厳選の外の rule はこのラッパの利用者には関係が無い)。
@@ -218,6 +220,20 @@ def _missing_breakdown(record: dict, missing: int) -> str:
         return f" ({per_file})"
     detail = f": {per_file}" if per_file else ""
     return f" (記録で値が無い答え {total} 件{detail})"
+
+
+def _degraded_lines(degraded: "list[dict]") -> "list[str]":
+    """「degraded」の件数の下に置く、batch ごとの 1 行。件数は batch の数で subject の数では
+    ない (上流 0.7.0 の `formatJson` は degraded な batch を 1 要素ずつ出す)。rule でまとめない
+    batch は上流が `rule` を null で出すので、そのときは rule を書かない。"""
+    lines: "list[str]" = []
+    for batch in degraded:
+        rule = f" {batch['rule']}" if batch.get("rule") else ""
+        lines.append(
+            f"  {batch.get('file')}{rule}: {batch.get('subjects')} 件を "
+            f"{batch.get('from')} から {batch.get('to')} へ ({batch.get('reason')})"
+        )
+    return lines
 
 
 def _mbt_lines(mbt_count: int) -> "list[str]":
@@ -286,6 +302,7 @@ def summarize(
     else:
         lines.append("エラー: 0 件")
     lines.append(f"degraded: {len(degraded)} 件")
+    lines.extend(_degraded_lines(degraded))
     lines.append(f"費用: ${spent.get('usd', 0):.5f} ({spent.get('calls', 0)} 回)")
 
     lines.extend(_dropped_before_asking(doc, curated))
