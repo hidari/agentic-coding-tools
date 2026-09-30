@@ -78,4 +78,4 @@ finding は人かエージェントが判断する候補であって断定では
 
 ## 後始末
 
-実行が中断されると worktree の登録が残ることがある。後始末の git が失敗して残したときは、ラッパが stderr でそう告げる。どちらも本体のリポジトリで `git worktree prune` を実行して消す。
+後始末が走らない終わり方 (SIGKILL など) をすると、展開した worktree のディレクトリと登録が残ることがある。後始末で消し切れなかったときは、ラッパが残ったパスを stderr で告げる。どちらも、残った展開の一時ディレクトリ (一時ディレクトリの置き場の下の `jevlint-` で始まるもの。worktree はその中の `tree` で、隣の `scratch` に設定と記録が入る) を消してから、本体のリポジトリで `git worktree prune` を実行する (worktree のパスは `git worktree list` でも分かる)。ディレクトリに `.git` が残っている間は、prune は登録を消さない (実測の記録は `scripts/jevlint_tree.py` の `_left_behind`)。
