@@ -42,7 +42,7 @@ python3 -E -s -B "${CLAUDE_SKILL_DIR}/scripts/jevlint.py" <サブコマンド> .
 ! TYPESAFE_API_KEY="$(your-key-command)" python3 -E -s -B "${CLAUDE_SKILL_DIR}/scripts/jevlint.py" check path/to/target
 ```
 
-エージェントが埋めるもの:
+エージェントが埋めるものは次の 2 つ。
 
 - スクリプトの位置は絶対パスで示す。読み込んだ本文で `${CLAUDE_SKILL_DIR}` が展開されずに残っていたら、skill を読み込んだときに示された base directory に置き換える。ユーザーのシェルではこの変数が空になり、`/scripts/jevlint.py` を指してしまう
 - `path/to/target` は、直前に自分で回した `check --dry-run` と同じパスに置き換える

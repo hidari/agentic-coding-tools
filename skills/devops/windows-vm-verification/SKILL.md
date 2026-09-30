@@ -20,11 +20,11 @@ description: Parallels Desktop 上の Windows 検証 VM を繋ぐ/調べる/検�
 検証 VM は検証のたびに原状へ戻し、止めてから報告する。起動したままの VM や、作業で取ったスナップショットを残したまま報告しない。winvm はこの扱いを持たないので `prlctl` を直接使う。
 
 1. 作業前に `prlctl snapshot-list "<vm>"` で既存のスナップショットを確かめる。空でなければ既存のものには触れず、作業に入る前にユーザーへ扱いを確かめる。この手順で消してよいのは、この作業で取ったスナップショットだけである
-2. 原状保全のスナップショットを取る (`prlctl snapshot "<vm>" --name <名前>`)。ID は `prlctl snapshot-list "<vm>"` で控える。インストーラを実行する検証では、実行より前に取る (理由は `references/gui-automation.md` の最後の節)
+2. 原状保全のスナップショットを取る (`prlctl snapshot "<vm>" --name <名前>`)。ID は `prlctl snapshot-list "<vm>"` で控える。インストーラを実行する検証では、実行より前に取る (理由は `references/gui-automation.md` の「インストーラがサービスの開始の種類を戻し、スナップショットへ焼き込まれる」)
 3. 作業する。途中の状態へ戻る必要があれば、途中のスナップショットを取ってよい
 4. 検証が済んだら `prlctl snapshot-switch "<vm>" --id <原状保全の ID>` で原状へ戻し、この作業で取ったスナップショットを `prlctl snapshot-delete "<vm>" --id <ID>` で全部消す
 5. `prlctl stop "<vm>"` で停止する
-6. 報告の前に、`prlctl snapshot-list "<vm>"` が空であることと、`prlctl list -a` で VM が `stopped` であることを確かめ、その出力を報告に添える
+6. 報告の前に、`prlctl snapshot-list "<vm>"` が空 (手順 1 でユーザーが残すと決めたものがあるなら、それだけ) であることと、`prlctl list -a` で VM が `stopped` であることを確かめ、その出力を報告に添える
 
 ## GUI の自動操作
 

@@ -20,4 +20,4 @@ VM の CLI (winvm / macvm) にサブコマンドは足さない。足すと shel
 
 ## 関連
 
-ISSUE-86 (同じ消費側の作業から届いた別の skill の更新)
+ISSUE-86
