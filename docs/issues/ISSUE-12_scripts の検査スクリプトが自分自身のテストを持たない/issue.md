@@ -16,7 +16,7 @@ ISSUE-8 で `scripts/run-python-tests.py` の収集がディレクトリ列挙�
 | スクリプト | 状態 |
 |---|---|
 | `check-package-shape.py` | 無検査。加えて `__main__` ガードが無く import 安全でない |
-| `gen-readme.py` | 無検査 |
+| `gen-readme.py` | 無検査 (追記 (2026-10-01): ISSUE-27 の d1de3ea で `scripts/test_gen_readme.py` が入り、検査されるようになった) |
 | `check-leak-guard-rules.py` | 無検査 |
 
 これらはいずれも「破っても静かに壊れる規約」を担保している検査で、壊れたことは
@@ -28,6 +28,8 @@ ISSUE-8 で `scripts/run-python-tests.py` の収集がディレクトリ列挙�
 `scripts/` の Python のうち、`__main__` ガードを持たないのはこれだけ (実測)。
 `importlib` で読み込んだ瞬間に検査本体が走るため、テストから import して個々の
 検査関数を呼ぶ形が取れない。テストを書く前に import 安全化が要る。
+
+追記 (2026-10-01): ISSUE-58 の 66231ad で入った `scripts/hook_config_lines.py` もガードを持たないので、「これだけ」は字義どおりには成り立たなくなった。ただしこちらはトップレベルに定数と `def` しか無く、import しても安全である。検査本体と `if violations:` の中の `sys.exit(1)` がモジュールレベルにあって import 安全でないのは、今も `check-package-shape.py` だけ。
 
 `scripts/test_run_python_tests.py` がハイフン名のスクリプトを `importlib` で読む定型を
 持っているので、そこは転用できる。
@@ -53,7 +55,7 @@ ISSUE-8 で `scripts/run-python-tests.py` の収集がディレクトリ列挙�
 - [ ] `SKIP_DIRS` の二重化を解く。基底集合を共有するか、共有しないと決めたなら
       「同じ集合である」と主張しているコメントの方を落とす (検証されない同期主張を残さない)
 - [ ] `check-package-shape.py` のテストを書く
-- [ ] `gen-readme.py` のテストを書く
+- [x] `gen-readme.py` のテストを書く (背景の表の追記のとおり、ISSUE-27 で済んだ)
 - [ ] `check-leak-guard-rules.py` のテストを書く。`gitleaks` 不在時の扱いを先に決めること
       (runner が skip を一律赤にするため、skip での回避はできない)
 - [ ] 各テストが生きた pin であることを変異注入で確認する
