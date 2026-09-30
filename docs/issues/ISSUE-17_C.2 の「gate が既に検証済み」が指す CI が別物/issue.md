@@ -22,6 +22,8 @@ C.2 の 1 行だけである (実測、grep rc 0)。`pre-merge-quality-gate` の
 gate が実際に確認するのは Phase 3 の `make ci-<area>` で、これは**ローカル実行**である。
 Phase 4 は `gh pr merge` / `gh pr create` を実行するだけで、その前後に run の状態を見ない。
 
+追記 (2026-10-01): この節の 2 つの前提は古くなった。ISSUE-41 の 03d74b4 で、gate の Phase 3 に `gh pr checks <num> --watch` が入った。ただし見るのは、クローズを同梱して push した後の PR の run で、main の run を見る手順は今も無い。`make ci-<area>` は ISSUE-56 の a654a6e でプロジェクトの canonical へ委ねられ、gate から消えた。C.2 のスキップの根拠と gate の Phase 5 のスキップの指示は変わっておらず、この Issue の欠陥は残っている。
+
 つまり C.2 のスキップ根拠は、**gate が文書化していない検証**を指している。読んだ人が
 「gate が PR の run を見たのだろう」と補完して読める形になっており、補完の中身は人によって
 変わる。

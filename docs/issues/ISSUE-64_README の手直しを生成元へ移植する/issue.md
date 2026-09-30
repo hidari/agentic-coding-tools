@@ -17,6 +17,8 @@ hook に削られてパッチとして壊れるため。生成版との差分は
 diff README.md "docs/issues/ISSUE-64_README の手直しを生成元へ移植する/ISSUE-64-readme-hand-edit.md"
 ```
 
+追記 (2026-10-01): 手直し版の土台は a126db2 の時点の README で、今の README より古い。その後、ISSUE-58 の 66231ad で dev-workflow の description が書き換わり、ISSUE-65 の 257add2 で jev-lint-curated の行が加わった。この 2 点は手直しではなく土台の差なので、上の diff にも現れる。
+
 手直しは、移す先で 3 つに分かれる。
 
 | 移す先 | 手直し |
@@ -54,7 +56,7 @@ diff README.md "docs/issues/ISSUE-64_README の手直しを生成元へ移植す
 - [ ] 「component 数」列を消すかを、ISSUE-30 との順序と合わせて決める
 - [ ] 意味が変わる手直しの採否を 1 つずつ決める
 - [ ] 採ったものを `HEADER` / `FOOTER`、生成コード、frontmatter へ移し、`python3 scripts/gen-readme.py` で生成し直す
-- [ ] 生成した README.md と `ISSUE-64-readme-hand-edit.md` の差分が、採らなかった分だけになっていることを確かめる
+- [ ] 生成した README.md と `ISSUE-64-readme-hand-edit.md` の差分が、採らなかった分だけになっていることを確かめる (背景の追記にある土台の差 2 点を除いて比べる)
 - [ ] 生成コードを変えたら `scripts/test_gen_readme.py` を合わせて直し、テストの manifest を更新する
 - [ ] `ISSUE-64-readme-hand-edit.md` を削除する
 

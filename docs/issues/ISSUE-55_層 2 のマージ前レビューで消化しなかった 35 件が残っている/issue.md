@@ -50,7 +50,7 @@ CLAUDE.md がボーイスカウトルールの境界に置いている「今回�
 - [ ] **本体:362** — 非通常ファイル全部に errno=21 (EISDIR) と印字しており、そのためだけに errno を import している (F6 / simplification)
 - [x] **本体:39** — 走査面節が内容照合から外れる 3 クラスを書いていない。docstring が canonical と名指しされている面での宣言過大 (F17 / altitude) — ISSUE-15 の PR で解決済み。UTF-16 の手当てを書くときに 3 クラス (gitlink / 上限超え / NUL を含むもの) を明記した
 - [x] **本体:196** — fold() の docstring に履歴説明コメントが残っており、同じ経緯が issue.md にもある (F33 / boy-scout) — ISSUE-58の PR のマージ前ゲートで直した。「当初どちらも…測り直した結果がこれ」の2文を消した。前後の NFKC がそれぞれ何を守るかは、続く2つの段落が現在形の理由として持っている
-- [ ] **テスト:499** — test_oversize_blobs_are_excluded_without_being_read は「読まずに」を pin していない (F47 / pin-quality)
+- [x] **テスト:499** — test_oversize_blobs_are_excluded_without_being_read は「読まずに」を pin していない (F47 / pin-quality) — 指摘が当たっていなかった。起票と同じ 3bb2c40 の時点から、テストは `_iter_blobs` を直接呼び、上限を超える blob の Unable を assertRaises で押さえている。本体の上限の検査を外す変異で赤になる (2026-10-01 のトリアージで確認)
 - [ ] **テスト:424** — 「symlink は辿る」(resolve_denylist の stat) に正の対照が無く lstat へ戻しても緑 (F49 / pin-quality)
 - [x] **ISSUE-15 の issue.md** — 「残っているのは層 3 の skill と PR 本文の検査」の列挙が、同じファイルのタスク欄で未決のままの注釈付きタグ本文を落としている (F23 / canonical-drift) — ISSUE-15の PR で対象の文が消えていた (PR #52)。今の ISSUE-15の issue.md に「残っているのは」の列挙は無く、注釈付きタグの本文は「## 適用: 注釈付きタグ」節で走査面に含めると決まっている
 - [x] **テスト:878** — .pre-commit-config.yaml を読む 4 つのヘルパが scripts/test_issue_id_attachment.py から逐語で複製されている (F38 / boy-scout) — ISSUE-58の PR で解決済み。F2と同じ指摘で、同じ変更 (Task 1の `scripts/hook_config_lines.py`) で解決した

@@ -14,6 +14,8 @@ Python のテスト 5 本はどれも本体と同じディレクトリにある�
 
 ## 確かめたこと (2026-09-27、origin/main が cbb555d の時点)
 
+追記 (2026-10-01): この節の本数とパッケージ数は、起票の時点ですでに古かった (jev-lint-curated を足した ISSUE-65 の 257add2 が、起票したコミットの祖先にある)。main が 41a9fec の時点では、11 パッケージのうち 6 パッケージにテストが 13 本ある。増えた 6 本は jev-lint-curated の `scripts/test_jevlint*.py` で、`import jevlint*` と書いて同じディレクトリのモジュールを読む (下のモジュールの見つけ方の項では、`import macvm` の 2 本と同じ種類)。「決めること」の本数 (「移す 5 本」など) も同じ時点の値なので、着手するときに `git ls-files plugins skills | grep -E '(^|/)test_[^/]*\.py$|\.test\.mjs$'` で数え直す。
+
 - 配布の単位は `scripts/check-package-shape.py` が走査する plugin と単体 skill のディレクトリで、README の「使い方」はこの単位を apm の依存に書く。今は 10 パッケージある
 - テストは 5 パッケージに 7 本あり、計 335,886 B で、パッケージの追跡ファイルの合計 924,820 B の約 36% にあたる。残りの 5 パッケージにテストは無い
   - `plugins/dev-workflow`: 3 本 188,728 B。`skills/commit-and-pr-message/scripts/` の `test_check_leak_guard_denylist.py` (60,536 B) と `test_check_outgoing_text.py` (62,571 B)、`skills/in-repo-issue/scripts/test_issue_id.py` (65,621 B)
