@@ -36,6 +36,10 @@ dotfiles 側で、手順の prlctl の一連を macOS の VM (Apple の仮想化
 - 手順 5 は、`prlctl list -a` で VM が起動しているときだけ止める。停止中の VM へ stop を打たないので、Failed の出力に迷う場面が無くなる
 - macos-vm-verification の手順 5 は `prlctl stop "<vm>" --kill` で止める。手順 4 で原状へ戻した後なので、強制停止で失うものは無い。windows-vm-verification は素の stop のままにする (実機で止まることを確かめてあり、強制停止にする理由が無い)
 
+## 見送ったこと
+
+- 手順 5 は `running` のときだけ止めるので、手順 4 の後に一時停止 (suspended や paused) の VM は止めず、手順 6 の `stopped` の確認で引っかかる。マージ前ゲートの指摘で、手順 5 を「`stopped` でなければ止める」形にする案が出た。一時停止の VM に対する `prlctl stop` の挙動は実機で測っていないので、測らないまま手順に書かずに見送った。手順 6 で引っかかれば、エージェントは報告の前に止まって気づける
+
 ## タスク
 
 - [x] macos-vm-verification と windows-vm-verification の手順 1 と手順 6 を、`prlctl snapshot-list "<vm>" -H` の出力が空かどうかで判定する形に直す。手順 6 の「手順 1 でユーザーが残すと決めたものがあるなら、それだけ」の但し書きも同じ形で読めるようにする
