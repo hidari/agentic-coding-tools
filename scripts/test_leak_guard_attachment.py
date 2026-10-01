@@ -50,9 +50,6 @@ GITLEAKS_CONFIGS = (
 TRACKED_HOOK_KEYS = frozenset(
     {"id", "name", "language", "entry", "pass_filenames", "always_run", "verbose"}
 )
-COMMIT_MSG_HOOK_KEYS = frozenset(
-    {"id", "name", "language", "entry", "stages", "always_run", "verbose"}
-)
 # 層 1 の hook が持ってよいキー。stages を許さないのは、`stages: [manual]` を 1 行足すだけで
 # hook がコミット時に走らなくなり、呼び出し行の pin は緑のままになるため
 GITLEAKS_HOOK_KEYS = frozenset({"id", "name", "language", "entry", "pass_filenames", "always_run"})
@@ -101,6 +98,8 @@ hook_keys = _helpers.hook_keys
 hook_values = _helpers.hook_values
 effective_stages = _helpers.effective_stages
 HOOK_LANGUAGE = _helpers.HOOK_LANGUAGE
+# 層 2 の commit-msg の hook は、検査の skip を見せるために verbose を持つ (設定のコメント)
+COMMIT_MSG_HOOK_KEYS = _helpers.COMMIT_MSG_HOOK_KEYS | {"verbose"}
 
 
 def _indent(line: str) -> int:

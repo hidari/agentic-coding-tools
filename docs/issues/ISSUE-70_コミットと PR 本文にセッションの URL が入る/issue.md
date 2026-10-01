@@ -35,11 +35,24 @@ Claude Code は、cloud と Remote Control のセッションでコミットや 
 - 送る前の検査で止めるか。`commit-and-pr-message` の送る前の検査 (ISSUE-58) に形を足せば、コミットメッセージと PR 本文の両方を送る前に止められる。ただし同 skill の書き直しの規定は、harness が指示した行に当たったときは書き直さずにユーザーに聞き、harness の行を黙って落とさないとしている。付けないと決めた行が毎回当たって確認を求める形にならないよう、規定と揃える
 - ルールの形。Issue の本文やテストの対照が trailer の名前や URL の形を説明として書く場合に当たらないようにする。検出すべき例と許可すべき例の両方を置く
 
+## 決めたこと (2026-10-01、ユーザー裁定)
+
+「直すときに決めること」への答え。
+
+- commit-msg の検査は、このリポジトリに閉じた独立の hook にした (`scripts/check-session-url.py`、hook の id は `session-url-commit-msg`)。gitleaks の custom ルールには足さない。配布先の既定の挙動を変えないため
+- 検出の単位は行頭の `Claude-Session:` と、セッションの URL の形。何を通して何を通さないか、隣の commit-msg の hook と違って scissors 行より後を見ない理由と、その引き換えに残る面は、スクリプトの docstring が持つ
+- 配布している SKILL.md のフッタの記述は消した。「harness が指示したときだけ付ける」形にもしない。harness の指示は skill とは別に届くので、付けたい利用者はそちらに従う
+- 送る前の検査 (`check-outgoing-text.py`) では止めない。入口は配布物なので、止めると裁定が配布先に及ぶ。書き直しの規定 (harness の行を黙って落とさない) はそのまま残し、揃える箇所は無い
+
+## 残っていること
+
+タスク 4 の実機での確認だけが残る。dotfiles 側の `sessionUrl: false` が効いた状態の Remote Control のセッションで、reminder にセッションの URL の指示が出ないことと、実際に作ったコミットと PR に付かないことを見る。上の検査は backstop で、PR 本文と GitHub 上で作る squash の本文には届かないので、確認の代わりにはならない。
+
 ## タスク
 
-- [ ] commit-msg の検査を入れる。検出すべき例と許可すべき例の両方をテストに置き、squash の本文の途中に並ぶ形も検出すべき例に含める。変異注入で検査を外すと赤になることを確かめる
-- [ ] `commit-and-pr-message` のフッタの記述 (A.1、C.1、フッタの既定の表、落とし穴の表) を裁定と矛盾しない形に直す。commit-msg の検査と同じ変更で入れる
-- [ ] 送る前の検査で止めるかを決め、止めるなら書き直しの規定 (harness の行を黙って落とさない) と揃える
+- [x] commit-msg の検査を入れる。検出すべき例と許可すべき例の両方をテストに置き、squash の本文の途中に並ぶ形も検出すべき例に含める。変異注入で検査を外すと赤になることを確かめる
+- [x] `commit-and-pr-message` のフッタの記述 (A.1、C.1、フッタの既定の表、落とし穴の表) を裁定と矛盾しない形に直す。commit-msg の検査と同じ変更で入れる
+- [x] 送る前の検査で止めるかを決め、止めるなら書き直しの規定 (harness の行を黙って落とさない) と揃える
 - [ ] dotfiles 側で `sessionUrl: false` が入ったあと、Remote Control のセッションで、reminder にセッションの URL の指示が出ないこと、実際のコミットと PR に付かないことを確かめる。起動し直さなくてよい
   - 根拠: 2026-09-25 に、読まれている settings のファイルへ `sessionUrl: false` を書き足した約30秒後、起動中のセッションの reminder が付けない側へ切り替わった (実測)。ただしこの観測は reminder だけで、実際のコミットと PR は見ていないので、このタスクの確認の代わりにはならない
   - 逆に、読まれる settings が一時的に `sessionUrl` を持たない版になった間は、reminder が付ける側へ戻った。dotfiles の作業ツリーで pre-commit の stash や `gh pr merge --delete-branch` の checkout が走った間である (dotfiles 側の報告)。観測はその間を避ける。この間に作るコミットと PR には harness の指示で付きうるので、決めたことの backstop が要る場面の1つでもある

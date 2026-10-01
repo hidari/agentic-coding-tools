@@ -164,6 +164,16 @@ repos:
         stages: [commit-msg]
         always_run: true
 
+      # 上の 2 本と責務が違う (外部のリストも識別子の規約も読まない) ので相乗りさせない。
+      # always_run: true が要る理由は上の issue-id-notation-commit-msg のコメントと同じ。
+      # 何を見て、隣の 2 本と違って scissors 行以降を見ない理由は、スクリプトの docstring が持つ。
+      - id: session-url-commit-msg
+        name: セッションの URL の混入を検査する (コミットメッセージ)
+        language: system
+        entry: scripts/check-session-url.py
+        stages: [commit-msg]
+        always_run: true
+
       # 走査対象は git の pathspec で固定するので files: で絞らない。Issue を触らない
       # コミットでも走らせるのは、baseline とリンクの実態のずれを次に Issue を触るまで
       # 隠さないため。絞ると「走らなかったこと」自体が出力に現れなくなる。
