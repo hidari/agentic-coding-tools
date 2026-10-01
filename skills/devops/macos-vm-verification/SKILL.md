@@ -26,7 +26,7 @@ Windows VM に対する同じ役割は `windows-vm-verification` (winvm) が持�
 2. 原状保全のスナップショットを取る (`prlctl snapshot "<vm>" --name <名前>`)。ID は `prlctl snapshot-list "<vm>"` で控える
 3. 作業する。途中の状態へ戻る必要があれば、途中のスナップショットを取ってよい
 4. 検証が済んだら `prlctl snapshot-switch "<vm>" --id <原状保全の ID>` で原状へ戻し、この作業で取ったスナップショットを `prlctl snapshot-delete "<vm>" --id <ID>` で全部消す
-5. `prlctl list -a` で VM の状態を見て、`stopped` でなければ止める。手順 4 で戻した先の状態は、原状保全を取ったときの状態になる (停止中に取ったなら `stopped`、一時停止中に取ったなら `suspended`)
+5. `prlctl list -a` で VM の状態を見て、`stopped` でなければ止める。原状保全を停止中に取ったなら、手順 4 で戻した時点で `stopped` になっている。`suspended` のときに取ったなら、戻した先も `suspended` になる (実測)
    - `suspended` か `paused` なら、先に `prlctl resume "<vm>"` で `running` へ戻す。一時停止の VM へ stop を打つと、`suspended` では `--kill` を付けても Failed を出しながら rc 0 を返して何も変わらず、`paused` では素の stop が rc 255 になる (どちらも実測)
    - `running` なら `prlctl stop "<vm>" --kill` で止める。素の `prlctl stop` は、起動中の macOS VM に対して Failed (Operation canceled) で rc 255 を返し、VM は起動したまま残る (Apple の仮想化で動く VM で実測)。手順 4 で原状へ戻した後なので、強制停止で失うものは無い
    - 停止中の VM へ stop を打つと、Failed を出しながら rc 0 を返すので打たない

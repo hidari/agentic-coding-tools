@@ -1212,17 +1212,42 @@ class BuildExecPowershell(unittest.TestCase):
             ],
         )
 
-    def test_output_is_rendered_to_strings_before_the_exit(self):
-        # 既定の出力の整形はパイプラインの終わりで吐き出されるので、末尾の exit が先に来ると
-        # オブジェクトの表と、それより後の出力が rc 0 のまま消える (VM で実測)。コマンドを
-        # ブロックで包んで Out-String -Stream に通し、exit の前に文字列にしておく
+    # 外側が自分自身を内側として呼び直す行。理由は build_exec_powershell の docstring
+    INNER_CALL = (
+        "& { try { & $PSCommandPath -WinvmInner } catch { $script:winvmError = $_ } }"
+        " | Out-String -Stream -Width 4096"
+    )
+
+    def test_command_runs_only_in_the_inner_invocation(self):
         lines = winvm.build_exec_powershell("Get-Date").splitlines()
-        start = lines.index("& {")
+        self.assertEqual(lines[0], "param([switch]$WinvmInner)")
+        at = lines.index("Get-Date")
         self.assertEqual(
-            lines[start : start + 4],
-            ["& {", "Get-Date", "$script:winvmOk = $?", "} | Out-String -Stream"],
+            lines[at - 1 : at + 4],
+            ["if ($WinvmInner) {", "Get-Date", "$global:winvmOk = $?", "return", "}"],
         )
-        self.assertLess(start + 3, lines.index("exit 0"))
+
+    def test_outer_renders_the_inner_output_to_strings_before_the_exit(self):
+        # 既定の出力の整形はパイプラインの終わりで吐き出されるので、末尾の exit が先に来ると
+        # オブジェクトの表と、それより後の出力が rc 0 のまま消える (VM で実測)。幅を指定しないと
+        # host の幅を超えた列が落ちる
+        lines = winvm.build_exec_powershell("Get-Date").splitlines()
+        self.assertLess(lines.index(self.INNER_CALL), lines.index("exit 0"))
+
+    def test_outer_assumes_success_until_the_inner_reports(self):
+        # コマンドが return で抜けると内側の $? を取る行が走らない。初期化が無いと成功が
+        # エラーの無い rc 1 になる
+        lines = winvm.build_exec_powershell("Get-Date").splitlines()
+        self.assertLess(lines.index("$global:winvmOk = $true"), lines.index(self.INNER_CALL))
+
+    def test_a_terminating_error_exits_1_after_the_output(self):
+        lines = winvm.build_exec_powershell("Get-Date").splitlines()
+        error_exit = (
+            "if ($null -ne $winvmError) { [Console]::Error.WriteLine(($winvmError | Out-String)"
+            ".TrimEnd()); exit 1 }"
+        )
+        self.assertLess(lines.index(self.INNER_CALL), lines.index(error_exit))
+        self.assertLess(lines.index(error_exit), lines.index("exit 0"))
 
 
 class RemotePs1Path(unittest.TestCase):
