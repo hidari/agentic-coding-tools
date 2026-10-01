@@ -30,14 +30,6 @@ CHECKER = "plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py"
 PRE_COMMIT_CONFIG = ROOT / ".pre-commit-config.yaml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
-# commit-msg stage の hook が持ってよいキー。個別の narrowing キーを列挙して禁じる形は
-# 採らない。この stage では渡るファイルが message ファイル 1 本しかないため、ファイル名や
-# ファイル型で絞る指定はどれも集合を空にし、絞り込みではなく skip になる (実測: files /
-# exclude / types / exclude_types のいずれでも "(no files to check)Skipped" の rc 0)。
-# 手段はこの 4 つに限らず、pre-commit が新しいキーを足せば列挙の外から同じ穴が開く。
-# 許可する側を pin して、知らないキーが増えたら赤にする。
-COMMIT_MSG_HOOK_KEYS = frozenset({"id", "name", "language", "entry", "stages", "always_run"})
-
 
 def _load_helpers():
     """行で読む補助を読む。素の import はリポジトリ root から回すと解決できない。"""
@@ -57,6 +49,7 @@ hook_keys = _helpers.hook_keys
 hook_values = _helpers.hook_values
 effective_stages = _helpers.effective_stages
 HOOK_LANGUAGE = _helpers.HOOK_LANGUAGE
+COMMIT_MSG_HOOK_KEYS = _helpers.COMMIT_MSG_HOOK_KEYS
 
 
 class Attachment(unittest.TestCase):

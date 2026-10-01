@@ -32,10 +32,6 @@ PRE_COMMIT_CONFIG = ROOT / ".pre-commit-config.yaml"
 SESSION_ID = "session_0FICTIONAL0000000000"
 SESSION_URL = "https://claude.ai/code/" + SESSION_ID
 
-# commit-msg stage の hook が持ってよいキー。理由は scripts/test_issue_id_attachment.py の
-# 同名の定数が持つ (ファイル名で絞る指定はこの stage では skip になる)
-COMMIT_MSG_HOOK_KEYS = frozenset({"id", "name", "language", "entry", "stages", "always_run"})
-
 
 def _load(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -44,11 +40,9 @@ def _load(name: str, path: Path):
     return module
 
 
-checker = _load("check_session_url", HERE / "check-session-url.py")
-
-
-def kinds(text: str) -> list[tuple[int, str]]:
-    return checker.find_session_urls(text)
+# 取り付けの pin が探す CHECKER と同じパスから読む。CHECKER が実在しないパスへ drift すると、
+# ここの読み込みが落ちてファイルごと赤になる
+find_session_urls = _load("check_session_url", ROOT / CHECKER).find_session_urls
 
 
 class Detection(unittest.TestCase):
@@ -60,7 +54,7 @@ class Detection(unittest.TestCase):
             "\n"
             f"Claude-Session: {SESSION_URL}\n"
         )
-        self.assertEqual(kinds(message), [(5, "trailer")])
+        self.assertEqual(find_session_urls(message), [(5, "trailer")])
 
     def test_trailers_in_the_middle_of_a_squash_body(self):
         # squash の本文ではブランチの各コミットのメッセージが箇条で並び、trailer は本文の
@@ -78,7 +72,7 @@ class Detection(unittest.TestCase):
             "\n"
             "* docs: 3 つ目\n"
         )
-        self.assertEqual(kinds(message), [(5, "trailer"), (9, "trailer")])
+        self.assertEqual(find_session_urls(message), [(5, "trailer"), (9, "trailer")])
 
     def test_bare_url_inside_a_paragraph(self):
         message = (
@@ -86,17 +80,21 @@ class Detection(unittest.TestCase):
             "\n"
             f"作業の経緯は {SESSION_URL} を参照。\n"
         )
-        self.assertEqual(kinds(message), [(3, "url")])
+        self.assertEqual(find_session_urls(message), [(3, "url")])
+
+    def test_url_without_a_scheme(self):
+        message = f"docs: 記録を足す\n\n経緯は claude.ai/code/{SESSION_ID} にある。\n"
+        self.assertEqual(find_session_urls(message), [(3, "url")])
 
     def test_trailer_key_is_case_insensitive(self):
         # git の trailer のキーは大小を区別しない
         message = f"chore: x\n\nclaude-session: {SESSION_URL}\n"
-        self.assertEqual(kinds(message), [(3, "trailer")])
+        self.assertEqual(find_session_urls(message), [(3, "trailer")])
 
     def test_indented_trailer_is_still_caught_by_its_url(self):
         # 行頭の空白は trailer の形から外すが、値の URL は URL の形で当たる
         message = f"chore: x\n\n  Claude-Session: {SESSION_URL}\n"
-        self.assertEqual(kinds(message), [(3, "url")])
+        self.assertEqual(find_session_urls(message), [(3, "url")])
 
     def test_lines_above_the_scissors_are_still_checked(self):
         # scissors 行で切るのは「以降」だけ。切る位置がずれて全体を見なくなる変異の対
@@ -107,12 +105,12 @@ class Detection(unittest.TestCase):
             "# ------------------------ >8 ------------------------\n"
             "+ diff の行\n"
         )
-        self.assertEqual(kinds(message), [(3, "trailer")])
+        self.assertEqual(find_session_urls(message), [(3, "trailer")])
 
 
 class Allowed(unittest.TestCase):
     def test_clean_message(self):
-        self.assertEqual(kinds("fix: 直す\n\n本文。\n"), [])
+        self.assertEqual(find_session_urls("fix: 直す\n\n本文。\n"), [])
 
     def test_key_explained_in_the_middle_of_a_line(self):
         message = (
@@ -120,7 +118,7 @@ class Allowed(unittest.TestCase):
             "\n"
             "`Claude-Session:` の trailer を付けない。Claude-Session: の行は検査が止める。\n"
         )
-        self.assertEqual(kinds(message), [])
+        self.assertEqual(find_session_urls(message), [])
 
     def test_placeholders(self):
         message = (
@@ -128,8 +126,11 @@ class Allowed(unittest.TestCase):
             "\n"
             "Claude-Session: <URL>\n"
             "値は https://claude.ai/code/<id> の形で、session_ の後ろに英数字が続く。\n"
+            # session_ までは実物と同じ形で、英数字が続くかだけが違う。続く文字の条件を外す
+            # 変異の対
+            "https://claude.ai/code/session_<id> のように書く。\n"
         )
-        self.assertEqual(kinds(message), [])
+        self.assertEqual(find_session_urls(message), [])
 
     def test_lines_below_the_scissors_are_not_checked(self):
         # git commit -v は scissors 行より後に diff を足す。このテストの fixture のような
@@ -143,13 +144,13 @@ class Allowed(unittest.TestCase):
             f"+Claude-Session: {SESSION_URL}\n"
             f"+    \"作業の経緯は {SESSION_URL} を参照。\"\n"
         )
-        self.assertEqual(kinds(message), [])
+        self.assertEqual(find_session_urls(message), [])
 
 
 class ExitCodes(unittest.TestCase):
     def run_checker(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(HERE / "check-session-url.py"), *args],
+            [sys.executable, str(ROOT / CHECKER), *args],
             capture_output=True,
             text=True,
         )
@@ -166,15 +167,21 @@ class ExitCodes(unittest.TestCase):
             )
             result = self.run_checker(path)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("line=3 kind=trailer", result.stdout + result.stderr)
+        self.assertIn("[x] line 3: trailer", result.stderr)
+        self.assertIn("走査した行: 3 行 / 検出 1 件", result.stdout)
         # 端末やログへ値を写さない。出すのは座標と種別だけ
         self.assertNotIn(SESSION_ID, result.stdout + result.stderr)
 
-    def test_clean_message_is_rc_0(self):
+    def test_clean_message_is_rc_0_and_reports_what_it_scanned(self):
+        # 緑のときも何行見たかを出す。scissors より後は数えない
         with tempfile.TemporaryDirectory() as directory:
-            path = self.write(directory, "fix: 直す\n\n本文。\n".encode())
+            path = self.write(
+                directory,
+                "fix: 直す\n\n本文。\n# ------------------------ >8 ------------------------\n+x\n".encode(),
+            )
             result = self.run_checker(path)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("走査した行: 3 行 / 検出 0 件", result.stdout)
 
     def test_unreadable_inputs_are_rc_2(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -201,9 +208,6 @@ class Attachment(unittest.TestCase):
         cls.block = helpers.hook_block(lines, CHECKER, CHECKER)
         cls.helpers = helpers
 
-    def test_checker_path_exists(self):
-        self.assertTrue((ROOT / CHECKER).is_file(), f"{CHECKER} が無い")
-
     def test_hook_is_bound_to_the_commit_msg_stage(self):
         self.assertTrue(self.block, f"{CHECKER} を呼ぶ hook が見つからない")
         self.assertEqual(self.helpers.hook_values(self.block, "stages"), ["[commit-msg]"])
@@ -218,7 +222,7 @@ class Attachment(unittest.TestCase):
         )
 
     def test_hook_has_no_unexamined_keys(self):
-        unknown = sorted(self.helpers.hook_keys(self.block) - COMMIT_MSG_HOOK_KEYS)
+        unknown = sorted(self.helpers.hook_keys(self.block) - self.helpers.COMMIT_MSG_HOOK_KEYS)
         self.assertFalse(unknown, f"未検討のキーがある: {unknown}")
 
 

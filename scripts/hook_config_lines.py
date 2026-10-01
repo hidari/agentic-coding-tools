@@ -7,7 +7,7 @@
 引数 checker は呼び出しの行を特定する文字列 (検査スクリプトのパスや gitleaks の config の
 パス) で、取り付けを pin したい対象が複数あるため引数に取る。対象ごとの literal は呼ぶ側が
 持ち、この層はどの対象にも依存しない。この層に置く取り付けの規則も、どの対象にも共通する
-もの (HOOK_LANGUAGE と effective_stages) に限る。
+もの (HOOK_LANGUAGE、COMMIT_MSG_HOOK_KEYS と effective_stages) に限る。
 
 ファイル名が `test_` で始まらないので run-python-tests.py の収集対象にはならない。
 振る舞いは、この補助を使う各テストが自分の対象を通して検証する。
@@ -27,6 +27,15 @@ HOOK_KEY = re.compile(r"^\s*(?:-\s+)?([A-Za-z_][A-Za-z0-9_-]*):")
 # pass_filenames: false の hook では照合するファイルも渡らず、常に rc 0 になる
 # (pre-commit 4.6.2 の languages/pygrep.py を読んで確認)
 HOOK_LANGUAGE = "system"
+
+# commit-msg stage の hook が持ってよいキー。個別の narrowing キーを列挙して禁じる形は
+# 採らない。この stage では渡るファイルが message ファイル 1 本しかないため、ファイル名や
+# ファイル型で絞る指定はどれも集合を空にし、絞り込みではなく skip になる (実測: files /
+# exclude / types / exclude_types のいずれでも "(no files to check)Skipped" の rc 0)。
+# 手段はこの 4 つに限らず、pre-commit が新しいキーを足せば列挙の外から同じ穴が開く。
+# 許可する側を pin して、知らないキーが増えたら赤にする。hook ごとに要るキー (verbose など) は
+# 呼ぶ側がこの集合に足す。
+COMMIT_MSG_HOOK_KEYS = frozenset({"id", "name", "language", "entry", "stages", "always_run"})
 
 
 def live_lines(path: Path) -> list[str]:
