@@ -1215,6 +1215,9 @@ class BuildExecPowershell(unittest.TestCase):
     # 外側が自分自身を内側として呼び直す行。理由は build_exec_powershell の docstring
     INNER_CALL = (
         "& { foreach ($winvmOnce in 1) { & $PSCommandPath -WinvmInner } }"
+        " | ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]"
+        " -and $_.FullyQualifiedErrorId -ne 'NativeCommandError')"
+        " { [Console]::Error.WriteLine(($_ | Out-String).TrimEnd()) } else { $_ } }"
         " | Out-String -Stream -Width 4096"
     )
 
@@ -1247,6 +1250,17 @@ class BuildExecPowershell(unittest.TestCase):
         ps = winvm.build_exec_powershell("Get-Date")
         self.assertNotIn("try {", ps.replace("try { [Console]::OutputEncoding", ""))
         self.assertNotIn("trap", ps)
+
+    def test_merged_cmdlet_errors_go_to_stderr_but_native_stderr_stays_on_stdout(self):
+        # 2>&1 で出力へ混ぜた cmdlet のエラーは、包まなければ標準エラーに出る。Out-String に
+        # 通すと標準出力へ移り、rc 0 のまま判定が変わる (手元の pwsh で実測)。native の標準
+        # エラーは NativeCommandError のレコードとして包まれるが、包まなくても標準出力に出る
+        # ので振り分けない
+        self.assertIn(
+            "$_.FullyQualifiedErrorId -ne 'NativeCommandError'"
+            ") { [Console]::Error.WriteLine(",
+            winvm.build_exec_powershell("Get-Date"),
+        )
 
 
 class RemotePs1Path(unittest.TestCase):

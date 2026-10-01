@@ -624,6 +624,7 @@ skills/devops/macos-vm-verification/test_macvm.py::test_macvm.SourceInvariants.t
 skills/devops/macos-vm-verification/test_macvm.py::test_macvm.SshOptions.test_options_prevent_blocking_on_a_prompt
 skills/devops/macos-vm-verification/test_macvm.py::test_macvm.UnknownMarker.test_it_cannot_be_mistaken_for_a_value_prlctl_returns
 skills/devops/windows-vm-verification/test_winvm.py::test_winvm.BuildExecPowershell.test_command_runs_only_in_the_inner_invocation
+skills/devops/windows-vm-verification/test_winvm.py::test_winvm.BuildExecPowershell.test_merged_cmdlet_errors_go_to_stderr_but_native_stderr_stays_on_stdout
 skills/devops/windows-vm-verification/test_winvm.py::test_winvm.BuildExecPowershell.test_outer_assumes_success_until_the_inner_reports
 skills/devops/windows-vm-verification/test_winvm.py::test_winvm.BuildExecPowershell.test_outer_renders_the_inner_output_to_strings_before_the_exit
 skills/devops/windows-vm-verification/test_winvm.py::test_winvm.BuildExecPowershell.test_preserves_pipes_and_quotes_verbatim
