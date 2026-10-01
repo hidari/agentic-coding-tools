@@ -1215,11 +1215,19 @@ class BuildExecPowershell(unittest.TestCase):
     # 外側が自分自身を内側として呼び直す行。理由は build_exec_powershell の docstring
     INNER_CALL = (
         "& { foreach ($winvmOnce in 1) { & $PSCommandPath -WinvmInner } }"
-        " | ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]"
-        " -and $_.FullyQualifiedErrorId -ne 'NativeCommandError')"
-        " { [Console]::Error.WriteLine(($_ | Out-String).TrimEnd()) } else { $_ } }"
-        " | Out-String -Stream -Width 4096"
+        " | winvmRoute | Out-String -Stream -Width 4096"
     )
+    ROUTE_FILTER = [
+        "filter winvmRoute {",
+        "if ($_ -is [System.Management.Automation.ErrorRecord]"
+        " -and $_.FullyQualifiedErrorId -notlike 'NativeCommandError*')"
+        " { [Console]::Error.WriteLine(($_ | Out-String).TrimEnd()) }",
+        "elseif ($_ -is [System.Management.Automation.WarningRecord]) { \"WARNING: $($_.Message)\" }",
+        "elseif ($_ -is [System.Management.Automation.VerboseRecord]) { \"VERBOSE: $($_.Message)\" }",
+        "elseif ($_ -is [System.Management.Automation.DebugRecord]) { \"DEBUG: $($_.Message)\" }",
+        "else { $_ }",
+        "}",
+    ]
 
     def test_command_runs_only_in_the_inner_invocation(self):
         lines = winvm.build_exec_powershell("Get-Date").splitlines()
@@ -1251,16 +1259,16 @@ class BuildExecPowershell(unittest.TestCase):
         self.assertNotIn("try {", ps.replace("try { [Console]::OutputEncoding", ""))
         self.assertNotIn("trap", ps)
 
-    def test_merged_cmdlet_errors_go_to_stderr_but_native_stderr_stays_on_stdout(self):
+    def test_merged_records_keep_the_stream_they_had_without_the_wrapper(self):
         # 2>&1 で出力へ混ぜた cmdlet のエラーは、包まなければ標準エラーに出る。Out-String に
-        # 通すと標準出力へ移り、rc 0 のまま判定が変わる (手元の pwsh で実測)。native の標準
-        # エラーは NativeCommandError のレコードとして包まれるが、包まなくても標準出力に出る
-        # ので振り分けない
-        self.assertIn(
-            "$_.FullyQualifiedErrorId -ne 'NativeCommandError'"
-            ") { [Console]::Error.WriteLine(",
-            winvm.build_exec_powershell("Get-Date"),
-        )
+        # 通すと標準出力へ移り、rc 0 のまま判定が変わる。native の標準エラーは 1 行目が
+        # NativeCommandError、2 行目以降が NativeCommandErrorMessage のレコードに包まれるが、
+        # 包まなくても標準出力に出るので振り分けない。3>&1 などで混ぜた警告は、Out-String に
+        # 通すと接頭辞が消える (どれも手元の pwsh で実測)
+        lines = winvm.build_exec_powershell("Get-Date").splitlines()
+        at = lines.index(self.ROUTE_FILTER[0])
+        self.assertEqual(lines[at : at + len(self.ROUTE_FILTER)], self.ROUTE_FILTER)
+        self.assertLess(at, lines.index(self.INNER_CALL))
 
 
 class RemotePs1Path(unittest.TestCase):
