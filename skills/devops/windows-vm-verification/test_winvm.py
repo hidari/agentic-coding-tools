@@ -1203,15 +1203,26 @@ class BuildExecPowershell(unittest.TestCase):
         # pwsh -File はスクリプトが exit しないと native コマンドの失敗を 0 に潰す。
         # native の $LASTEXITCODE を優先しつつ、cmdlet の失敗 ($? が偽) も非 0 にする。
         self.assertEqual(
-            winvm.build_exec_powershell("Get-Date").splitlines()[-4:],
+            winvm.build_exec_powershell("Get-Date").splitlines()[-3:],
             [
-                "$winvmOk = $?",
                 "if (-not $winvmOk) { if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0)"
                 " { exit $LASTEXITCODE } else { exit 1 } }",
                 "if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }",
                 "exit 0",
             ],
         )
+
+    def test_output_is_rendered_to_strings_before_the_exit(self):
+        # 既定の出力の整形はパイプラインの終わりで吐き出されるので、末尾の exit が先に来ると
+        # オブジェクトの表と、それより後の出力が rc 0 のまま消える (VM で実測)。コマンドを
+        # ブロックで包んで Out-String -Stream に通し、exit の前に文字列にしておく
+        lines = winvm.build_exec_powershell("Get-Date").splitlines()
+        start = lines.index("& {")
+        self.assertEqual(
+            lines[start : start + 4],
+            ["& {", "Get-Date", "$script:winvmOk = $?", "} | Out-String -Stream"],
+        )
+        self.assertLess(start + 3, lines.index("exit 0"))
 
 
 class RemotePs1Path(unittest.TestCase):

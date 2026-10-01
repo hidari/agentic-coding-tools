@@ -876,13 +876,28 @@ def build_exec_powershell(command: str) -> str:
     末尾の exit 伝搬が要る: pwsh -File はスクリプトが exit しないと native コマンド
     の失敗を 0 に潰す。native の $LASTEXITCODE を優先しつつ、cmdlet の失敗
     ($? が偽で $LASTEXITCODE が無い/0 の場合) も非 0 へ倒す。
+
+    その exit が、既定の出力の整形より先に来る。整形はパイプラインの終わりで吐き出される
+    ので、オブジェクトを出すコマンドは表も、それより後の文字列の出力も、rc 0 のまま消えた
+    (VM で実測。末尾で 600ms 待っても消え、exit を外すと出た)。コマンドをブロックで包んで
+    Out-String -Stream に通し、exit の前に文字列にしておく。Out-Default ではなく Out-String に
+    するのは、host へ任せると表の見出しに色の制御文字が混ざるため (health と同じ選択)。
+    パイプで包むと $? は Out-String のものに変わるので、$? はブロックの中でコマンドの直後に
+    取る。終了コードは包む前と同じになる (native の exit 3、cmdlet の失敗、失敗の後の成功、
+    コマンド自身の exit 5 を VM で比べた)。
+
+    既知の限界: コマンドが途中で throw すると、それより前に出したオブジェクトの表は消える
+    (包む前も同じ)。rc は 1 でエラーも出るので、出力が無い成功には化けない。コマンド自身が
+    オブジェクトを出したあとに exit 0 する形も、同じ理由で表が消える。
     """
     return (
         "\n".join(
             [
                 "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}",
+                "& {",
                 command,
-                "$winvmOk = $?",
+                "$script:winvmOk = $?",
+                "} | Out-String -Stream",
                 "if (-not $winvmOk) { if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0)"
                 " { exit $LASTEXITCODE } else { exit 1 } }",
                 "if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }",
