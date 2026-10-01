@@ -922,6 +922,8 @@ def build_exec_powershell(command: str) -> str:
     変数) も標準エラーへ出る (包まなければ標準出力に出る)。2>&1 で混ぜたものとの違いは公開されて
     いない PSObject.WriteStream にしか無く、PowerShell からは読めない ($PSItem が剥がされる)。
     Add-Type の C# なら読めるが、内部の実装に頼るうえ exec のたびにコンパイルが走るので使わない。
+    同じ理由で、-WarningVariable で受けた警告のレコードを出すと、包まないときには付かない
+    WARNING: が付く。
     $ErrorView のような表示の設定は、コマンドの中で $global: を付けないと効かない (内側の
     script scope の変数は、外側の描画から見えない)。
     """
