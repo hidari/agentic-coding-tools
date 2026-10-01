@@ -23,7 +23,11 @@ description: Parallels Desktop 上の Windows 検証 VM を繋ぐ/調べる/検�
 2. 原状保全のスナップショットを取る (`prlctl snapshot "<vm>" --name <名前>`)。ID は `prlctl snapshot-list "<vm>"` で控える。インストーラを実行する検証では、実行より前に取る (理由は `references/gui-automation.md` の「インストーラがサービスの開始の種類を戻し、スナップショットへ焼き込まれる」)
 3. 作業する。途中の状態へ戻る必要があれば、途中のスナップショットを取ってよい
 4. 検証が済んだら `prlctl snapshot-switch "<vm>" --id <原状保全の ID>` で原状へ戻し、この作業で取ったスナップショットを `prlctl snapshot-delete "<vm>" --id <ID>` で全部消す
-5. `prlctl list -a` で VM が `running` のときだけ、`prlctl stop "<vm>"` で停止する。停止中の VM へ stop を打つと、Failed を出しながら rc 0 を返すので打たない (原状保全を停止中に取ったなら、手順 4 の時点で既に止まっている)
+5. `prlctl list -a` で VM の状態を見て、`stopped` でなければ止める。手順 4 で戻した先の状態は、原状保全を取ったときの状態になる (停止中に取ったなら `stopped`、一時停止中に取ったなら `suspended`)
+   - `suspended` か `paused` なら、先に `prlctl resume "<vm>"` で `running` へ戻す。一時停止の VM へ stop を打つと、`suspended` では Failed を出しながら rc 0 を返して何も変わらず、`paused` では rc 255 になる (どちらも実測)
+   - `running` なら `prlctl stop "<vm>"` で止める
+   - 停止中の VM へ stop を打つと、Failed を出しながら rc 0 を返すので打たない
+   - 止めたら `prlctl list -a` で `stopped` になったことを確かめ、なっていなければこの手順をやり直す
 6. 報告の前に、`prlctl snapshot-list "<vm>" -H` の出力が空 (手順 1 でユーザーが残すと決めたものがあるなら、それだけ) であることと、`prlctl list -a` で VM が `stopped` であることを確かめ、その出力を報告に添える
 
 ## GUI の自動操作
