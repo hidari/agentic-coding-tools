@@ -895,6 +895,13 @@ def build_exec_powershell(command: str) -> str:
       ループまで抜ける。ループが無いと外側のスクリプトごと終わり、終了コードの伝搬も表も
       失われる (native の exit 3 の後の break が rc 0 になった。手元の pwsh で実測)。呼び出しを
       1 回だけ回るループで包み、そこで止める
+    - 2>&1 などで出力へ混ぜたレコードは、Out-String の手前の winvmRoute で、包まないときと
+      同じ側へ出す。cmdlet のエラーは、Out-String に通すと標準出力へ移って rc 0 のまま判定が
+      変わるので、文字列にして標準エラーへ書く。native の標準エラーは 1 行目が
+      NativeCommandError、2 行目以降が NativeCommandErrorMessage のレコードに包まれるが、
+      包まなくても標準出力に出るので振り分けない。警告・詳細・デバッグのレコードは Out-String に
+      通すと接頭辞 (WARNING: など) が消えるので、各行に付けてから渡す (どれも手元の pwsh で
+      実測)
     - 呼び出しを try/catch で包まない。包むと PowerShell は文だけを止めるエラー (コマンドが
       無い、.NET の例外など) をスクリプト全体を止めるエラーへ格上げし、コマンドの続きが
       走らなくなる (手元の pwsh で実測)。ループは handler ではないので、この格上げは起きない
@@ -909,7 +916,16 @@ def build_exec_powershell(command: str) -> str:
     (UTF-8) で読めないバイトは置換文字になり、単独の CR は改行になる (VM の cmd は UTF-8 で
     書くので、日本語の出力はこの包み方より前の形とバイトまで一致した。実測)。内側から見える
     $MyInvocation、$PSBoundParameters、$input は呼び直しのものになり、トップレベルの
-    Write-Error のエラーは呼び直しの行を位置として示す。
+    Write-Error のエラーは呼び直しの行を位置として示す。幅を 4096 にしているので、Format-Wide は
+    列のあいだを幅いっぱいまで空け、表の 1 つの値は 4096 文字で切られる。コマンドがエラーの
+    レコードをオブジェクトとして出す形 ($Error[0]、catch の中の $_、-ErrorVariable で受けた
+    変数) も標準エラーへ出る (包まなければ標準出力に出る)。2>&1 で混ぜたものとの違いは公開されて
+    いない PSObject.WriteStream にしか無く、PowerShell からは読めない ($PSItem が剥がされる)。
+    Add-Type の C# なら読めるが、内部の実装に頼るうえ exec のたびにコンパイルが走るので使わない。
+    同じ理由で、-WarningVariable で受けた警告のレコードを出すと、包まないときには付かない
+    WARNING: が付く。
+    $ErrorView のような表示の設定は、コマンドの中で $global: を付けないと効かない (内側の
+    script scope の変数は、外側の描画から見えない)。
     """
     return (
         "\n".join(
@@ -922,8 +938,17 @@ def build_exec_powershell(command: str) -> str:
                 "return",
                 "}",
                 "$global:winvmOk = $true",
+                "filter winvmRoute {",
+                "if ($_ -is [System.Management.Automation.ErrorRecord]"
+                " -and $_.FullyQualifiedErrorId -notlike 'NativeCommandError*')"
+                " { [Console]::Error.WriteLine(($_ | Out-String).TrimEnd()) }",
+                "elseif ($_ -is [System.Management.Automation.WarningRecord]) { $_.Message -replace '(?m)^', 'WARNING: ' }",
+                "elseif ($_ -is [System.Management.Automation.VerboseRecord]) { $_.Message -replace '(?m)^', 'VERBOSE: ' }",
+                "elseif ($_ -is [System.Management.Automation.DebugRecord]) { $_.Message -replace '(?m)^', 'DEBUG: ' }",
+                "else { $_ }",
+                "}",
                 "& { foreach ($winvmOnce in 1) { & $PSCommandPath -WinvmInner } }"
-                " | Out-String -Stream -Width 4096",
+                " | winvmRoute | Out-String -Stream -Width 4096",
                 "if (-not $winvmOk) { if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0)"
                 " { exit $LASTEXITCODE } else { exit 1 } }",
                 "if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }",
