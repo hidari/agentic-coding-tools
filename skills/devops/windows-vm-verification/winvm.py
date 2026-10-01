@@ -907,7 +907,7 @@ def build_exec_powershell(command: str) -> str:
     置けないので parse error になる。どちらも、コマンドがスクリプトの先頭に来ない包み方である
     限り避けられない。native コマンドの標準出力も Out-String を通るので、[Console]::OutputEncoding
     (UTF-8) で読めないバイトは置換文字になり、単独の CR は改行になる (VM の cmd は UTF-8 で
-    書くので、日本語の出力は素のスクリプトとバイトまで一致した。実測)。内側から見える
+    書くので、日本語の出力はこの包み方より前の形とバイトまで一致した。実測)。内側から見える
     $MyInvocation、$PSBoundParameters、$input は呼び直しのものになり、トップレベルの
     Write-Error のエラーは呼び直しの行を位置として示す。
     """
