@@ -879,8 +879,8 @@ def build_exec_powershell(command: str) -> str:
 
     既定の出力の整形はパイプラインの終わりで吐き出されるので、その exit がコマンドの出力の
     後ろへ直に来ると、オブジェクトの表と、それより後の文字列の出力が rc 0 のまま消える (VM で
-    実測。末尾で 600ms 待っても消え、exit を外すと出る)。コマンドの中の exit / return / throw
-    でも同じ形で消える。そこで本文は自分自身を 2 回使う。
+    実測。末尾で 600ms 待っても消え、exit を外すと出る)。コマンドの中の exit でも同じ形で消える。
+    そこで本文は自分自身を 2 回使う。
 
     - 外側は自分を -WinvmInner 付きで呼び直し、その出力を Out-String -Stream で文字列にして
       から exit する。Out-Default ではなく Out-String にするのは、host へ任せると表の見出しに
@@ -888,16 +888,20 @@ def build_exec_powershell(command: str) -> str:
       エラー無しで落ちる
     - 内側でコマンドを動かす。呼び直したスクリプトの中の exit と return は内側だけを終わらせる
       ので、外側のパイプラインは最後まで流れて出力が残る。exit N は $LASTEXITCODE に入る。
-      内側は別の script scope なので、$? は $global: で外側へ渡す
-    - return で抜けると $? を渡す行が走らないので、外側は成功を初期値にしておく
-    - throw は外側の try/catch で受け、手前の出力を吐き出したあとでエラーを出して exit 1 する
+      内側は別の script scope なので、$? は $global: で外側へ渡す (外側の $winvmOk はそれを読む)
+    - return で抜けると $? を渡す行が走らず、初期値が無いと成功が rc 1 になる。外側は成功を
+      初期値にしておく
+    - 呼び出しを try/catch で包まない。包むと PowerShell は文だけを止めるエラー (コマンドが
+      無い、.NET の例外など) をスクリプト全体を止めるエラーへ格上げし、コマンドの続きが
+      走らなくなる (手元の pwsh で実測)
 
-    手元の pwsh 7.6.4 と VM で、報告の形 (オブジェクトの後に文字列)、native の exit 3、cmdlet の
-    失敗、失敗の後の成功、オブジェクトの後の throw / exit 0 / exit 5、トップレベルの return、
-    幅の広い表を流し、表と文字列が出て終了コードが期待どおりになることを確かめた。
+    何を流して何を確かめたかは ISSUE-88 が持つ。
 
-    既知の限界: コマンドが param() で始まる形と using 文は、if のブロックの中に置かれるので
-    parse error になる。
+    既知の限界: コマンドが throw すると、それより前に出したオブジェクトの表は消える。素の
+    スクリプトでも同じで、rc 1 とエラーが出るので出力の無い成功にはならない。コマンドの先頭の
+    param() はコマンドの呼び出しとして扱われ、エラーを出して続きが走る。using 文は先頭に
+    置けないので parse error になる。どちらも、コマンドがスクリプトの先頭に来ない包み方である
+    限り避けられない。
     """
     return (
         "\n".join(
@@ -910,13 +914,7 @@ def build_exec_powershell(command: str) -> str:
                 "return",
                 "}",
                 "$global:winvmOk = $true",
-                "$global:LASTEXITCODE = $null",
-                "$winvmError = $null",
-                "& { try { & $PSCommandPath -WinvmInner } catch { $script:winvmError = $_ } }"
-                " | Out-String -Stream -Width 4096",
-                "if ($null -ne $winvmError) { [Console]::Error.WriteLine(($winvmError | Out-String)"
-                ".TrimEnd()); exit 1 }",
-                "$winvmOk = $global:winvmOk",
+                "& $PSCommandPath -WinvmInner | Out-String -Stream -Width 4096",
                 "if (-not $winvmOk) { if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0)"
                 " { exit $LASTEXITCODE } else { exit 1 } }",
                 "if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }",

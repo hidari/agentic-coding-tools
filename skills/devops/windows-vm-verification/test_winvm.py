@@ -1213,10 +1213,7 @@ class BuildExecPowershell(unittest.TestCase):
         )
 
     # 外側が自分自身を内側として呼び直す行。理由は build_exec_powershell の docstring
-    INNER_CALL = (
-        "& { try { & $PSCommandPath -WinvmInner } catch { $script:winvmError = $_ } }"
-        " | Out-String -Stream -Width 4096"
-    )
+    INNER_CALL = "& $PSCommandPath -WinvmInner | Out-String -Stream -Width 4096"
 
     def test_command_runs_only_in_the_inner_invocation(self):
         lines = winvm.build_exec_powershell("Get-Date").splitlines()
@@ -1240,14 +1237,13 @@ class BuildExecPowershell(unittest.TestCase):
         lines = winvm.build_exec_powershell("Get-Date").splitlines()
         self.assertLess(lines.index("$global:winvmOk = $true"), lines.index(self.INNER_CALL))
 
-    def test_a_terminating_error_exits_1_after_the_output(self):
-        lines = winvm.build_exec_powershell("Get-Date").splitlines()
-        error_exit = (
-            "if ($null -ne $winvmError) { [Console]::Error.WriteLine(($winvmError | Out-String)"
-            ".TrimEnd()); exit 1 }"
-        )
-        self.assertLess(lines.index(self.INNER_CALL), lines.index(error_exit))
-        self.assertLess(lines.index(error_exit), lines.index("exit 0"))
+    def test_the_inner_call_is_not_wrapped_in_a_handler(self):
+        # try/catch や trap が呼び出しの経路に乗ると、PowerShell は文だけを止めるエラー
+        # (コマンドが無い、.NET の例外など) をスクリプト全体を止めるエラーへ格上げし、
+        # コマンドの続きが走らなくなる (手元の pwsh で実測)
+        ps = winvm.build_exec_powershell("Get-Date")
+        self.assertNotIn("try {", ps.replace("try { [Console]::OutputEncoding", ""))
+        self.assertNotIn("trap", ps)
 
 
 class RemotePs1Path(unittest.TestCase):
