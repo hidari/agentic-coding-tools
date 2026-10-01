@@ -900,7 +900,8 @@ def build_exec_powershell(command: str) -> str:
       変わるので、文字列にして標準エラーへ書く。native の標準エラーは 1 行目が
       NativeCommandError、2 行目以降が NativeCommandErrorMessage のレコードに包まれるが、
       包まなくても標準出力に出るので振り分けない。警告・詳細・デバッグのレコードは Out-String に
-      通すと接頭辞 (WARNING: など) が消えるので、付けてから渡す (どれも手元の pwsh で実測)
+      通すと接頭辞 (WARNING: など) が消えるので、各行に付けてから渡す (どれも手元の pwsh で
+      実測)
     - 呼び出しを try/catch で包まない。包むと PowerShell は文だけを止めるエラー (コマンドが
       無い、.NET の例外など) をスクリプト全体を止めるエラーへ格上げし、コマンドの続きが
       走らなくなる (手元の pwsh で実測)。ループは handler ではないので、この格上げは起きない
@@ -917,8 +918,12 @@ def build_exec_powershell(command: str) -> str:
     $MyInvocation、$PSBoundParameters、$input は呼び直しのものになり、トップレベルの
     Write-Error のエラーは呼び直しの行を位置として示す。幅を 4096 にしているので、Format-Wide は
     列のあいだを幅いっぱいまで空け、表の 1 つの値は 4096 文字で切られる。コマンドがエラーの
-    レコードをオブジェクトとして出す形 ($Error[0]、catch の中の $_) も、2>&1 で混ぜたものと
-    見分けられないので標準エラーへ出る (包まなければ標準出力に出る)。
+    レコードをオブジェクトとして出す形 ($Error[0]、catch の中の $_、-ErrorVariable で受けた
+    変数) も標準エラーへ出る (包まなければ標準出力に出る)。2>&1 で混ぜたものとの違いは公開されて
+    いない PSObject.WriteStream にしか無く、PowerShell からは読めない ($PSItem が剥がされる)。
+    Add-Type の C# なら読めるが、内部の実装に頼るうえ exec のたびにコンパイルが走るので使わない。
+    $ErrorView のような表示の設定は、コマンドの中で $global: を付けないと効かない (内側の
+    script scope の変数は、外側の描画から見えない)。
     """
     return (
         "\n".join(
@@ -935,9 +940,9 @@ def build_exec_powershell(command: str) -> str:
                 "if ($_ -is [System.Management.Automation.ErrorRecord]"
                 " -and $_.FullyQualifiedErrorId -notlike 'NativeCommandError*')"
                 " { [Console]::Error.WriteLine(($_ | Out-String).TrimEnd()) }",
-                "elseif ($_ -is [System.Management.Automation.WarningRecord]) { \"WARNING: $($_.Message)\" }",
-                "elseif ($_ -is [System.Management.Automation.VerboseRecord]) { \"VERBOSE: $($_.Message)\" }",
-                "elseif ($_ -is [System.Management.Automation.DebugRecord]) { \"DEBUG: $($_.Message)\" }",
+                "elseif ($_ -is [System.Management.Automation.WarningRecord]) { $_.Message -replace '(?m)^', 'WARNING: ' }",
+                "elseif ($_ -is [System.Management.Automation.VerboseRecord]) { $_.Message -replace '(?m)^', 'VERBOSE: ' }",
+                "elseif ($_ -is [System.Management.Automation.DebugRecord]) { $_.Message -replace '(?m)^', 'DEBUG: ' }",
                 "else { $_ }",
                 "}",
                 "& { foreach ($winvmOnce in 1) { & $PSCommandPath -WinvmInner } }"

@@ -1222,9 +1222,9 @@ class BuildExecPowershell(unittest.TestCase):
         "if ($_ -is [System.Management.Automation.ErrorRecord]"
         " -and $_.FullyQualifiedErrorId -notlike 'NativeCommandError*')"
         " { [Console]::Error.WriteLine(($_ | Out-String).TrimEnd()) }",
-        "elseif ($_ -is [System.Management.Automation.WarningRecord]) { \"WARNING: $($_.Message)\" }",
-        "elseif ($_ -is [System.Management.Automation.VerboseRecord]) { \"VERBOSE: $($_.Message)\" }",
-        "elseif ($_ -is [System.Management.Automation.DebugRecord]) { \"DEBUG: $($_.Message)\" }",
+        "elseif ($_ -is [System.Management.Automation.WarningRecord]) { $_.Message -replace '(?m)^', 'WARNING: ' }",
+        "elseif ($_ -is [System.Management.Automation.VerboseRecord]) { $_.Message -replace '(?m)^', 'VERBOSE: ' }",
+        "elseif ($_ -is [System.Management.Automation.DebugRecord]) { $_.Message -replace '(?m)^', 'DEBUG: ' }",
         "else { $_ }",
         "}",
     ]
@@ -1264,7 +1264,7 @@ class BuildExecPowershell(unittest.TestCase):
         # 通すと標準出力へ移り、rc 0 のまま判定が変わる。native の標準エラーは 1 行目が
         # NativeCommandError、2 行目以降が NativeCommandErrorMessage のレコードに包まれるが、
         # 包まなくても標準出力に出るので振り分けない。3>&1 などで混ぜた警告は、Out-String に
-        # 通すと接頭辞が消える (どれも手元の pwsh で実測)
+        # 通すと接頭辞が消える。複数行のメッセージは各行に付ける (どれも手元の pwsh で実測)
         lines = winvm.build_exec_powershell("Get-Date").splitlines()
         at = lines.index(self.ROUTE_FILTER[0])
         self.assertEqual(lines[at : at + len(self.ROUTE_FILTER)], self.ROUTE_FILTER)
