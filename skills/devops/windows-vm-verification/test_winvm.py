@@ -1213,7 +1213,10 @@ class BuildExecPowershell(unittest.TestCase):
         )
 
     # 外側が自分自身を内側として呼び直す行。理由は build_exec_powershell の docstring
-    INNER_CALL = "& $PSCommandPath -WinvmInner | Out-String -Stream -Width 4096"
+    INNER_CALL = (
+        "& { foreach ($winvmOnce in 1) { & $PSCommandPath -WinvmInner } }"
+        " | Out-String -Stream -Width 4096"
+    )
 
     def test_command_runs_only_in_the_inner_invocation(self):
         lines = winvm.build_exec_powershell("Get-Date").splitlines()

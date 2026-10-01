@@ -891,9 +891,13 @@ def build_exec_powershell(command: str) -> str:
       内側は別の script scope なので、$? は $global: で外側へ渡す (外側の $winvmOk はそれを読む)
     - return で抜けると $? を渡す行が走らず、初期値が無いと成功が rc 1 になる。外側は成功を
       初期値にしておく
+    - コマンドの中の break と continue は、呼び直したスクリプトを飛び越えて、外側で最も近い
+      ループまで抜ける。ループが無いと外側のスクリプトごと終わり、終了コードの伝搬も表も
+      失われる (native の exit 3 の後の break が rc 0 になった。手元の pwsh で実測)。呼び出しを
+      1 回だけ回るループで包み、そこで止める
     - 呼び出しを try/catch で包まない。包むと PowerShell は文だけを止めるエラー (コマンドが
       無い、.NET の例外など) をスクリプト全体を止めるエラーへ格上げし、コマンドの続きが
-      走らなくなる (手元の pwsh で実測)
+      走らなくなる (手元の pwsh で実測)。ループは handler ではないので、この格上げは起きない
 
     何を流して何を確かめたかは ISSUE-88 が持つ。
 
@@ -901,7 +905,11 @@ def build_exec_powershell(command: str) -> str:
     スクリプトでも同じで、rc 1 とエラーが出るので出力の無い成功にはならない。コマンドの先頭の
     param() はコマンドの呼び出しとして扱われ、エラーを出して続きが走る。using 文は先頭に
     置けないので parse error になる。どちらも、コマンドがスクリプトの先頭に来ない包み方である
-    限り避けられない。
+    限り避けられない。native コマンドの標準出力も Out-String を通るので、[Console]::OutputEncoding
+    (UTF-8) で読めないバイトは置換文字になり、単独の CR は改行になる (VM の cmd は UTF-8 で
+    書くので、日本語の出力は素のスクリプトとバイトまで一致した。実測)。内側から見える
+    $MyInvocation、$PSBoundParameters、$input は呼び直しのものになり、トップレベルの
+    Write-Error のエラーは呼び直しの行を位置として示す。
     """
     return (
         "\n".join(
@@ -914,7 +922,8 @@ def build_exec_powershell(command: str) -> str:
                 "return",
                 "}",
                 "$global:winvmOk = $true",
-                "& $PSCommandPath -WinvmInner | Out-String -Stream -Width 4096",
+                "& { foreach ($winvmOnce in 1) { & $PSCommandPath -WinvmInner } }"
+                " | Out-String -Stream -Width 4096",
                 "if (-not $winvmOk) { if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0)"
                 " { exit $LASTEXITCODE } else { exit 1 } }",
                 "if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }",
