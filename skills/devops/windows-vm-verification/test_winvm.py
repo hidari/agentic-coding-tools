@@ -1203,15 +1203,50 @@ class BuildExecPowershell(unittest.TestCase):
         # pwsh -File はスクリプトが exit しないと native コマンドの失敗を 0 に潰す。
         # native の $LASTEXITCODE を優先しつつ、cmdlet の失敗 ($? が偽) も非 0 にする。
         self.assertEqual(
-            winvm.build_exec_powershell("Get-Date").splitlines()[-4:],
+            winvm.build_exec_powershell("Get-Date").splitlines()[-3:],
             [
-                "$winvmOk = $?",
                 "if (-not $winvmOk) { if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0)"
                 " { exit $LASTEXITCODE } else { exit 1 } }",
                 "if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }",
                 "exit 0",
             ],
         )
+
+    # 外側が自分自身を内側として呼び直す行。理由は build_exec_powershell の docstring
+    INNER_CALL = (
+        "& { foreach ($winvmOnce in 1) { & $PSCommandPath -WinvmInner } }"
+        " | Out-String -Stream -Width 4096"
+    )
+
+    def test_command_runs_only_in_the_inner_invocation(self):
+        lines = winvm.build_exec_powershell("Get-Date").splitlines()
+        self.assertEqual(lines[0], "param([switch]$WinvmInner)")
+        at = lines.index("Get-Date")
+        self.assertEqual(
+            lines[at - 1 : at + 4],
+            ["if ($WinvmInner) {", "Get-Date", "$global:winvmOk = $?", "return", "}"],
+        )
+
+    def test_outer_renders_the_inner_output_to_strings_before_the_exit(self):
+        # 既定の出力の整形はパイプラインの終わりで吐き出されるので、末尾の exit が先に来ると
+        # オブジェクトの表と、それより後の出力が rc 0 のまま消える (VM で実測)。幅を指定しないと
+        # host の幅を超えた列が落ちる
+        lines = winvm.build_exec_powershell("Get-Date").splitlines()
+        self.assertLess(lines.index(self.INNER_CALL), lines.index("exit 0"))
+
+    def test_outer_assumes_success_until_the_inner_reports(self):
+        # コマンドが return で抜けると内側の $? を取る行が走らない。初期化が無いと成功が
+        # エラーの無い rc 1 になる
+        lines = winvm.build_exec_powershell("Get-Date").splitlines()
+        self.assertLess(lines.index("$global:winvmOk = $true"), lines.index(self.INNER_CALL))
+
+    def test_the_inner_call_is_not_wrapped_in_a_handler(self):
+        # try/catch や trap が呼び出しの経路に乗ると、PowerShell は文だけを止めるエラー
+        # (コマンドが無い、.NET の例外など) をスクリプト全体を止めるエラーへ格上げし、
+        # コマンドの続きが走らなくなる (手元の pwsh で実測)
+        ps = winvm.build_exec_powershell("Get-Date")
+        self.assertNotIn("try {", ps.replace("try { [Console]::OutputEncoding", ""))
+        self.assertNotIn("trap", ps)
 
 
 class RemotePs1Path(unittest.TestCase):

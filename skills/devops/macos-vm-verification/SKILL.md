@@ -22,12 +22,16 @@ Windows VM に対する同じ役割は `windows-vm-verification` (winvm) が持�
 
 検証 VM は検証のたびに原状へ戻し、止めてから報告する。起動したままの VM や、作業で取ったスナップショットを残したまま報告しない。macvm はこの扱いを持たないので `prlctl` を直接使う。
 
-1. 作業前に `prlctl snapshot-list "<vm>"` で既存のスナップショットを確かめる。空でなければ既存のものには触れず、作業に入る前にユーザーへ扱いを確かめる。この手順で消してよいのは、この作業で取ったスナップショットだけである
+1. 作業前に `prlctl snapshot-list "<vm>" -H` で既存のスナップショットを確かめる。出力が空でなければ既存のものには触れず、作業に入る前にユーザーへ扱いを確かめる。`-H` を付けないと、スナップショットが 0 件でも見出しの行が 1 行出るので空にならない。`-H` は VM 名の後ろに置く。前に置くと VM 名がオプションとして読まれ、Unrecognized option で rc 255 になる (prlctl 27.0.2 で実測)。この手順で消してよいのは、この作業で取ったスナップショットだけである
 2. 原状保全のスナップショットを取る (`prlctl snapshot "<vm>" --name <名前>`)。ID は `prlctl snapshot-list "<vm>"` で控える
 3. 作業する。途中の状態へ戻る必要があれば、途中のスナップショットを取ってよい
 4. 検証が済んだら `prlctl snapshot-switch "<vm>" --id <原状保全の ID>` で原状へ戻し、この作業で取ったスナップショットを `prlctl snapshot-delete "<vm>" --id <ID>` で全部消す
-5. `prlctl stop "<vm>"` で停止する
-6. 報告の前に、`prlctl snapshot-list "<vm>"` が空 (手順 1 でユーザーが残すと決めたものがあるなら、それだけ) であることと、`prlctl list -a` で VM が `stopped` であることを確かめ、その出力を報告に添える
+5. `prlctl list -a` で VM の状態を見て、`stopped` でなければ止める。原状保全を停止中に取ったなら、手順 4 で戻した時点で `stopped` になっている。`suspended` のときに取ったなら、戻した先も `suspended` になる (実測)
+   - `suspended` か `paused` なら、先に `prlctl resume "<vm>"` で `running` へ戻す。一時停止の VM へ stop を打つと、`suspended` では `--kill` を付けても Failed を出しながら rc 0 を返して何も変わらず、`paused` では素の stop が rc 255 になる (どちらも実測)
+   - `running` なら `prlctl stop "<vm>" --kill` で止める。素の `prlctl stop` は、起動中の macOS VM に対して Failed (Operation canceled) で rc 255 を返し、VM は起動したまま残る (Apple の仮想化で動く VM で実測)。手順 4 で原状へ戻した後なので、強制停止で失うものは無い
+   - 停止中の VM へ stop を打つと、Failed を出しながら rc 0 を返すので打たない
+   - 止めたら `prlctl list -a` で `stopped` になったことを確かめ、なっていなければこの手順をやり直す。`--kill` が rc 0 で「forcibly stopped」を返した直後に、VM が起動し直して `running` に戻ったことが 1 回あった (原因は未特定で、同じ順で 2 回試して再現しなかった)
+6. 報告の前に、`prlctl snapshot-list "<vm>" -H` の出力が空 (手順 1 でユーザーが残すと決めたものがあるなら、それだけ) であることと、`prlctl list -a` で VM が `stopped` であることを確かめ、その出力を報告に添える
 
 ## macvm CLI 概要
 

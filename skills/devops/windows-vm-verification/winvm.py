@@ -876,13 +876,54 @@ def build_exec_powershell(command: str) -> str:
     末尾の exit 伝搬が要る: pwsh -File はスクリプトが exit しないと native コマンド
     の失敗を 0 に潰す。native の $LASTEXITCODE を優先しつつ、cmdlet の失敗
     ($? が偽で $LASTEXITCODE が無い/0 の場合) も非 0 へ倒す。
+
+    既定の出力の整形はパイプラインの終わりで吐き出されるので、その exit がコマンドの出力の
+    後ろへ直に来ると、オブジェクトの表と、それより後の文字列の出力が rc 0 のまま消える (VM で
+    実測。末尾で 600ms 待っても消え、exit を外すと出る)。コマンドの中の exit でも同じ形で消える。
+    そこで本文は自分自身を 2 回使う。
+
+    - 外側は自分を -WinvmInner 付きで呼び直し、その出力を Out-String -Stream で文字列にして
+      から exit する。Out-Default ではなく Out-String にするのは、host へ任せると表の見出しに
+      色の制御文字が混ざるため (health と同じ選択)。-Width を付けないと host の幅を超えた列が
+      エラー無しで落ちる
+    - 内側でコマンドを動かす。呼び直したスクリプトの中の exit と return は内側だけを終わらせる
+      ので、外側のパイプラインは最後まで流れて出力が残る。exit N は $LASTEXITCODE に入る。
+      内側は別の script scope なので、$? は $global: で外側へ渡す (外側の $winvmOk はそれを読む)
+    - return で抜けると $? を渡す行が走らず、初期値が無いと成功が rc 1 になる。外側は成功を
+      初期値にしておく
+    - コマンドの中の break と continue は、呼び直したスクリプトを飛び越えて、外側で最も近い
+      ループまで抜ける。ループが無いと外側のスクリプトごと終わり、終了コードの伝搬も表も
+      失われる (native の exit 3 の後の break が rc 0 になった。手元の pwsh で実測)。呼び出しを
+      1 回だけ回るループで包み、そこで止める
+    - 呼び出しを try/catch で包まない。包むと PowerShell は文だけを止めるエラー (コマンドが
+      無い、.NET の例外など) をスクリプト全体を止めるエラーへ格上げし、コマンドの続きが
+      走らなくなる (手元の pwsh で実測)。ループは handler ではないので、この格上げは起きない
+
+    何を流して何を確かめたかは ISSUE-88 が持つ。
+
+    既知の限界: コマンドが throw すると、それより前に出したオブジェクトの表は消える。素の
+    スクリプトでも同じで、rc 1 とエラーが出るので出力の無い成功にはならない。コマンドの先頭の
+    param() はコマンドの呼び出しとして扱われ、エラーを出して続きが走る。using 文は先頭に
+    置けないので parse error になる。どちらも、コマンドがスクリプトの先頭に来ない包み方である
+    限り避けられない。native コマンドの標準出力も Out-String を通るので、[Console]::OutputEncoding
+    (UTF-8) で読めないバイトは置換文字になり、単独の CR は改行になる (VM の cmd は UTF-8 で
+    書くので、日本語の出力はこの包み方より前の形とバイトまで一致した。実測)。内側から見える
+    $MyInvocation、$PSBoundParameters、$input は呼び直しのものになり、トップレベルの
+    Write-Error のエラーは呼び直しの行を位置として示す。
     """
     return (
         "\n".join(
             [
+                "param([switch]$WinvmInner)",
                 "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}",
+                "if ($WinvmInner) {",
                 command,
-                "$winvmOk = $?",
+                "$global:winvmOk = $?",
+                "return",
+                "}",
+                "$global:winvmOk = $true",
+                "& { foreach ($winvmOnce in 1) { & $PSCommandPath -WinvmInner } }"
+                " | Out-String -Stream -Width 4096",
                 "if (-not $winvmOk) { if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0)"
                 " { exit $LASTEXITCODE } else { exit 1 } }",
                 "if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }",
