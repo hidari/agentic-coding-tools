@@ -27,6 +27,8 @@ diff README.md "docs/issues/ISSUE-64_README の手直しを生成元へ移植す
 | `gen-readme.py` の生成コード | plugin 表から「component 数」列を消す |
 | 各 SKILL.md の frontmatter の `description` | plugin 3 本、`context-loading-mechanics`、`session-handoff`、`herdr` (日本語化)、`markdown-to-pdf` |
 
+追記 (2026-10-16): ISSUE-89 で `herdr` の skill を撤去したので、上の表の `herdr` は移す先が無い。手直し版の `herdr` の行は採らなかった分として扱う。
+
 ### 移す前に決めること
 
 - `description` は README の表示だけでなく、skill を呼ぶかどうかの判断材料でもある。手直しで
@@ -63,3 +65,4 @@ diff README.md "docs/issues/ISSUE-64_README の手直しを生成元へ移植す
 ## 関連
 
 - ISSUE-30: 「component 数」列を消すと、こちらが扱う分裂の生成器側が消える
+- ISSUE-89: `herdr` の skill を撤去した
