@@ -22,4 +22,5 @@ status: closed
 ## 関連
 
 - ISSUE-64: 移す先の表に `herdr` の description が載っていた
+- ISSUE-69: この記録は feature の PR で起票したので、ISSUE-69 の裁定 (起票は起票だけの PR) では同梱しない側に入る。例外にするかは ISSUE-69 で決める
 - dotfiles 側は消費側の pin と展開物を自分で片付ける
