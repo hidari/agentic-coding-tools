@@ -1,7 +1,7 @@
 """jevlint.py (入口) の仕様。
 
 前半は jevlint.py が持つ引数と設定の関数 (`parse_args` / `parse_threshold` / `parse_version` /
-`build_config`) と 2 つの定数。下流モジュール (jevlint_tree / jevlint_host / jevlint_result)
+`build_config`) と 3 つの定数。下流モジュール (jevlint_tree / jevlint_host / jevlint_result)
 そのものの仕様はそれぞれのテストが持つ。
 
 後半は `main()` の check と review で、下流をつないだときにだけ現れる性質を見る: 段の順序
@@ -92,6 +92,13 @@ class UpstreamVersionTests(unittest.TestCase):
         # pin した定数自体が「latest」のような書き方に退行していないかを、
         # 同じモジュールの parse_version に通して確かめる
         self.assertEqual(jevlint.parse_version(jevlint.UPSTREAM_VERSION), jevlint.UPSTREAM_VERSION)
+
+
+class ModelIdTests(unittest.TestCase):
+    def test_is_a_versioned_id_not_an_alias(self):
+        # alias (`jev-latest` / `jev-preview`) は新しいモデルの公開で指す先が動くので、
+        # 厳選した rule と cutoff を測った版の ID に固定されていることを形で確かめる
+        self.assertRegex(jevlint.MODEL_ID, r"\Ajev-[0-9]+\.[0-9]+\.[0-9]+\Z")
 
 
 class BuildConfigTests(unittest.TestCase):
@@ -556,6 +563,15 @@ class MainKeyTests(_MainTestCase):
             "見積もり: subject 5 件、費用 $0.00420 (1 パス分。2 パスで最大 $0.00840)",
             out.splitlines(),
         )
+
+    def test_model_given_to_upstream_is_the_pinned_id(self):
+        # 上流へ渡すモデル ID が `MODEL_ID` から来ていることを、定数を別の値に変えて見る
+        # (本物の値のままでは、入口が literal を渡しても区別できない)
+        with mock.patch.object(jevlint, "MODEL_ID", "jev-9.9.9"):
+            code, _, _ = self.run_main(["check", "--dry-run", "sub/file.py"])
+        self.assertEqual(code, 0)
+        argv = self.upstream.calls[0]["argv"]
+        self.assertEqual(argv[argv.index("--model") + 1], "jev-9.9.9")
 
     def test_missing_or_blank_key_is_2_before_the_expansion(self):
         self.install_git_shim()
@@ -1288,7 +1304,9 @@ class MainCompatTests(_CompatTestCase):
         self.assert_cleaned_up()
 
     def test_generated_configs_are_loaded_by_the_argument_version_among_four_samples(self):
-        code, _, _ = self.run_compat()
+        # モデル ID は定数を別の値に変えて、argv の値がこの定数から来ていることまで見る
+        with mock.patch.object(jevlint, "MODEL_ID", "jev-9.9.9"):
+            code, _, _ = self.run_compat()
         self.assertEqual(code, 0)
         calls = self.upstream.check_calls
         self.assertEqual(len(calls), 2)
@@ -1316,6 +1334,7 @@ class MainCompatTests(_CompatTestCase):
                         dry_run=True,
                         record=None,
                         config=config,
+                        model="jev-9.9.9",
                     ),
                 )
                 self.assertEqual(
