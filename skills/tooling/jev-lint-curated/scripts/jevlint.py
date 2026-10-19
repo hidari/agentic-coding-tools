@@ -54,9 +54,16 @@ import jevlint_host
 import jevlint_result
 import jevlint_tree
 
-# 上流 (jev-lint) の pin はこの 1 箇所だけに置く。他のモジュールは呼び出し側から
-# 版の値を受け取り、自分では持たない。
+# 上流 (jev-lint) とモデルの pin はこのファイルだけに置く。他のモジュールは呼び出し側から
+# 版とモデル ID の値を受け取り、自分では持たない。
 UPSTREAM_VERSION: str = "0.7.0"
+
+# 上流へ `--model` で渡すモデル ID。上流の既定は alias の `jev-latest` で、提供元の models
+# ページ (2026-10-19 に確認) は「alias は新しいリリースで動く」「閾値を特定の版で調整したなら
+# alias ではなくその版の ID を送れ」としている。厳選した rule と cutoff を測ったときに応答した
+# のは jev-1.13.0 だった (ISSUE-74 の記録)。上流 (0.7.0 の `dist/jev.js`) は `--model` を
+# 環境変数 `JEV_LINT_MODEL` と既定値より優先するので、ここで渡せば環境から差し替わらない
+MODEL_ID: str = "jev-1.13.0"
 
 # 厳選した rule の一覧。根拠は spec (`ISSUE-65-spec.md` の「厳選する rule」節、0.7.0 時点の
 # 実測) が持つ。ここに件数のコメントは書かない — この一覧自体が唯一の真実で、件数を測るのは
@@ -390,6 +397,7 @@ def _run(
                 dry_run=args.dry_run,
                 record=record,
                 config=config,
+                model=MODEL_ID,
             )
             # stderr は捕まえずに流す (上流の設定のエラーを利用者が読めるように)。stdout は
             # 判定に使う JSON。node の出力は locale によらず UTF-8 なので明示して読む
@@ -515,6 +523,7 @@ def _load_configs(
             dry_run=True,
             record=None,
             config=config,
+            model=MODEL_ID,
         )
         # 上流の stderr がこの後に続くので、どちらの設定の起動かを先に告げる
         print(f"jevlint: 設定 ({label}) を jev-lint {version} に読ませる", file=sys.stderr)

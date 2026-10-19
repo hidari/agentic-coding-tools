@@ -1,5 +1,5 @@
 ---
-status: open
+status: closed
 ---
 
 # fix(jev-lint-curated): モデル ID を alias で渡し、測定した版に固定されていない
@@ -16,10 +16,10 @@ jev-lint-curated は上流の jev-lint の版を `scripts/jevlint.py` の `UPSTR
 
 ## タスク
 
-- [ ] モデル ID を、提供元の文書に載っている版付きの ID に固定する。ID の文字列は文書から読み、推測で組み立てない
-- [ ] `scripts/test_jevlint_host.py` の `fixed_tail` の assert を、固定した ID へ合わせる
-- [ ] 「版を上げる手順」に、モデル ID の更新と、更新したあとの測り直しを入れる
-- [ ] 固定した ID がキー無しの経路 (`check --dry-run` / `compat`) で壊れないことを確かめる。キーを使う確認はユーザーの `!` に任せる
+- [x] モデル ID を、提供元の文書に載っている版付きの ID に固定する。ID の文字列は文書から読み、推測で組み立てない
+- [x] `scripts/test_jevlint_host.py` の `fixed_tail` の assert を、モデル ID を引数で受ける形へ直す。固定した値は `MODEL_ID` の形と、入口からの受け渡しで見る
+- [x] 「版を上げる手順」に、モデル ID の更新と、更新したあとの測り直しを入れる
+- [x] 固定した ID がキー無しの経路 (`check --dry-run` / `compat`) で壊れないことを確かめる。キーを使う確認はユーザーの `!` に任せる
 
 ## 関連
 

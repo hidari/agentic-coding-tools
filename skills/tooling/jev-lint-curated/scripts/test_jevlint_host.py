@@ -922,7 +922,7 @@ class HostLayoutTests(unittest.TestCase):
 class FixedTailTests(unittest.TestCase):
     def test_eleven_elements_in_fixed_order(self):
         config = Path("/tmp/x/config.json")
-        tail = jevlint_host.fixed_tail(config)
+        tail = jevlint_host.fixed_tail(config, "jev-9.9.9")
         self.assertEqual(
             tail,
             [
@@ -934,7 +934,7 @@ class FixedTailTests(unittest.TestCase):
                 "--retry",
                 str(jevlint_host.RETRY_PASSES),
                 "--model",
-                "jev-latest",
+                "jev-9.9.9",
                 "--base-url",
                 "https://api.typesafe.ai",
             ],
@@ -946,7 +946,7 @@ class FixedTailTests(unittest.TestCase):
         # 来ていることを、定数を別の値に変えて見る (定数と同じ literal を書いた形では、
         # 値が一致している間は区別できないため)
         with mock.patch.object(jevlint_host, "RETRY_PASSES", 7):
-            tail = jevlint_host.fixed_tail(Path("/tmp/x/config.json"))
+            tail = jevlint_host.fixed_tail(Path("/tmp/x/config.json"), "jev-9.9.9")
         self.assertEqual(tail[tail.index("--retry") + 1], "7")
 
 
@@ -955,10 +955,12 @@ class UpstreamArgvTests(unittest.TestCase):
         self.node = "/usr/local/bin/node"
         self.host = Path("/cache/jev-lint-curated/0.7.0")
         self.config = Path("/scratch/config.json")
+        self.model = "jev-9.9.9"
 
     def _argv(self, **overrides):
         kwargs = dict(
-            base=None, excludes=[], paths=["a.py"], dry_run=False, record=None, config=self.config
+            base=None, excludes=[], paths=["a.py"], dry_run=False, record=None, config=self.config,
+            model=self.model,
         )
         kwargs.update(overrides)
         return jevlint_host.upstream_argv(self.node, self.host, "check", **kwargs)
@@ -974,7 +976,7 @@ class UpstreamArgvTests(unittest.TestCase):
 
     def test_tail_is_fixed_part(self):
         argv = self._argv()
-        self.assertEqual(argv[-11:], jevlint_host.fixed_tail(self.config))
+        self.assertEqual(argv[-11:], jevlint_host.fixed_tail(self.config, self.model))
 
     def test_base_value_is_the_given_sha(self):
         argv = self._argv(base="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
@@ -1003,6 +1005,7 @@ class UpstreamArgvTests(unittest.TestCase):
             dry_run=True,
             record=record,
             config=self.config,
+            model=self.model,
         )
         expected = [
             self.node,
@@ -1019,7 +1022,7 @@ class UpstreamArgvTests(unittest.TestCase):
             "--dry-run",
             "--record",
             str(record),
-            *jevlint_host.fixed_tail(self.config),
+            *jevlint_host.fixed_tail(self.config, self.model),
         ]
         self.assertEqual(argv, expected)
 

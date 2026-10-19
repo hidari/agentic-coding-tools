@@ -551,7 +551,7 @@ def read_engines(host: Path) -> str:
 RETRY_PASSES = 3
 
 
-def fixed_tail(config: Path) -> list:
+def fixed_tail(config: Path, model: str) -> list:
     """上流の起動 argv の末尾、固定部分 (11 要素)。
 
     フラグは後に書いたものが勝つので、消費側の値 (`--base` / `--exclude` /
@@ -567,7 +567,7 @@ def fixed_tail(config: Path) -> list:
         "--retry",
         str(RETRY_PASSES),
         "--model",
-        "jev-latest",
+        model,
         "--base-url",
         "https://api.typesafe.ai",
     ]
@@ -584,11 +584,13 @@ def upstream_argv(
     dry_run: bool,
     record: "Path | None",
     config: Path,
+    model: str,
 ) -> list:
     """上流を起動する argv を組み立てる。pnpm を含まず、node で `dist/cli.js` を直接呼ぶ。
 
     ast-grep はパッケージの位置から解決されるので (spec の「host ディレクトリ」節)、argv に
-    ast-grep 自身の指定は要らない。並びは spec が定める仕様の形をそのまま実装する。
+    ast-grep 自身の指定は要らない。並びは spec が定める仕様の形をそのまま実装する。モデル ID の
+    値だけは spec の時点から変わり、呼び出し側 (`jevlint.MODEL_ID`) が渡す。
     """
     return [
         node,
@@ -599,5 +601,5 @@ def upstream_argv(
         *paths,
         *(["--dry-run"] if dry_run else []),
         *(["--record", str(record)] if record else []),
-        *fixed_tail(config),
+        *fixed_tail(config, model),
     ]
