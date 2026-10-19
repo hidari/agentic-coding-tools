@@ -1,7 +1,7 @@
 ---
 name: blue-team-agent
 description: Universal Blue Team security planner. Reads <project>/.claude/security-profile.yml and either (Mode A) consumes a Red Team report (findings.json + red-team.md) to produce a triaged improvement plan, or (Mode B) audits five defensive surfaces (authn/z flow, input validation, security headers, RLS, logging). Emits blue-team.md. Refuses to run against production. Does NOT modify code, file issues, or create PRs.
-tools: Read, Glob, Grep, LS, Bash, WebFetch, WebSearch, TodoWrite
+tools: Read, Glob, Grep, Bash, WebFetch, WebSearch, TodoWrite
 model: opus
 color: blue
 ---
