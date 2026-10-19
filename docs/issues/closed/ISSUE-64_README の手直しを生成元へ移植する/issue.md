@@ -73,7 +73,10 @@ diff README.md "docs/issues/ISSUE-64_README の手直しを生成元へ移植す
 - `security-blue-red-team` と `web-monkey-qa` の plugin の `description` は手直し版を採った。コマンド名の案内は消えたが、どちらの本文にもコマンド名は残っている
 - plugin 節の導入文は、手直し版の「複数のコンポーネント、skill、agent をまとめたもの」が component と skill・agent を並べていたので、「skill・agent・command をまとめたパッケージ」に直して採った。「skill と agent は」も戻した
 - 段落分けと、文の途中の改行を詰める手直しは採った。全角と半角の間の空白 (「自作skill」「1つのplugin」など) は、リポジトリのほかの文面に合わせて空白を入れた
-- 表のテストは、行が「パスと frontmatter の description の 2 列」であることを pin する形にした。列を足し戻す、plugin を 1 つ落とす、説明を空にする、の 3 つの変異でどれも赤くなることを確かめた
+- 表のテストは、plugin の表の行が「パスと frontmatter の description の 2 列」で plugin ごとに 1 行ずつ並ぶことを、1 回のリストの比較で pin する形にした。列を足し戻す、最後の行を落とす、説明を別の値にする、の 3 つの変異でどれも赤くなることを確かめた。期待値も生成器と同じ `frontmatter()` で読むので、パーサの誤りはこのテストでは見えない
+- 列が消えて plugin 節と skill 節が同じ形になったので、節の組み立てを `section()` 1 つにまとめた
+- `--check` が赤のときの文面を「frontmatter と一致しない」から「生成結果と一致しない」にし、`HEADER` / `FOOTER` を直す場合もあることを書いた。CLAUDE.md が罠として書いていた文面なので、CLAUDE.md の該当の一文も合わせて直した
+- レビューで、frontmatter を読む関数が `gen-readme.py` と `check-package-shape.py` に 1 つずつあり、継続行の扱いが違うことが分かった。ISSUE-30 のタスクに加えた
 
 生成した README.md と手直し版の差分は、空白を揃えた 3 行、plugin 節の導入文、ISSUE-92 で置き換わった `description` の行、撤去した `herdr` の行、土台の差 (`jev-lint-curated` の行の追加) だけになった。
 

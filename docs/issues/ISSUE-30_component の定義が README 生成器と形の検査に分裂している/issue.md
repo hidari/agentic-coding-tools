@@ -48,6 +48,8 @@ exit 2 で落ちる形を取っている。
 
 追記 (2026-10-20): ISSUE-64 で README の「component 数」列を消し、`gen-readme.py` の `count_components()` とそのテストも消した。生成器の側の定義は無くなったので、2 つの定義が食い違うという分裂は無くなった。残るのは `check-package-shape.py` の側の問題で、`inner` が SKILL.md を持たないディレクトリまで数えて、存在しない名前の衝突を報告しうること (上の表の 2 行目) と、下の「併せて拾える面」である。借用する側が居なくなったので、import 安全化はこの Issue では要らなくなった (ISSUE-12 の側にはテストを書く前段として残る)。下のタスクのうち生成器に関わるものは、これに合わせて外した。
 
+ただし frontmatter を読む関数は、今も `gen-readme.py` と `check-package-shape.py` に 1 つずつある。前者は字下げした継続行を値へつなぐが、後者はつながずに捨てる。`description` を複数行で書くと、README には全文が載るのに、形の検査は 1 行目しか見ない。これも下のタスクに加えた。
+
 ### 併せて拾える面
 
 ISSUE-27 で常時ロード層の主役が SKILL.md の frontmatter から command の frontmatter へ
@@ -61,11 +63,11 @@ SKILL.md だけを対象にしているため、command の `description` 欠落
 - [ ] `check-package-shape.py` の名前衝突検査が、SKILL.md を持たないディレクトリを数えない形にする
 - [ ] command と agent の frontmatter を検査対象へ広げるかを決める。広げる場合、command は
       `name` を持たない (ファイル名が name になる) ので、SKILL.md と同じ規則は当てられない
-- [ ] 単体 skill の側でも同じ数え方の問題が起きる (2026-09-26 に実測)。ある branch にだけある skill のディレクトリに git が無視するファイル (`__pycache__/`) が残ったまま別の branch へ切り替えると、無視するファイルだけのディレクトリが `skills/<category>/<name>/` として残り、`check-package-shape.py` が「SKILL.md がない」と報告してローカルの pre-commit が止まる。CI は clean な checkout なので起きない。component の列挙を揃えるときに、追跡されているファイルを持たないディレクトリを数えない形にする
+- [ ] 単体 skill の側でも同じ数え方の問題が起きる (2026-09-26 に実測)。ある branch にだけある skill のディレクトリに git が無視するファイル (`__pycache__/`) が残ったまま別の branch へ切り替えると、無視するファイルだけのディレクトリが `skills/<category>/<name>/` として残り、`check-package-shape.py` が「SKILL.md がない」と報告してローカルの pre-commit が止まる。CI は clean な checkout なので起きない。1 つ目のタスク (名前衝突検査の修正) と合わせて、追跡されているファイルを持たないディレクトリを数えない形にする
+- [ ] frontmatter を読む関数を 1 つにするか、`check-package-shape.py` の側も継続行をつなぐ形に揃える
 
 ## 関連
 
-- ISSUE-12: `scripts/` の検査スクリプトが自分自身のテストを持たない。`check-package-shape.py`
-  の import 安全化を前段として共有する。あちらはテストの不在、こちらは定義の所在を扱う
+- ISSUE-12: `scripts/` の検査スクリプトが自分自身のテストを持たない。`check-package-shape.py` の import 安全化を前段として共有していたが、ISSUE-64 以降こちらでは要らない。あちらはテストの不在、こちらは定義の所在を扱う
 - ISSUE-27: `count_components()` を新設した PR。分裂はそこで生まれた
 - ISSUE-64: README の「component 数」列と `count_components()` を消した。この Issue が扱う分裂の生成器側はそこで消えた

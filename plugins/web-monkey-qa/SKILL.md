@@ -5,8 +5,7 @@ description: Web アプリを重み付きランダム操作で探索し、コン
 
 # web-monkey-qa
 
-profile 駆動の monkey test 探索バンドル。`<project>/.claude/monkey-qa-profile.yml` を読み、
-セクションごとに探索エージェントを割り当てる。
+profile 駆動の monkey test 探索バンドル。`<project>/.claude/monkey-qa-profile.yml` を読み、セクションごとに探索エージェントを割り当てる。
 
 このファイルは入口の案内のみを持つ。実際の手順は command と agent が持つ。
 

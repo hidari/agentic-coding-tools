@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """gen-readme.py が生成する plugin の表の不変条件を検証する。
 
-表の側は build() の出力そのものを読む。plugin の列挙を自前で組み直すと、build() 側の
+build() の出力そのものを読む。plugin の列挙を build() と同じ形で組み直すと、build() 側の
 列挙が変わったとき検出できない (実測: build() から 1 行落とす変異を入れても、自前で
 組み直していた版は緑のままだった)。
 
 `--check` は生成結果と README の一致しか見ないので、生成器そのものが行を落としたり
 説明を取り違えたりしても、README を生成し直せば緑になる。ここはそれを止める。
+
+期待値の description は生成器と同じ frontmatter() で読むので、パーサ自身の誤りは
+ここでは見えない。
 """
 
 from __future__ import annotations
@@ -37,41 +40,23 @@ class GeneratedTable(unittest.TestCase):
     毎回赤くなり、テストが drift の検出ではなく更新作業の対象に変わる。
     """
 
-    def plugin_packages(self) -> list[Path]:
-        return [
-            d
-            for d in sorted((ROOT / "plugins").iterdir())
-            if d.is_dir() and (d / "SKILL.md").exists()
-        ]
+    def test_rows_are_every_plugin_with_its_description(self) -> None:
+        """root SKILL.md を持つ plugin ごとに、パスと description の 2 列の行が 1 つずつ並ぶ。
 
-    def plugin_rows(self) -> list[str]:
-        return [
-            line
-            for line in gen.build().split("\n")
-            if line.startswith("| `plugins/")
-        ]
-
-    def test_table_lists_every_plugin_package(self) -> None:
-        """build() の列挙が痩せたら赤くする。
-
-        追跡下で root SKILL.md を持つ plugin パッケージの数と、表の行数を突き合わせる。
+        行の欠落、説明の取り違え (別パッケージの値、空文字)、列の増減のどれも赤くする。
         """
-        expected = self.plugin_packages()
+        expected = []
+        for d in sorted((ROOT / "plugins").iterdir()):
+            if not (d / "SKILL.md").exists():
+                continue
+            desc = gen.frontmatter(str(d / "SKILL.md")).get("description", "")
+            # 空のままだと生成側も空になり、等値が自明に通る
+            self.assertNotEqual(desc, "", f"{d.name} の description が空")
+            expected.append(f"| `plugins/{d.name}` | {desc} |")
         self.assertGreater(len(expected), 0, "plugin パッケージが 1 つも無い")
-        self.assertEqual(len(self.plugin_rows()), len(expected))
 
-    def test_row_is_path_and_frontmatter_description(self) -> None:
-        """行はパスと説明の 2 列だけで、説明は frontmatter の値そのもの。
-
-        説明の取り違え (別パッケージの値、空文字) と、列の増減の両方を赤くする。
-        """
-        rows = self.plugin_rows()
-        self.assertGreater(len(rows), 0, "plugin の表に行が 1 つも無い")
-        for pkg, row in zip(self.plugin_packages(), rows):
-            with self.subTest(pkg=pkg.name):
-                desc = gen.frontmatter(str(pkg / "SKILL.md")).get("description", "")
-                self.assertNotEqual(desc, "", "description が空")
-                self.assertEqual(row, f"| `plugins/{pkg.name}` | {desc} |")
+        rows = [line for line in gen.build().split("\n") if line.startswith("| `plugins/")]
+        self.assertEqual(rows, expected)
 
 
 if __name__ == "__main__":

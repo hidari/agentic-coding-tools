@@ -75,10 +75,9 @@ PR で説明する。
 読むので、説明を変えたいときは frontmatter を直して `python3 scripts/gen-readme.py` を
 実行する。`--check` は CI と pre-commit が回す。
 
-**表以外の散文 (「使い方」「構造の規約」「ライセンス」) は frontmatter 由来ではなく、
-`gen-readme.py` の `HEADER` / `FOOTER` 定数に入っている。** ここを直したいときに README.md を
-編集すると、次の生成で書いた内容が消える。`--check` は赤くなるが文面は「frontmatter を
-直せ」なので、原因に辿り着けない。
+**表以外の散文 (「使い方」「構造の規約」「ライセンス」、各節の導入文) は frontmatter 由来ではなく、
+`gen-readme.py` の中にある。** ここを直したいときに README.md を編集すると、次の生成で書いた
+内容が消え、`--check` が赤くなる。
 
 ## [MUST] 規約は散文ではなく検査に落とす
 
