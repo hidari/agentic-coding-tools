@@ -1,14 +1,12 @@
 # agentic-coding-tools
 
-Claude Code のための skill と plugin を集めたリポジトリ。個人の開発ワークフローを
-そのまま置いてあり、誰でも参考にできる状態にしておくことを目的にしている。
+Coding Agent のための自作 skill と自作 plugin を管理するリポジトリ。
 
-配布は [apm](https://github.com/microsoft/apm) 経由。宣言だけを自分のリポジトリへ置き、
-実体は clone 後に取得する形を想定している。
+配布は [apm](https://github.com/microsoft/apm) 経由で取得する形を想定している。
 
 ## 使い方
 
-`apm.yml` の依存に次の形で書く。`<sha>` は追随したいコミットで固定する。
+`apm.yml` の依存に次の形で書く。`<sha>` でバージョンを固定することを推奨する。
 
 ```yaml
 dependencies:
@@ -18,21 +16,22 @@ dependencies:
 
 `apm install` を実行すると `.claude/skills/` 配下へ配置される。
 
-パッケージの root には `SKILL.md` と `.claude-plugin/plugin.json` の両方を置いてある。
-apm は前者を見てディレクトリ全体を verbatim でコピーし、Claude Code は後者を見て
-plugin として読み込む。この 2 つは互いを知らず独立に判定されるため、1 つのパッケージが
-両方を兼ねる。
+各 plugin の root には `SKILL.md` と `.claude-plugin/plugin.json` の両方を置いてある。
+
+apm は前者を見てディレクトリ全体をコピーし、Coding Agent は後者を見て plugin として読み込む。この 2 つは互いを知らず独立に判定されるため、1 つの plugin ディレクトリが両方を兼ねる。
 
 ## plugin
-component を持つパッケージ。skill と agent は `<plugin 名>:<component 名>` の修飾名で呼び、command は `/<command 名>` で呼ぶ。
 
-| パス | component 数 | 説明 |
-|---|---|---|
-| `plugins/dev-workflow` | 7 | 個人開発のワークフローを支える skill バンドルの入口。ブランチ運用、リポジトリ内 Issue 管理、マージ前の品質ゲート、振り返りのルール化、E2E 影響の静的検出、コミットや PR の本文の漏洩検査を集約する。個別の作業は component skill を直接呼ぶ。 |
-| `plugins/security-blue-red-team` | 6 | Red Team (攻撃者視点の能動検証) と Blue Team (防御者視点の改善計画) を profile 駆動で継続運用する skill バンドルの入口。個別の実行は `/security-redteam` / `/security-blueteam` / `/security-vulnerability-assessment` / `/security-cleanup` を呼ぶ。 |
-| `plugins/web-monkey-qa` | 2 | Web アプリを重み付きランダム操作で探索し、コンソールエラーや HTTP 4xx/5xx、レイアウト崩れ、行き止まり遷移などを検出する monkey test バンドルの入口。実行は `/monkey-qa` を呼ぶ。 |
+skill・agent・command をまとめたパッケージ。skill と agent は `<plugin 名>:<component 名>` の修飾名で呼び、command は `/<command 名>` で呼ぶ。
+
+| パス | 説明 |
+|---|---|
+| `plugins/dev-workflow` | 個人開発のワークフローを支える skill バンドルの入口。ブランチ運用、リポジトリ内 Issue 管理、マージ前の品質ゲート、振り返りのルール化、E2E 影響の静的検出、コミットや PR の本文の漏洩検査を集約する。個別の作業は component skill を直接呼ぶ。 |
+| `plugins/security-blue-red-team` | Red Team (攻撃者視点の能動検証) と Blue Team (防御者視点の改善計画) を profile 駆動で運用する skill バンドル。 |
+| `plugins/web-monkey-qa` | Web アプリを重み付きランダム操作で探索し、コンソールエラーや HTTP 4xx/5xx、レイアウト崩れ、行き止まり遷移などを検出する monkey test バンドル。 |
 
 ## skill
+
 単体の skill。component を持たない。
 
 | パス | 説明 |
@@ -47,9 +46,9 @@ component を持つパッケージ。skill と agent は `<plugin 名>:<componen
 
 ## 構造の規約
 
-パッケージの形と命名には、破ってもエラーにならず静かに壊れる規約がいくつかある。散文の
-約束にすると必ず drift するため、すべて `scripts/check-package-shape.py` の検査に落として
-ある。検査する項目の一覧は同スクリプトの docstring が canonical なので、ここには再掲しない。
+パッケージの形と命名には、破ってもエラーにならず静かに壊れる規約がいくつかある。
+
+散文の約束にすると必ず drift するため、すべて `scripts/check-package-shape.py` の検査に落としてある。検査する項目の一覧は同スクリプトの docstring が canonical なので、ここには再掲しない。
 
 `plugin.json` のフィールド定義そのものは `claude plugin validate --strict` が canonical。
 

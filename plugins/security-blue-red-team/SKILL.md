@@ -1,6 +1,6 @@
 ---
 name: security-blue-red-team
-description: Red Team (攻撃者視点の能動検証) と Blue Team (防御者視点の改善計画) を profile 駆動で継続運用する skill バンドルの入口。個別の実行は `/security-redteam` / `/security-blueteam` / `/security-vulnerability-assessment` / `/security-cleanup` を呼ぶ。
+description: Red Team (攻撃者視点の能動検証) と Blue Team (防御者視点の改善計画) を profile 駆動で運用する skill バンドル。
 ---
 
 # security-blue-red-team
