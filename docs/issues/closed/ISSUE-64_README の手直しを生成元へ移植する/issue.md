@@ -1,5 +1,5 @@
 ---
-status: open
+status: closed
 ---
 
 # docs: README の手直しを生成元へ移植する
@@ -57,12 +57,25 @@ diff README.md "docs/issues/ISSUE-64_README の手直しを生成元へ移植す
 ## タスク
 
 - [x] `description` を README 用と呼び出しの判断用に分けるか、`description` ごと変えるかを決める
-- [ ] 「component 数」列を消すかを、ISSUE-30 との順序と合わせて決める
-- [ ] 意味が変わる手直しの採否を 1 つずつ決める
-- [ ] 採ったものを `HEADER` / `FOOTER`、生成コード、frontmatter へ移し、`python3 scripts/gen-readme.py` で生成し直す
-- [ ] 生成した README.md と `ISSUE-64-readme-hand-edit.md` の差分が、採らなかった分だけになっていることを確かめる (背景の追記にある土台の差 2 点と、ISSUE-92 で置き換わった `description` の行を除いて比べる)
-- [ ] 生成コードを変えたら `scripts/test_gen_readme.py` を合わせて直し、テストの manifest を更新する
-- [ ] `ISSUE-64-readme-hand-edit.md` を削除する
+- [x] 「component 数」列を消すかを、ISSUE-30 との順序と合わせて決める
+- [x] 意味が変わる手直しの採否を 1 つずつ決める
+- [x] 採ったものを `HEADER` / `FOOTER`、生成コード、frontmatter へ移し、`python3 scripts/gen-readme.py` で生成し直す
+- [x] 生成した README.md と `ISSUE-64-readme-hand-edit.md` の差分が、採らなかった分だけになっていることを確かめる (背景の追記にある土台の差 2 点と、ISSUE-92 で置き換わった `description` の行を除いて比べる)
+- [x] 生成コードを変えたら `scripts/test_gen_readme.py` を合わせて直し、テストの manifest を更新する
+- [x] `ISSUE-64-readme-hand-edit.md` を削除する
+
+## 結果
+
+採否はどれもユーザーの判断による。
+
+- 「component 数」列は消し、使い道の無くなった `count_components()` とそのテスト 7 件も消した。この Issue を先に進め、ISSUE-30 は `check-package-shape.py` の側の問題だけを持つ形に書き換えた
+- 意味が変わる手直しは 4 つとも採った。紹介文を短くする、`<sha>` の固定を「推奨する」にする、「verbatim」を消す、「Claude Code」を「Coding Agent」にする。「パッケージの root」を「各 plugin の root」にする直しも採った
+- `security-blue-red-team` と `web-monkey-qa` の plugin の `description` は手直し版を採った。コマンド名の案内は消えたが、どちらの本文にもコマンド名は残っている
+- plugin 節の導入文は、手直し版の「複数のコンポーネント、skill、agent をまとめたもの」が component と skill・agent を並べていたので、「skill・agent・command をまとめたパッケージ」に直して採った。「skill と agent は」も戻した
+- 段落分けと、文の途中の改行を詰める手直しは採った。全角と半角の間の空白 (「自作skill」「1つのplugin」など) は、リポジトリのほかの文面に合わせて空白を入れた
+- 表のテストは、行が「パスと frontmatter の description の 2 列」であることを pin する形にした。列を足し戻す、plugin を 1 つ落とす、説明を空にする、の 3 つの変異でどれも赤くなることを確かめた
+
+生成した README.md と手直し版の差分は、空白を揃えた 3 行、plugin 節の導入文、ISSUE-92 で置き換わった `description` の行、撤去した `herdr` の行、土台の差 (`jev-lint-curated` の行の追加) だけになった。
 
 ## 関連
 

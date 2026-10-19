@@ -69,4 +69,4 @@ ISSUE-8 で `scripts/run-python-tests.py` の収集がディレクトリ列挙�
 - [ISSUE-13: 両取り付けの同時撤去を機構で検出できない](../ISSUE-13_両取り付けの同時撤去を機構で検出できない/issue.md) —
   `check-package-shape.py` へ規則を足す案が出ている。触る対象が重なるので、
   この Issue の import 安全化が先に入るなら合わせて考える
-- ISSUE-30: component の定義が README 生成器と形の検査に分裂している。`check-package-shape.py` の import 安全化を前段として共有する。この Issue はテストの不在を、あちらは定義の所在を扱う
+- ISSUE-30: component の定義が README 生成器と形の検査に分裂している。`check-package-shape.py` の import 安全化を前段として共有していたが、ISSUE-64 で生成器の側の定義が消えたので、あちらでは import 安全化が要らなくなった (2026-10-20)。この Issue はテストの不在を、あちらは定義の所在を扱う

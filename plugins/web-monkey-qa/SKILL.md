@@ -1,6 +1,6 @@
 ---
 name: web-monkey-qa
-description: Web アプリを重み付きランダム操作で探索し、コンソールエラーや HTTP 4xx/5xx、レイアウト崩れ、行き止まり遷移などを検出する monkey test バンドルの入口。実行は `/monkey-qa` を呼ぶ。
+description: Web アプリを重み付きランダム操作で探索し、コンソールエラーや HTTP 4xx/5xx、レイアウト崩れ、行き止まり遷移などを検出する monkey test バンドル。
 ---
 
 # web-monkey-qa
