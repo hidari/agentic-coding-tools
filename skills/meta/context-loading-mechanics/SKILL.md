@@ -1,6 +1,6 @@
 ---
 name: context-loading-mechanics
-description: Claude Code が session_start で何を必ずロードし、何を条件付きでロードするかの実測結果と、常時ロード層が膨らんだときの移設判断。公式ドキュメントに無い挙動を live probe で確定させたものを持つ。CLAUDE.md や rules が重いと感じたとき、規範を追加する前に置き場所を決めたいとき、paths 付き rules が発火しているか確かめたいとき、「指示を書いたのに効いていない」ときに使う。移設の判断と手順までが責務で、予算の検査機構そのものは持たない。
+description: Claude Code が session_start で常時ロードするものと条件付きでロードするもの (paths 付き rules など) の実測結果と、常時ロード層が膨らんだときの移設判断。CLAUDE.md や rules が重いとき、規範の置き場所を決めたいとき、paths 付き rules が発火しない・指示が効いていないときに使う。
 ---
 
 # Context Loading Mechanics

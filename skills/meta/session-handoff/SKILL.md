@@ -1,6 +1,6 @@
 ---
 name: session-handoff
-description: セッションの作業状態を引き継ぎ書 <リポルート>/.cache/handoff.md に書き出す。hook (handoff-sentinel) の通知がこの skill を名指ししたとき、またはユーザーが手動で依頼したとき (「引き継ぎ書いて」「handoff して」「セッション切り替えたい」等) に使う。何を検知して通知するかは hook 側が持ち、ここでは数えない。書き出した引き継ぎ書を次のセッションへ載せるのは対になる SessionStart hook の責務で、hook が配線されていない環境では自動注入は起きない。このスキルは書き出しと案内までを持つ。
+description: セッションの作業状態を引き継ぎ書 <リポルート>/.cache/handoff.md に書き出す。hook (handoff-sentinel) の通知がこの skill を名指ししたとき、または「引き継ぎ書いて」「handoff して」「セッション切り替えたい」と頼まれたときに使う。次のセッションへの注入は別に配線する hook の責務。
 ---
 
 # Session Handoff

@@ -1,5 +1,5 @@
 ---
-description: "Universal Red Team security tester. Reads <project>/.claude/security-profile.yml and dispatches security-blue-red-team:red-team-agent. Defaults to Layer 3 (active state-changing) + Layer 4 (high-risk static). 「Red Team 走らせて」「ペンテストして」「攻撃面を能動的に検証」「能動攻撃シミュレーション」「セキュリティ侵入テスト」と依頼された時にも起動する。"
+description: Red Team active attack simulation. Dispatches red-team-agent on <project>/.claude/security-profile.yml (default Layer 3 active state-changing + Layer 4 high-risk static). 「Red Team 走らせて」「ペンテストして」「能動攻撃シミュレーション」と依頼された時に起動する。
 argument-hint: "[--layer=1|2|3|4|all] [--target=local|staging] [--purple]"
 ---
 

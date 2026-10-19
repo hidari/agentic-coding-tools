@@ -1,6 +1,6 @@
 ---
 name: jev-lint-curated
-description: pin した版の jev-lint を、複数のコードベースの実測から選んで固定した rule の一覧だけで check / review / compat 実行したいときに使う。rule の新規作成や cutoff の較正、一般の jev-lint 運用は上流の skill jev-lint を使うこと。
+description: pin した版の jev-lint を、実測で選んで固定した rule の一覧だけで check / review / compat 実行するラッパ。コードの名前・コメント・docstring が中身と食い違っていないかを advisory に確かめたいときに使う。rule の新規作成や cutoff の較正は上流の skill jev-lint を使う。
 ---
 
 # jev-lint 厳選ラッパ

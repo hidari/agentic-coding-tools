@@ -1,5 +1,5 @@
 ---
-description: "Universal Blue Team security planner. Reads <project>/.claude/security-profile.yml and dispatches security-blue-red-team:blue-team-agent in Mode A (Red Team report response) or Mode B (defensive surface audit). 「Blue Team 動かして」「改善計画立てて」「防御機構を監査」「Red Team レポートに対応策」「セキュリティ改善計画」「防御策を策定」と依頼された時にも起動する。"
+description: Blue Team security planner. Dispatches blue-team-agent on <project>/.claude/security-profile.yml (Mode A responds to a Red Team report, Mode B audits defenses). 「Blue Team 動かして」「Red Team レポートに対応策」「防御機構を監査」「セキュリティ改善計画」と依頼された時に起動する。
 argument-hint: "[--mode=a|b] [--report=<path>]"
 ---
 

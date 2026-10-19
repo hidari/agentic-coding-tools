@@ -1,5 +1,5 @@
 ---
-description: "Universal Monkey QA explorer. Reads <project>/.claude/monkey-qa-profile.yml, applies the environment gate, fans out monkey-explorer-agent per section, and aggregates findings into findings.json + monkey-report.md. 「モンキーテストして」「探索テストして」「ランダムに歩き回って壊れてないか見て」「デプロイ後の探索 QA」と依頼された時にも起動する。"
+description: Run an exploratory monkey test of a web app. Reads .claude/monkey-qa-profile.yml, explores each section with monkey-explorer-agent and reports the findings. 「モンキーテストして」「探索テストして」「ランダムに歩き回って壊れてないか見て」「デプロイ後の探索 QA」と依頼された時に起動する。
 argument-hint: "[--target=local|staging]"
 ---
 

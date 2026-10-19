@@ -1,5 +1,5 @@
 ---
-description: "Consume a cleanup-queue.json emitted by red-team-agent (Layer 3). Re-validates the production gate + seed_id_prefix invariant + seed_id injection-safe charset, then re-derives each delete command from the profile's environment.cleanup.commands template (never executes the queue's free-form cleanup_command). Use after /security-redteam with Layer 3 to purge security_redteam_<UUID> seeds from staging / local."
+description: Purge the test resources /security-redteam seeded in Layer 3 on staging / local, from its cleanup-queue.json. Re-validates the production gate and seed IDs and runs delete commands re-derived from the profile, never the queue's strings.
 argument-hint: "[--from=<path>] [--dry-run]"
 ---
 

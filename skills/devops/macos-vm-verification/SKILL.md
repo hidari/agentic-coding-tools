@@ -1,6 +1,6 @@
 ---
 name: macos-vm-verification
-description: Parallels Desktop 上の macOS 検証 VM を繋ぐ/調べる/検証する generic CLI (macvm)。SSH 越しの健全性確認 (OS / arch / ディスク / GUI セッション / 任意ツールの有無)、ホスト側からの画面キャプチャ (screenshot)、prlctl からの IP 解決、繋がらないときのホスト側診断 (doctor)、任意ファイルの転送 (push/pull)、クォート/パイプ安全な任意コマンド実行 (exec) を扱う。GUI アプリをホストの作業を止めずに起動して目視したい時や、Parallels Desktop の macOS VM を操作・検証する時に使う。
+description: Parallels Desktop 上の macOS 検証 VM を操作・検証する CLI (macvm)。GUI アプリをホストの作業を止めずに VM で起動して目視したいとき、VM の健全性確認・接続診断・スクリーンショット・ファイル転送・任意のコマンド実行をしたいときに使う。
 ---
 
 # macOS VM 検証スキル (macvm)

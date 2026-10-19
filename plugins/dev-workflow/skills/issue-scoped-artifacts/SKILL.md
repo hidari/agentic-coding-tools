@@ -1,6 +1,6 @@
 ---
 name: issue-scoped-artifacts
-description: superpowers の brainstorming や writing-plans が spec / plan を書き出す直前に使う。成果物を docs/superpowers/ ではなく Issue ディレクトリ配下 (docs/issues/<ID>_<title>/<ID>-spec.md と <ID>-plan.md) へ置く規約と、採用手順・移行手順を持つ。プロジェクトの CLAUDE.md にこの skill を指すポインタがある場合にのみ適用し、ポインタが無いプロジェクトでは何もせず既定の置き場に従う。
+description: superpowers の brainstorming や writing-plans が spec / plan を書き出す直前に使う。成果物を docs/superpowers/ ではなく Issue ディレクトリ配下へ置く規約と、採用・移行手順を持つ。プロジェクトの CLAUDE.md にこの skill を指すポインタがあるときだけ適用し、無ければ何もしない。
 ---
 
 # Issue-Scoped Artifacts

@@ -1,6 +1,6 @@
 ---
 name: windows-vm-verification
-description: Parallels Desktop 上の Windows 検証 VM を繋ぐ/調べる/検証する generic CLI (winvm)。SSH 越しの NTFS/health 確認、cfg(windows) コードの remote 検証 (ローカル変更を scp 同期して remote コマンド実行)、prlctl からの IP 解決、繋がらないときのホスト側診断 (doctor)、画面のスクリーンショット (screenshot)、任意ファイルの転送 (push/pull)、クォート/パイプ安全な任意 pwsh コマンド実行 (exec) を扱う。Parallels Desktop の Windows VM を操作・検証する時に使う。
+description: Parallels Desktop 上の Windows 検証 VM を操作・検証する CLI (winvm)。ローカル変更を VM へ同期して cfg(windows) コードを検証するとき、VM の健全性確認・接続診断・スクリーンショット・ファイル転送・任意の pwsh コマンド実行をしたいときに使う。
 ---
 
 # Windows VM 検証スキル (winvm)
