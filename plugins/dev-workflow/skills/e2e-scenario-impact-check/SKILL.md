@@ -182,8 +182,8 @@ E2E を特定できなかった場合:
 ## 関連
 
 - `dev-workflow:pre-merge-quality-gate` (sibling skill): Phase 1 の4つ目並列タスクとして本 skill を呼ぶ
-- `playwright-test` (sibling skill): E2E テストの書き方リファレンス。本 skill が修正案を出す際の根拠として参照
-- `ast-grep-practice` (sibling skill): 一部のパターン（role 変更、button → Link 化）は ast-grep ルール化候補。本 skill で繰り返し検出される高頻度パターンが固まったら、機械検査に降ろせるか検討する
+- `playwright-test` (このリポジトリの外の skill): E2E テストの書き方リファレンス。入っていれば、本 skill が修正案を出す際の根拠として参照する。入っていなければ、対象プロジェクトの既存の E2E テストの書き方を根拠にする
+- `ast-grep-practice` (このリポジトリの外の skill): 一部のパターン（role 変更、button → Link 化）は ast-grep ルール化候補。本 skill で繰り返し検出される高頻度パターンが固まったら、機械検査に降ろせるか検討する
 
 ## 関連 CLAUDE.md ルール
 

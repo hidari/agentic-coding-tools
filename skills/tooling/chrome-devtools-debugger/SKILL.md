@@ -156,7 +156,7 @@ allowed-tools:
 |-----------------------------------------------|--------------------------------------------|
 | ライブ接続したブラウザの調査 (ネットワーク/コンソール/perf/メモリ/a11y) | 公式 chrome-devtools-mcp plugin の skill 群     |
 | 調査結果の標準レポート化 + 機密マスク + 既知エラー対応づけ            | chrome-devtools-debugger (本 skill)          |
-| Playwright Test (E2E) の作成 / レビュー              | playwright-test                            |
-| Playwright CLI (codegen / screenshot / shard) | playwright-cli                             |
+| Playwright Test (E2E) の作成 / レビュー              | playwright-test (このリポジトリの外の skill)    |
+| Playwright CLI (codegen / screenshot / shard) | playwright-cli (このリポジトリの外の skill)     |
 
 ライブ接続調査の強みは、開いている Chrome セッションに接続でき手動テストとシームレスに連携できる点 (Playwright は隔離ブラウザを起動するためログインセッション等を引き継げない)。本 skill はその調査結果を、本 skill が定めるレポート形式・機密マスク規則・既知エラー知識に乗せて成果物化することに特化する。

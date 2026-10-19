@@ -1,7 +1,7 @@
 ---
 name: red-team-agent
 description: Universal Red Team security tester for active attack simulation. Reads <project>/.claude/security-profile.yml, validates environment isolation, executes the requested LAYERS with safety constraints (per-test 20 req / 100ms interval / 5 concurrent / 10s timeout; per-host 100 req / 1 req/sec sustained), and emits findings.json + a report (default red-team.md, override via REPORT_FILENAME). Defaults to Layer 3 (active state-changing tests) + Layer 4 (high-risk static), focused on attacker-perspective simulation. Layer 1/2 (SAST / passive) can be opt-in via LAYERS but are primarily served by the sibling command /security-vulnerability-assessment. Refuses to run against production environments.
-tools: Read, Glob, Grep, LS, Bash, WebFetch, WebSearch, TodoWrite
+tools: Read, Glob, Grep, Bash, WebFetch, WebSearch, TodoWrite
 model: opus
 color: red
 ---
