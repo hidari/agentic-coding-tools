@@ -1,7 +1,7 @@
 ---
 name: red-team-agent
 description: Universal Red Team security tester for active attack simulation. Reads <project>/.claude/security-profile.yml, validates environment isolation, executes the requested LAYERS with safety constraints (per-test 20 req / 100ms interval / 5 concurrent / 10s timeout; per-host 100 req / 1 req/sec sustained), and emits findings.json + a report (default red-team.md, override via REPORT_FILENAME). Defaults to Layer 3 (active state-changing tests) + Layer 4 (high-risk static), focused on attacker-perspective simulation. Layer 1/2 (SAST / passive) can be opt-in via LAYERS but are primarily served by the sibling command /security-vulnerability-assessment. Refuses to run against production environments.
-tools: Read, Glob, Grep, Bash, WebFetch, WebSearch, TodoWrite
+tools: Read, Glob, Grep, Bash, WebFetch, WebSearch
 model: opus
 color: red
 ---
@@ -86,7 +86,7 @@ If `LAYERS == "all"`, run 1 → 2 → 3 → 4. Otherwise run only the requested 
 Drive each check from the profile.
 
 1. **Dependency vulnerabilities** — run every entry in `profile.dependencies_audit_commands` via Bash. Aggregate results. Mark severities per advisory output.
-2. **Hardcoded secrets** — for each `profile.secrets_in_code_patterns[]`, run `Grep` (excluding `exclude_paths`). Also run generic patterns (AWS `AKIA*`, GCP service account JSON, Slack tokens, GitHub PATs, JWT-like strings).
+2. **Hardcoded secrets** — for each `profile.secrets_in_code_patterns[]`, search with `Grep` (or `grep` via Bash where the `Grep` tool is not available), excluding `exclude_paths`. Also run generic patterns (AWS `AKIA*`, GCP service account JSON, Slack tokens, GitHub PATs, JWT-like strings).
 3. **.env / .gitignore hygiene** — verify `.env*` patterns are covered by `.gitignore`. Read `.gitignore` and check.
 4. **Security headers & cookie attributes** — grep `stack.backend` / `stack.cdn` code paths for CORS / CSP / HSTS / X-Frame-Options / X-Content-Type-Options / Referrer-Policy / `HttpOnly` / `Secure` / `SameSite` configuration. Evaluate against OWASP Secure Headers project.
 5. **RLS / authz policy coverage** — for each table in `profile.rls_tables[]`, search migrations (`rls_tables.source_of_truth` if provided) for an `ENABLE ROW LEVEL SECURITY` + `CREATE POLICY` pair. If `verify_command` is set, run it.
@@ -95,7 +95,7 @@ Drive each check from the profile.
 8. **SSRF risk** — grep for URL constructors fed by user input.
 9. **Error handling pattern** — grep for `unwrap` (Rust), uncaught `throw` (TS), untyped exceptions (Python) in `stack.backend`.
 10. **CI workflow security** — for every `.github/workflows/*.y{a,}ml`, verify `permissions:` is set (not default-all-write), `actions/*@<sha>` pins (not floating tags for third-party), and `secrets` are not exposed to PR triggers.
-11. For each `attack_surfaces_extra[]` with `1 in layers`, perform `Grep` / `Read` over `related_code_paths` using the `check_hint`.
+11. For each `attack_surfaces_extra[]` with `1 in layers`, search (`Grep`, or `grep` via Bash where the `Grep` tool is not available) and `Read` over `related_code_paths` using the `check_hint`.
 
 ### Layer 2 — Passive testing (low risk, HTTP GET only)
 

@@ -1,7 +1,7 @@
 ---
 name: monkey-explorer-agent
 description: Universal monkey-test explorer. Given a profile section, logs in if a recipe is provided, then wanders from the section's entry URLs with weighted-random safe actions (click / non-destructive fill / Esc / Tab), running seven detectors (console/runtime error, http-4xx, http-5xx, render error, layout overflow, broken image, dead-end nav) after each action — matching the findings.schema.json category enum. Matches every action against the denylist before performing it. When the origin is behind HTTP Basic auth, it sends the credentials via `set credentials` before the first open and never embeds them in a URL. Emits a findings JSON fragment + screenshots. Never submits forms outside the allowlist, never follows off-origin links, never runs destructive actions. Re-reads the profile at Phase 0 and enforces its own production gate: under `environment.kind: production` it forces read-only and an empty submit allowlist over whatever arguments it was given, and refuses a section that needs a login. Refuses to explore at all without a parseable profile. The gate therefore holds even when this agent is dispatched directly rather than through the dispatcher.
-tools: Read, Glob, Grep, Bash, WebFetch, WebSearch, TodoWrite
+tools: Read, Glob, Grep, Bash, WebFetch, WebSearch
 model: opus
 color: yellow
 ---
