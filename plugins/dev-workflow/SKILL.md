@@ -1,6 +1,6 @@
 ---
 name: dev-workflow
-description: 個人開発のワークフローを支える skill バンドルの入口。ブランチ運用、リポジトリ内 Issue 管理、マージ前の品質ゲート、振り返りのルール化、E2E 影響の静的検出、コミットや PR の本文を漏洩検査してから渡す手順を集約する。個別の作業は component skill を直接呼ぶ。
+description: 個人開発のワークフローを支える skill バンドルの入口。ブランチ運用、リポジトリ内 Issue 管理、マージ前の品質ゲート、振り返りのルール化、E2E 影響の静的検出、コミットや PR の本文の漏洩検査を集約する。個別の作業は component skill を直接呼ぶ。
 ---
 
 # dev-workflow

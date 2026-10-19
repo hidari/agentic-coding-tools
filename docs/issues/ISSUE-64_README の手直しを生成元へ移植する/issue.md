@@ -52,13 +52,15 @@ diff README.md "docs/issues/ISSUE-64_README の手直しを生成元へ移植す
 そのとき `web-monkey-qa` の誤字 (「行わな」) を直し、`context-loading-mechanics` の「Coding Agent」は
 「Claude Code」へ戻した。中身が Claude Code で実測した挙動だからで、ユーザーの判断による。
 
+追記 (2026-10-19): ISSUE-92 で、`description` は README 用に分けず、`description` ごと短く書き換えると決めた (ユーザーの判断)。README は引き続き frontmatter から生成する。ISSUE-92 で配布物の `description` の大半を書き直したので、上の表で frontmatter の `description` へ移すことにしていた手直しのうち、`dev-workflow`、`context-loading-mechanics`、`session-handoff`、`markdown-to-pdf` の行は ISSUE-92 の書き直しで置き換わったものとして扱う。`security-blue-red-team` と `web-monkey-qa` の plugin の `description` は ISSUE-92 で変えていないので、この 2 行は引き続き採否を決める対象に残る。
+
 ## タスク
 
-- [ ] `description` を README 用と呼び出しの判断用に分けるか、`description` ごと変えるかを決める
+- [x] `description` を README 用と呼び出しの判断用に分けるか、`description` ごと変えるかを決める
 - [ ] 「component 数」列を消すかを、ISSUE-30 との順序と合わせて決める
 - [ ] 意味が変わる手直しの採否を 1 つずつ決める
 - [ ] 採ったものを `HEADER` / `FOOTER`、生成コード、frontmatter へ移し、`python3 scripts/gen-readme.py` で生成し直す
-- [ ] 生成した README.md と `ISSUE-64-readme-hand-edit.md` の差分が、採らなかった分だけになっていることを確かめる (背景の追記にある土台の差 2 点を除いて比べる)
+- [ ] 生成した README.md と `ISSUE-64-readme-hand-edit.md` の差分が、採らなかった分だけになっていることを確かめる (背景の追記にある土台の差 2 点と、ISSUE-92 で置き換わった `description` の行を除いて比べる)
 - [ ] 生成コードを変えたら `scripts/test_gen_readme.py` を合わせて直し、テストの manifest を更新する
 - [ ] `ISSUE-64-readme-hand-edit.md` を削除する
 

@@ -1,6 +1,6 @@
 ---
 name: in-repo-issue
-description: リポジトリ内 Markdown (`docs/issues/<ID>_<title>/issue.md`) で Issue を起票・更新・自動クローズ・reopen する。「Issue を立てて」「起票して」「作って」「閉じて」と指示された時、 PR マージ後 (dev-workflow:pre-merge-quality-gate Phase 5 が起動可否を判定せず無条件に呼ぶ。 `Closes <ID>` / `Fixes <ID>` の抽出は本 skill の Phase C)、 親 Issue の子全 closed を検出した時に起動。 識別子 `<ID>` は同梱の `scripts/issue-id.py` が採番し、 GitHub の番号記法との混同も同スクリプトが検出する。 frontmatter は status のみ、 完了判定は本文「## タスク」チェックリスト全 [x] で行う。
+description: リポジトリ内 Markdown (`docs/issues/<ID>_<title>/issue.md`) で Issue を起票・更新・クローズ・reopen する。「Issue を立てて」「起票して」「閉じて」と指示された時、PR をマージした直後 (Closes 行の有無はこの skill が判定する)、親 Issue の子がすべて closed になった時に使う。
 ---
 
 # In-Repo Issue Management

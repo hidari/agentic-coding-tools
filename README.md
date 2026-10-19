@@ -28,7 +28,7 @@ component を持つパッケージ。skill と agent は `<plugin 名>:<componen
 
 | パス | component 数 | 説明 |
 |---|---|---|
-| `plugins/dev-workflow` | 7 | 個人開発のワークフローを支える skill バンドルの入口。ブランチ運用、リポジトリ内 Issue 管理、マージ前の品質ゲート、振り返りのルール化、E2E 影響の静的検出、コミットや PR の本文を漏洩検査してから渡す手順を集約する。個別の作業は component skill を直接呼ぶ。 |
+| `plugins/dev-workflow` | 7 | 個人開発のワークフローを支える skill バンドルの入口。ブランチ運用、リポジトリ内 Issue 管理、マージ前の品質ゲート、振り返りのルール化、E2E 影響の静的検出、コミットや PR の本文の漏洩検査を集約する。個別の作業は component skill を直接呼ぶ。 |
 | `plugins/security-blue-red-team` | 6 | Red Team (攻撃者視点の能動検証) と Blue Team (防御者視点の改善計画) を profile 駆動で継続運用する skill バンドルの入口。個別の実行は `/security-redteam` / `/security-blueteam` / `/security-vulnerability-assessment` / `/security-cleanup` を呼ぶ。 |
 | `plugins/web-monkey-qa` | 2 | Web アプリを重み付きランダム操作で探索し、コンソールエラーや HTTP 4xx/5xx、レイアウト崩れ、行き止まり遷移などを検出する monkey test バンドルの入口。実行は `/monkey-qa` を呼ぶ。 |
 
@@ -37,13 +37,13 @@ component を持つパッケージ。skill と agent は `<plugin 名>:<componen
 
 | パス | 説明 |
 |---|---|
-| `skills/devops/macos-vm-verification` | Parallels Desktop 上の macOS 検証 VM を繋ぐ/調べる/検証する generic CLI (macvm)。SSH 越しの健全性確認 (OS / arch / ディスク / GUI セッション / 任意ツールの有無)、ホスト側からの画面キャプチャ (screenshot)、prlctl からの IP 解決、繋がらないときのホスト側診断 (doctor)、任意ファイルの転送 (push/pull)、クォート/パイプ安全な任意コマンド実行 (exec) を扱う。GUI アプリをホストの作業を止めずに起動して目視したい時や、Parallels Desktop の macOS VM を操作・検証する時に使う。 |
-| `skills/devops/windows-vm-verification` | Parallels Desktop 上の Windows 検証 VM を繋ぐ/調べる/検証する generic CLI (winvm)。SSH 越しの NTFS/health 確認、cfg(windows) コードの remote 検証 (ローカル変更を scp 同期して remote コマンド実行)、prlctl からの IP 解決、繋がらないときのホスト側診断 (doctor)、画面のスクリーンショット (screenshot)、任意ファイルの転送 (push/pull)、クォート/パイプ安全な任意 pwsh コマンド実行 (exec) を扱う。Parallels Desktop の Windows VM を操作・検証する時に使う。 |
-| `skills/meta/context-loading-mechanics` | Claude Code が session_start で何を必ずロードし、何を条件付きでロードするかの実測結果と、常時ロード層が膨らんだときの移設判断。公式ドキュメントに無い挙動を live probe で確定させたものを持つ。CLAUDE.md や rules が重いと感じたとき、規範を追加する前に置き場所を決めたいとき、paths 付き rules が発火しているか確かめたいとき、「指示を書いたのに効いていない」ときに使う。移設の判断と手順までが責務で、予算の検査機構そのものは持たない。 |
-| `skills/meta/session-handoff` | セッションの作業状態を引き継ぎ書 <リポルート>/.cache/handoff.md に書き出す。hook (handoff-sentinel) の通知がこの skill を名指ししたとき、またはユーザーが手動で依頼したとき (「引き継ぎ書いて」「handoff して」「セッション切り替えたい」等) に使う。何を検知して通知するかは hook 側が持ち、ここでは数えない。書き出した引き継ぎ書を次のセッションへ載せるのは対になる SessionStart hook の責務で、hook が配線されていない環境では自動注入は起きない。このスキルは書き出しと案内までを持つ。 |
-| `skills/tooling/chrome-devtools-debugger` | 公式 chrome-devtools-mcp plugin の skill 群で収集したデバッグ結果を、標準化された日本語レポート (docs/debug-reports/) へ整形・機密マスクするレイヤー。ネットワーク/コンソール/パフォーマンス/UI の調査結果を既知エラーパターンに対応づけ、優先度付きでレポート化する際に使用する。 |
-| `skills/tooling/jev-lint-curated` | pin した版の jev-lint を、複数のコードベースの実測から選んで固定した rule の一覧だけで check / review / compat 実行したいときに使う。rule の新規作成や cutoff の較正、一般の jev-lint 運用は上流の skill jev-lint を使うこと。 |
-| `skills/tooling/markdown-to-pdf` | Use when Markdown ファイルを整形して PDF 化したいとき。日本語ビジネス文書・技術ドキュメント・契約書ドラフト・計画書などを uv 経由のスタンドアロン Python スクリプト (render.py) で PDF に変換する。表組み・シンタックスハイライト・ヘッダー/フッター・ページ番号を含む整形済み PDF が必要なケース全般で使用する。 |
+| `skills/devops/macos-vm-verification` | Parallels Desktop 上の macOS 検証 VM を操作・検証する CLI (macvm)。GUI アプリをホストの作業を止めずに VM で起動して目視したいとき、VM の健全性確認・接続診断・スクリーンショット・ファイル転送・任意のコマンド実行をしたいときに使う。 |
+| `skills/devops/windows-vm-verification` | Parallels Desktop 上の Windows 検証 VM を操作・検証する CLI (winvm)。ローカル変更を VM へ同期して cfg(windows) コードを検証するとき、VM の健全性確認・接続診断・スクリーンショット・ファイル転送・任意の pwsh コマンド実行をしたいときに使う。 |
+| `skills/meta/context-loading-mechanics` | Claude Code が session_start で常時ロードするものと条件付きでロードするもの (paths 付き rules など) の実測結果と、常時ロード層が膨らんだときの移設判断。CLAUDE.md や rules が重いとき、規範の置き場所を決めたいとき、paths 付き rules が発火しない・指示が効いていないときに使う。 |
+| `skills/meta/session-handoff` | セッションの作業状態を引き継ぎ書 <リポルート>/.cache/handoff.md に書き出す。hook (handoff-sentinel) の通知がこの skill を名指ししたとき、または「引き継ぎ書いて」「handoff して」「セッション切り替えたい」と頼まれたときに使う。次のセッションへの注入は別に配線する hook の責務。 |
+| `skills/tooling/chrome-devtools-debugger` | 公式 chrome-devtools-mcp plugin の skill 群で集めたネットワーク/コンソール/パフォーマンス/UI の調査結果を、機密をマスクした日本語のデバッグレポートに整形する。既知のエラーパターンに対応づけ、優先度付きでレポートにまとめたいときに使う。 |
+| `skills/tooling/jev-lint-curated` | pin した版の jev-lint を、実測で選んで固定した rule の一覧だけで check / review / compat 実行するラッパ。コードの名前・コメント・docstring が中身と食い違っていないかを advisory に確かめたいときに使う。rule の新規作成や cutoff の較正は上流の skill jev-lint を使う。 |
+| `skills/tooling/markdown-to-pdf` | Markdown を表組み・シンタックスハイライト・ヘッダー/フッター・ページ番号付きの整形済み PDF に変換する。日本語のビジネス文書・技術ドキュメント・契約書ドラフト・計画書などを PDF で配布・アーカイブしたいときに使う。 |
 
 ## 構造の規約
 

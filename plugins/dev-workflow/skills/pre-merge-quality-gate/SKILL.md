@@ -1,6 +1,6 @@
 ---
 name: pre-merge-quality-gate
-description: PR を main にマージする直前 (gh pr merge を実行する前) または PR を作成する直前 (gh pr create の前) に必ず使う。simplify / feature-dev:code-reviewer / boy-scout-sweep / dev-workflow:e2e-scenario-impact-check を並列で通し、CI が捕捉できない a11y バグ・UX 問題・デッドコード・rot するコメント・タスク参照・E2E シナリオテストの取りこぼしを fix してからマージする。「CI 通り次第マージ」「マージして」と指示された時も必ず通すこと。ボーイスカウトルール (CLAUDE.md MUST) も skill 内で構造化済みで、毎回の追加質問は不要。
+description: PR を作成する直前 (gh pr create) とマージする直前 (gh pr merge) に必ず使う。simplify、コードレビュー、ボーイスカウト、E2E 影響チェックを並列で通し、CI が捕捉できない問題を直してから作成・マージする。「マージして」「CI 通り次第マージ」と指示された時も通す。
 ---
 
 # Pre-Merge Quality Gate
@@ -77,7 +77,7 @@ simplify / code-reviewer / boy-scout-sweep / dev-workflow:e2e-scenario-impact-ch
    - args: 変更概要 + base branch (通常 `main`)
    - skill 内部でフロント変更検出 → 無ければ早期 skip、有れば agent 経由で E2E への影響を静的検査
    - 検出対象: `getByRole` / `getByLabel` 整合性、画面構造変化（保存ボタン2個など strict mode violation 系）、`<button>` ↔ `<Link>` 化、role / aria-label 変更、ルート変更、同じ画面を別経路で叩く別テストの取りこぼし
-   - staging E2E は唯一の自動 E2E 検出網（ローカル E2E は CI で動かない）であるため、shift-left で爆発前に検出する価値が高い
+   - staging E2E が唯一の自動 E2E 検出網になっている構成 (ローカル E2E を CI で回さない) では、shift-left で爆発前に検出する価値が特に高い
 
 5. **`Agent` tool で `general-purpose` を起動 (PUBLIC 漏洩スイープ)** — **リポジトリが PUBLIC のときだけ**
    - 起動可否は公開範囲で決まる。`gh repo view --json visibility` で確かめてから判断する (グローバル CLAUDE.md が「リポジトリの公開範囲は常に確認する」を規定している)
