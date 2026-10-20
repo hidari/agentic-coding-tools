@@ -1,5 +1,5 @@
 ---
-status: open
+status: closed
 ---
 
 # feat: 他リポジトリの知見をまとめとして残す skill を足す
@@ -12,8 +12,8 @@ status: open
 
 ## タスク
 
-- [ ] `skills/meta/cross-repo-learnings/` に SKILL.md と template.md を足す
-- [ ] README を `scripts/gen-readme.py` で再生成する
+- [x] `skills/meta/cross-repo-learnings/` に SKILL.md と template.md を足す
+- [x] README を `scripts/gen-readme.py` で再生成する
 
 ## 関連
 
