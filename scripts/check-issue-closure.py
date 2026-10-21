@@ -415,7 +415,7 @@ class CollectResult(NamedTuple):
     5 種を分けるのは、止まる検査の範囲がそれぞれ違うため。全部止まるのは issue.md が無い
     場合と読めない場合だけで、残りは部分的に止まる (フェンス閉じ忘れは不変条件 A と D を
     止め、B と C は走る。番号が採れない場合は C だけを止める。親子キーの値を読めない場合は
-    C の辺の解決だけを止める)。同じリストへ混ぜると、要約行の件数が実態より広い宣言になる。
+    C の辺の解決と D を止める)。同じリストへ混ぜると、要約行の件数が実態より広い宣言になる。
 
     links と judged も同じ理由で件数ではなくデータで持つ。judged を links と別に持つのは、
     辺があっても判定しない親がいるため (親が closed / 宣言を完全には把握できていない)。
@@ -585,7 +585,7 @@ def collect(root: Path) -> CollectResult:
     C の判定の 2 つ (子であるときは配置だけで判定できるので止めない)。
 
     ディレクトリ名から番号が採れない場合は unnumbered_notes へ寄せ、走査できなかった件数へは
-    混ぜない。その Issue は不変条件 A と B の走査を通っており、解決できないのは親子リンクだけ
+    混ぜない。その Issue は不変条件 A と B と D の走査を通っており、解決できないのは親子リンクだけ
     なので、混ぜると要約行の宣言が実態より広くなる。
     """
     n = notation()
@@ -636,7 +636,7 @@ def collect(root: Path) -> CollectResult:
             if number is not None:
                 unread.add(number)
             continue
-        # frontmatter の切り出しは 1 回だけ行い、status と親子リンクの両方で使い回す
+        # frontmatter の切り出しは 1 回だけ行い、status と親子リンクと不変条件 D の免除で使い回す
         front = frontmatter(text)
         parent_value, children_values = read_links(front)
         unreadable = unreadable_link_keys(front)
@@ -658,8 +658,8 @@ def collect(root: Path) -> CollectResult:
             for value in children_values:
                 declared.append(_Declared(rel_dir, "children", value, number))
         # 不変条件 B: 配置 (closed/ に居るか) と frontmatter の status が食い違わないこと。
-        # フェンスの状態に関わらず frontmatter は先頭にあるので、フェンス走査より前に
-        # status を見る。closed 側もここで検査するので、フェンス走査より前に置く
+        # frontmatter はフェンスの状態に関わらず先頭にあるので、フェンス閉じ忘れで抜ける
+        # continue より前に status を見る
         status = read_status(front)
         if status is None:
             unreadable_notes.append(f"{rel_dir}: frontmatter の status が読めなかった")
@@ -686,19 +686,21 @@ def collect(root: Path) -> CollectResult:
             )
             continue
         has_heading, total, unchecked = _scan_lines_for_tasks(lines)
+        completed = is_completed(has_heading, total, unchecked)
         if is_closed:
-            # 不変条件 D: 消化しないまま閉じたなら理由の節を持つこと。frontmatter を
-            # 切り出せない Issue と親子キーの値を読めない Issue は children を把握できず
-            # Phase E の免除を判定できないので見ない (どちらも注記が既に名乗っている)
-            if (front is not None and not unreadable and not children_values
-                    and not is_completed(has_heading, total, unchecked)
-                    and not any(CLOSE_REASON_HEADING.match(line) for line in lines)):
+            # 不変条件 D: 消化しないまま閉じたなら理由の節を持つこと。Phase E で閉じる親
+            # (children を宣言する) は箱を使わずに閉じるので見ない。frontmatter を切り出せない
+            # Issue と親子キーの値を読めない Issue は、children を把握できず免除を判定できない
+            # ので見ない (どちらも注記が既に名乗っている)
+            exempt = front is None or bool(unreadable) or bool(children_values)
+            if not (exempt or completed
+                    or any(CLOSE_REASON_HEADING.match(line) for line in lines)):
                 violations.append(
                     f"{rel_dir}: タスクを消化しないまま closed/ に居るのに「クローズ理由」の"
                     f"節が無い (箱 {total} 個 / 未チェック {unchecked})。閉じた理由を書く"
                 )
             continue
-        if is_completed(has_heading, total, unchecked):
+        if completed:
             violations.append(
                 f"{rel_dir}: タスクが全て消化済みなのに active に居る "
                 f"(箱 {total} 個 / 未チェック 0)。クローズを同じ PR へ同梱する"

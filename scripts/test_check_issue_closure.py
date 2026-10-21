@@ -1133,6 +1133,7 @@ def _section_text(path: Path, prefix: str) -> str:
 SCHEMA_SECTION = "frontmatter スキーマ"
 BUNDLED_SECTION = "クローズ経路: feature PR 同梱を優先"
 PHASE_D_SECTION = "Phase D:"
+CLOSE_REASON_SECTION = "Phase G:"
 
 
 class SectionExtraction(unittest.TestCase):
@@ -1256,9 +1257,6 @@ class ParityWithTheSchema(unittest.TestCase):
                          [read["parent"], read["parent"]])
 
 
-CLOSE_REASON_SECTION = "Phase G:"
-
-
 class ParityWithTheCloseReasonSection(unittest.TestCase):
     """Phase G のフェンスが示す見出しの見本を、不変条件 D の見出し判定が理由の節と読むこと。
 
@@ -1269,7 +1267,7 @@ class ParityWithTheCloseReasonSection(unittest.TestCase):
 
     def test_the_sample_heading_is_read_as_a_reason(self):
         samples = [line for line, kind in _section(SKILL_MD, CLOSE_REASON_SECTION)
-                   if kind == checker.LINE_FENCE and line.startswith("#")]
+                   if kind == checker.LINE_FENCE and HEADING.match(line)]
         self.assertEqual(len(samples), 1, f"「{CLOSE_REASON_SECTION}」節の見出しの見本: {samples}")
         self.assertTrue(checker.CLOSE_REASON_HEADING.match(samples[0]), samples[0])
 
