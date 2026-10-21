@@ -40,6 +40,7 @@ dotfiles の `closed/` では、未チェックのタスクを残して閉じた
 - [x] 子を外す手順 (両側のリンク、親の `## タスク` の行、親の完了の定義から外したかの記録) を決める。ISSUE-45 と Phase E の両方と矛盾しない形にする
 - [x] SKILL.md へ入れる。closed ならタスクは全消化という前提に立つ記述 (F.0 など) を直す
 - [x] 未チェックのまま closed/ にある Issue を `scripts/check-issue-closure.py` がどう扱うかを決める
+- [x] reopen: v0.19.0 の消費側レビューで見つかった Phase G・A.6・F.0・E の文言の食い違いを直す
 
 ## 関連
 
