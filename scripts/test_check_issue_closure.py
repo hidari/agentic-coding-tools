@@ -91,15 +91,18 @@ def issue_md(
     tasks: list[str],
     heading: str = "## タスク",
     frontmatter: tuple[str, ...] = (),
+    preamble: str = "",
 ) -> str:
-    """fixture 用の issue.md を組む。frontmatter は status の後ろへ足す行。
+    """fixture 用の issue.md を組む。frontmatter は status の後ろへ足す行で、preamble は
+    H1 とタスク節の間へ置く本文。
 
-    親子リンク用に別のビルダを立てず既存のここへ引数を足すのは、fixture の派生方法が
-    増えるとテストごとに違う形の issue.md が生まれるため。
+    親子リンク用やクローズ理由用に別のビルダを立てず既存のここへ引数を足すのは、fixture の
+    派生方法が増えるとテストごとに違う形の issue.md が生まれるため。
     """
     head = "\n".join(["---", f"status: {status}", *frontmatter, "---"])
     body = "\n".join(tasks)
-    return f"{head}\n\n# probe\n\n{heading}\n\n{body}\n"
+    middle = f"{preamble}\n\n" if preamble else ""
+    return f"{head}\n\n# probe\n\n{middle}{heading}\n\n{body}\n"
 
 
 def git_vars(env) -> dict[str, str]:
@@ -660,6 +663,87 @@ class InvariantC(FixtureCase):
         self.assertIn("違反 0 件", out)
 
 
+REASON = "## クローズ理由 (2026-10-21)\n\n見送る。"
+
+
+class InvariantD(FixtureCase):
+    """タスクを消化しないまま closed/ に居る Issue が、閉じた理由の節を持つこと。
+
+    消化の判定は不変条件 A と同じ is_completed を通す。未チェックの箱が残る形だけでなく、
+    タスク節が無い形と箱が 0 個の形も「消化した」とは言えないので理由を要求する。
+    """
+
+    def test_unchecked_box_without_a_reason_is_a_violation(self):
+        rc, _, err = self._run(lambda fx: fx.add_issue(
+            "closed/ISSUE-1_probe", issue_md("closed", ["- [x] 済み", "- [ ] 未"])))
+        self.assertEqual(rc, 1)
+        self.assertIn("closed/ISSUE-1_probe", err)
+        self.assertIn("クローズ理由", err)
+
+    def test_unchecked_box_with_a_reason_passes(self):
+        rc, out, err = self._run(lambda fx: fx.add_issue(
+            "closed/ISSUE-1_probe", issue_md("closed", ["- [ ] 未"], preamble=REASON)))
+        self.assertEqual(rc, 0, err)
+        self.assertIn("違反 0 件", out)
+
+    def test_a_reason_heading_without_a_date_passes(self):
+        rc, _, err = self._run(lambda fx: fx.add_issue(
+            "closed/ISSUE-1_probe",
+            issue_md("closed", ["- [ ] 未"], preamble="### クローズ理由\n\n見送る。")))
+        self.assertEqual(rc, 0, err)
+
+    def test_no_task_section_and_zero_boxes_also_need_a_reason(self):
+        cases = {
+            "タスク節なし": issue_md("closed", ["- [x] 済み"], heading="## 作業"),
+            "箱 0 個": issue_md("closed", []),
+        }
+        for label, text in cases.items():
+            with self.subTest(label):
+                rc, _, err = self._run(lambda fx, t=text: fx.add_issue("closed/ISSUE-1_probe", t))
+                self.assertEqual(rc, 1)
+                self.assertIn("クローズ理由", err)
+
+    def test_other_headings_are_not_a_reason(self):
+        """名前が 1 つに決まっていることを見る。前方一致で別の語へ続く見出しと、規約に
+        しなかった別系統の名前は理由の節として数えない。"""
+        for preamble in ("## クローズの記録 (2026-10-21)\n\n見送る。",
+                         "## クローズ理由ではない話\n\n本文。"):
+            with self.subTest(preamble=preamble):
+                rc, _, _ = self._run(lambda fx, p=preamble: fx.add_issue(
+                    "closed/ISSUE-1_probe", issue_md("closed", ["- [ ] 未"], preamble=p)))
+                self.assertEqual(rc, 1)
+
+    def test_a_reason_inside_a_fence_does_not_count(self):
+        fenced = "```markdown\n## クローズ理由 (2026-10-21)\n```"
+        rc, _, err = self._run(lambda fx: fx.add_issue(
+            "closed/ISSUE-1_probe", issue_md("closed", ["- [ ] 未"], preamble=fenced)))
+        self.assertEqual(rc, 1)
+        self.assertIn("クローズ理由", err)
+
+    def test_an_active_issue_is_not_asked_for_a_reason(self):
+        rc, _, err = self._run(lambda fx: fx.add_issue(
+            "ISSUE-1_probe", issue_md("open", ["- [ ] 未"])))
+        self.assertEqual(rc, 0, err)
+
+    def test_a_parent_closed_by_propagation_is_exempt(self):
+        """Phase E は親の箱を判定に使わずに閉じるので、親の箱が未チェックでも理由を求めない。
+
+        対照に children を持たない同じ形を並べ、免除が children の宣言だけで決まることを見る。
+        """
+        def build(fx, children: bool):
+            front = ("children: [ISSUE-2]",) if children else ()
+            fx.add_issue("closed/ISSUE-1_parent",
+                         issue_md("closed", ["- [ ] ISSUE-2 へのリンク"], frontmatter=front))
+            fx.add_issue("closed/ISSUE-2_child",
+                         issue_md("closed", ["- [x] 済み"],
+                                  frontmatter=("parent: ISSUE-1",) if children else ()))
+        rc, _, err = self._run(lambda fx: build(fx, children=True))
+        self.assertEqual(rc, 0, err)
+        rc, _, err = self._run(lambda fx: build(fx, children=False))
+        self.assertEqual(rc, 1)
+        self.assertIn("closed/ISSUE-1_parent", err)
+
+
 class Population(FixtureCase):
     """どの Issue ディレクトリが母集団に入るか。
 
@@ -1156,6 +1240,24 @@ class ParityWithTheSchema(unittest.TestCase):
                          f"reader が読めなかったキーがある: {read}")
         self.assertEqual(checker.split_children(read["children"]),
                          [read["parent"], read["parent"]])
+
+
+CLOSE_REASON_SECTION = "Phase G:"
+
+
+class ParityWithTheCloseReasonSection(unittest.TestCase):
+    """Phase G のフェンスが示す見出しの見本を、不変条件 D の見出し判定が理由の節と読むこと。
+
+    名前は skill (配布物の canonical) と checker の 2 箇所に要る。checker は配布しないので
+    skill から借りられず、skill は checker を持たない配布先でも名前を伝える必要があるため。
+    2 箇所のどちらを変えても赤くなるよう、見本の行をテスト側でパースせず checker へ流す。
+    """
+
+    def test_the_sample_heading_is_read_as_a_reason(self):
+        samples = [line for line, kind in _section(SKILL_MD, CLOSE_REASON_SECTION)
+                   if kind == checker.LINE_FENCE and line.startswith("#")]
+        self.assertEqual(len(samples), 1, f"「{CLOSE_REASON_SECTION}」節の見出しの見本: {samples}")
+        self.assertTrue(checker.CLOSE_REASON_HEADING.match(samples[0]), samples[0])
 
 
 class BundledCloseNamesThePropagationStep(unittest.TestCase):

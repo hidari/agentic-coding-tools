@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""active な Issue の閉じ忘れと、配置と status の不整合と、親子リンクの整合を検出する。
+"""active な Issue の閉じ忘れと、配置と status の不整合と、親子リンクの整合と、消化せずに閉じた Issue の理由の欠落を検出する。
 
 in-repo Issue は「## タスク が全て [x] なら閉じる」という規約で運用されるが、その規約は
 in-repo-issue skill の Phase C.3 が散文で持つだけで、守られたかを見る層がどこにも無い。
@@ -53,6 +53,20 @@ C が潰す運用は E.4 の拒否だけではない。同じ取引で次の 2 �
   「実在しない」と報告される。実在はするので文言は正確ではないが、ディレクトリ名の形式は
   issue-id.py --check が違反として報告し、番号を採れなかったことはこの検査も注記で名乗る
   ので、出力からは追える
+
+不変条件 D (タスクを消化しないまま closed/ に居るなら閉じた理由の節を持つ) は、skill の
+Phase G が散文で持つ規約を検査へ落としたもの。消化の判定は不変条件 A と同じ is_completed を
+通すので、タスク節が無い形と箱が 0 個の形にも理由を要求する。取引は無い。理由を書くことは
+閉じるコミットの中で済み、選べなくなる運用が無い。
+
+不変条件 D の限界:
+
+- children を宣言する Issue は見ない。Phase E は親の箱を判定に使わずに閉じるので、箱が
+  未チェックのまま closed/ に居る親は正規の結末になる。この免除のせいで、children を残した
+  まま消化せずに閉じた親も素通りする。その形は「親が closed で子が active」になりうるが、
+  そこは C の限界に書いた逆向きの不整合で、ISSUE-45 の射程
+- 見るのは見出しの有無だけで、節の中身と位置は見ない
+- frontmatter を切り出せない Issue は children を読めず免除を判定できないので見ない
 """
 from __future__ import annotations
 
@@ -75,6 +89,12 @@ BORROWED = ("ANY_ISSUE_DIR", "CLOSED", "FENCE_LINE", "GitError", "PREFIX",
 # 見出しのレベルと空白の揺れを吸収する。厳密に `## タスク` だけを見ると、`### タスク` で
 # 書かれた完了済み Issue が「タスク節なし」として素通りする (fixture で実測)
 TASK_HEADING = re.compile(r"^#{2,3} *タスク *$")
+
+# 閉じた理由の節の見出し。名前の canonical は in-repo-issue SKILL.md の Phase G で、
+# ParityWithTheCloseReasonSection が節のフェンスにある見本をここへ実際に流して一致を見る。
+# 名前の直後を空白か行末に限るのは、前方一致だと「クローズ理由ではない話」のような
+# 別の見出しまで理由の節として数えるため。日付の括弧は書式を問わない
+CLOSE_REASON_HEADING = re.compile(r"^#{2,3} *クローズ理由(?: |$)")
 
 # 箱として認めるのは半角/全角スペースと x/X だけ。GitHub もこれ以外は箱として描かない
 CHECKBOX = re.compile(r"^[ \t]*[-*+] \[([ 　xX])\]")
@@ -392,7 +412,7 @@ class CollectResult(NamedTuple):
     どの Issue が壊れているのか出力から特定できないため。
 
     5 種を分けるのは、止まる検査の範囲がそれぞれ違うため。全部止まるのは issue.md が無い
-    場合と読めない場合だけで、残りは部分的に止まる (フェンス閉じ忘れは不変条件 A だけを
+    場合と読めない場合だけで、残りは部分的に止まる (フェンス閉じ忘れは不変条件 A と D を
     止め、B と C は走る。番号が採れない場合は C だけを止める。親子キーの値を読めない場合は
     C の辺の解決だけを止める)。同じリストへ混ぜると、要約行の件数が実態より広い宣言になる。
 
@@ -536,7 +556,7 @@ def _resolve_links(
 
 def collect(root: Path) -> CollectResult:
     """Issue ディレクトリを歩き、不変条件 A (完了漏れ) と不変条件 B (配置と status の
-    整合) と不変条件 C (親子リンクの整合) を検査する。
+    整合) と不変条件 C (親子リンクの整合) と不変条件 D (消化せずに閉じた理由) を検査する。
 
     「走査できなかった」(unscanned_notes) に寄せるのは 2 つ: issue.md が読めない
     (エンコーディング不正など) と、コードフェンスが閉じておらず内容を安全に走査できない
@@ -617,6 +637,7 @@ def collect(root: Path) -> CollectResult:
             continue
         # frontmatter の切り出しは 1 回だけ行い、status と親子リンクの両方で使い回す
         front = frontmatter(text)
+        parent_value, children_values = read_links(front)
         if number is not None:
             # 宣言を完全には把握できていない Issue は辺の対称性の検査から外す。欠けている
             # のか読めていないだけなのかを区別できないので、外さないと「読めなかった」が
@@ -631,15 +652,13 @@ def collect(root: Path) -> CollectResult:
                     f"{rel_dir}: {' と '.join(unreadable)} の値を読めなかったので"
                     "親子リンクを解決できなかった"
                 )
-            parent_value, children_values = read_links(front)
             if parent_value is not None:
                 declared.append(_Declared(rel_dir, "parent", parent_value, number))
             for value in children_values:
                 declared.append(_Declared(rel_dir, "children", value, number))
         # 不変条件 B: 配置 (closed/ に居るか) と frontmatter の status が食い違わないこと。
         # フェンスの状態に関わらず frontmatter は先頭にあるので、フェンス走査より前に
-        # status を見る。closed 側もここで検査するので、後続の "is_closed: continue" より
-        # 前に置く
+        # status を見る。closed 側もここで検査するので、フェンス走査より前に置く
         status = read_status(front)
         if status is None:
             unreadable_notes.append(f"{rel_dir}: frontmatter の status が読めなかった")
@@ -653,8 +672,6 @@ def collect(root: Path) -> CollectResult:
                 f"{rel_dir}: status が closed なのに active に居る。"
                 "closed/ へ移していない"
             )
-        if is_closed:
-            continue
         lines, unclosed = _strip_fences_and_comments(text)
         if unclosed:
             # 閉じ忘れは以降の全行を無検査にする。検査対象を安全に走査できないという
@@ -668,6 +685,18 @@ def collect(root: Path) -> CollectResult:
             )
             continue
         has_heading, total, unchecked = _scan_lines_for_tasks(lines)
+        if is_closed:
+            # 不変条件 D: 消化しないまま閉じたなら理由の節を持つこと。frontmatter を
+            # 切り出せない Issue は children を読めず Phase E の免除を判定できないので見ない
+            # (status が読めない注記が既に名乗っている)
+            if (front is not None and not children_values
+                    and not is_completed(has_heading, total, unchecked)
+                    and not any(CLOSE_REASON_HEADING.match(line) for line in lines)):
+                violations.append(
+                    f"{rel_dir}: タスクを消化しないまま closed/ に居るのに「クローズ理由」の"
+                    f"節が無い (箱 {total} 個 / 未チェック {unchecked})。閉じた理由を書く"
+                )
+            continue
         if is_completed(has_heading, total, unchecked):
             violations.append(
                 f"{rel_dir}: タスクが全て消化済みなのに active に居る "
