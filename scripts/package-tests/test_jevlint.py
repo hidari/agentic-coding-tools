@@ -37,6 +37,7 @@ import os
 import shlex
 import shutil
 import signal
+import sys
 import tempfile
 import types
 import unittest
@@ -44,16 +45,19 @@ from pathlib import Path
 from typing import Callable
 from unittest import mock
 
+ROOT = Path(__file__).resolve().parents[2]
+HERE = Path(__file__).resolve().parent
+# 製品 (jevlint*.py) の置き場。テストの置き場 (HERE) と別の名前で持ち、製品を列挙する箇所はこちらだけを見る。
+# 製品は兄弟を素の `import jevlint_*` で読むので、パスで読み込む形では代わりにならず sys.path に足す
+TARGET = ROOT / "skills" / "tooling" / "jev-lint-curated" / "scripts"
+sys.path.insert(0, str(TARGET))
+
 import jevlint
 import jevlint_host
 import jevlint_result
 import jevlint_tree
 from test_jevlint_fs import deny_all_access
 from test_jevlint_tree import GitRepo, production_tmpdir, worktree_count
-
-HERE = Path(__file__).resolve().parent
-# 製品 (jevlint*.py) の置き場。テストの置き場 (HERE) と別の名前で持ち、製品を列挙する箇所はこちらだけを見る
-TARGET = HERE
 
 
 class CuratedTests(unittest.TestCase):

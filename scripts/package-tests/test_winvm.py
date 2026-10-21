@@ -19,6 +19,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+ROOT = Path(__file__).resolve().parents[2]
+# 製品の置き場。テストは配布物に入れないため製品とは別のディレクトリに居るので、import の前に足す
+TARGET = ROOT / "skills" / "devops" / "windows-vm-verification"
+sys.path.insert(0, str(TARGET))
+
 import winvm
 
 # 実機 `prlctl list -a -i -j` の出力から、winvm が読むキーを抜き出したもの。

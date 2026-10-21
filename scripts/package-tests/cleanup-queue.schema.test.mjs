@@ -1,5 +1,5 @@
 // cleanup-queue.schema.json の安全不変条件テスト (zero-dep / node 組み込みのみ)
-//   実行: node --test plugins/security-blue-red-team/schemas/tests/cleanup-queue.schema.test.mjs
+//   実行: node --test scripts/package-tests/*.test.mjs
 //
 // 設計: 完全な JSON Schema バリデータは持ち込まず (local-first / zero-dep)、
 //   schema 文書から「実際に効くべき制約」(seed_id / seed_id_prefix の pattern / required) を読み取り、
@@ -14,7 +14,10 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const schema = JSON.parse(readFileSync(join(here, '..', 'cleanup-queue.schema.json'), 'utf8'))
+// テストは配布物に入れないため scripts/package-tests/ に居る。2 段上がリポジトリの root
+const schema = JSON.parse(
+  readFileSync(join(here, '..', '..', 'plugins', 'security-blue-red-team', 'schemas', 'cleanup-queue.schema.json'), 'utf8'),
+)
 
 const seedIdPattern = schema.properties.items.items.properties.seed_id.pattern
 const seedIdPrefixPattern = schema.properties.metadata.properties.seed_id_prefix.pattern

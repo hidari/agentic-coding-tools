@@ -32,9 +32,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-# 検査スクリプトはこのテストの隣にある。配布先でも同じ位置関係で読めるよう、
-# リポジトリの root からではなくファイルの隣を指す
-CHECKER = Path(__file__).resolve().parent / "check-leak-guard-denylist.py"
+ROOT = Path(__file__).resolve().parents[2]
+# 製品の置き場。テストは配布物に入れないため製品とは別のディレクトリに居る
+TARGET = ROOT / "plugins" / "dev-workflow" / "skills" / "commit-and-pr-message" / "scripts"
+CHECKER = TARGET / "check-leak-guard-denylist.py"
 
 # fixture が tempdir で `git add` を走らせるので、GIT_INDEX_FILE を継承すると書き込み先が
 # その指し先になり、呼び出し元リポジトリの index を fixture の内容で上書きする

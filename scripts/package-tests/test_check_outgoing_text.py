@@ -49,11 +49,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-# 入口・層 2・config はこのテストの隣にある。配布先でも同じ位置関係で読めるよう、
-# リポジトリの root からではなくファイルの隣を指す
-HERE = Path(__file__).resolve().parent
-# 製品の置き場はテストの置き場 (HERE) と別の名前で持つ。出力の非表示が守るのは製品の隣のパス
-TARGET = HERE
+ROOT = Path(__file__).resolve().parents[2]
+# 製品の置き場。出力の非表示が守るのは製品の隣のパスで、このテストの置き場ではない
+TARGET = ROOT / "plugins" / "dev-workflow" / "skills" / "commit-and-pr-message" / "scripts"
 ENTRY = TARGET / "check-outgoing-text.py"
 DENYLIST = TARGET / "check-leak-guard-denylist.py"
 CUSTOM_RULES = TARGET / "leak-guard.gitleaks.toml"
