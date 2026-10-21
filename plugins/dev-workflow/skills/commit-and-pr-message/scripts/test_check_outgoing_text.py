@@ -52,11 +52,13 @@ from unittest import mock
 # 入口・層 2・config はこのテストの隣にある。配布先でも同じ位置関係で読めるよう、
 # リポジトリの root からではなくファイルの隣を指す
 HERE = Path(__file__).resolve().parent
-ENTRY = HERE / "check-outgoing-text.py"
-DENYLIST = HERE / "check-leak-guard-denylist.py"
-CUSTOM_RULES = HERE / "leak-guard.gitleaks.toml"
-DEFAULT_RULES = HERE / "leak-guard-default.gitleaks.toml"
-SKILL_MD = HERE.parent / "SKILL.md"
+# 製品の置き場はテストの置き場 (HERE) と別の名前で持つ。出力の非表示が守るのは製品の隣のパス
+TARGET = HERE
+ENTRY = TARGET / "check-outgoing-text.py"
+DENYLIST = TARGET / "check-leak-guard-denylist.py"
+CUSTOM_RULES = TARGET / "leak-guard.gitleaks.toml"
+DEFAULT_RULES = TARGET / "leak-guard-default.gitleaks.toml"
+SKILL_MD = TARGET.parent / "SKILL.md"
 
 # SKILL.md の表を引く節の見出し。見出しを変えるときはここも変える
 CHECK_SECTION = "### 送る前の検査"
@@ -242,7 +244,7 @@ class Case(unittest.TestCase):
         self.assertEqual(err, "", "stderr に何か出ている")
         parsed = parse_output(out, summary)
         lowered = out.lower()
-        for word in (WORD, WORD2, NAME, UUID, PAT, str(self.dir), str(HERE), "Traceback", *forbidden):
+        for word in (WORD, WORD2, NAME, UUID, PAT, str(self.dir), str(TARGET), "Traceback", *forbidden):
             self.assertNotIn(word.lower(), lowered, f"出力に {word!r} が漏れている")
         return parsed
 

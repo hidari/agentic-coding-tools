@@ -52,6 +52,8 @@ from test_jevlint_fs import deny_all_access
 from test_jevlint_tree import GitRepo, production_tmpdir, worktree_count
 
 HERE = Path(__file__).resolve().parent
+# 製品 (jevlint*.py) の置き場。テストの置き場 (HERE) と別の名前で持ち、製品を列挙する箇所はこちらだけを見る
+TARGET = HERE
 
 
 class CuratedTests(unittest.TestCase):
@@ -1605,9 +1607,12 @@ class Py39SourceTests(unittest.TestCase):
     def test_py39_source(self):
         # future import は先頭の文 (docstring の次) でなければ SyntaxError になり、
         # tomllib は 3.11 からなのでどちらも 3.9 互換性の直接の目印になる
-        paths = sorted(HERE.glob("jevlint*.py")) + sorted(HERE.glob("test_jevlint*.py"))
-        self.assertTrue(paths, "対象の jevlint*.py / test_jevlint*.py が見つからない")
-        for path in paths:
+        # 片側だけが空になっても素通りしないよう、製品とテストを別々に assert する
+        products = sorted(TARGET.glob("jevlint*.py"))
+        tests = sorted(HERE.glob("test_jevlint*.py"))
+        self.assertTrue(products, "対象の jevlint*.py が見つからない")
+        self.assertTrue(tests, "対象の test_jevlint*.py が見つからない")
+        for path in products + tests:
             with self.subTest(path=path.name):
                 tree = ast.parse(path.read_text(encoding="utf-8"), feature_version=(3, 9))
                 first = tree.body[1] if isinstance(tree.body[0], ast.Expr) else tree.body[0]
@@ -1675,7 +1680,7 @@ class PathlibPredicateBan(unittest.TestCase):
     """
 
     def test_no_pathlib_predicates_in_product_modules(self):
-        paths = sorted(HERE.glob("jevlint*.py"))
+        paths = sorted(TARGET.glob("jevlint*.py"))
         self.assertTrue(paths, "対象の jevlint*.py が見つからない")
         violations = []
         for path in paths:
