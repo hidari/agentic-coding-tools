@@ -39,7 +39,7 @@ CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 HASH = "#"
 
 # 実行環境の global / system 設定を読ませない。同じ理由と形を
-# plugins/dev-workflow/skills/in-repo-issue/scripts/test_issue_id.py が持つ。
+# scripts/package-tests/test_issue_id.py が持つ。
 # この検査に固有の事情がもう 1 つあり、global の core.excludesfile が `*.md` を ignore して
 # いると `git ls-files` の走査集合だけが縮む。実在判定はファイルシステムを見るので縮まず、
 # 「違反 0 件」を主張するテストが小さくなった標本で通る (実測)

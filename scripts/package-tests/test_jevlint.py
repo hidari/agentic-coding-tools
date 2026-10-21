@@ -23,8 +23,8 @@ CURATED の件数・言語ごとの内訳は spec (`ISSUE-65-spec.md` の「厳�
 parse_threshold / parse_version / parse_args の異常系は、値そのものではなく「境界のどちら側で
 拒否するか」を見るために 0・1・NaN のような際どい値を混ぜてある。
 
-Python 3.9 構文の検査 (test_py39_source) は、このディレクトリの jevlint*.py と
-test_jevlint*.py の両方 (このファイル自身を含む) を対象にする。
+Python 3.9 構文の検査 (test_py39_source) は、製品の置き場の jevlint*.py と、このディレクトリの
+test_jevlint*.py (このファイル自身を含む) の両方を対象にする。
 """
 
 from __future__ import annotations

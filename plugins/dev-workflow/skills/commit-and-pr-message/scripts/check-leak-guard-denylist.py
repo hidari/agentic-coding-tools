@@ -250,8 +250,9 @@ def fold(text: str) -> str:
     吸収しないもの: ダッシュの異体 (U+2010/2013/2014/2212/30FC は NFKC が畳まない)、
     ラテンのアクセント (José/Jose)、ローマ字とかなの表記揺れ、行を跨いだ語、意図的な
     難読化。綴りの異体は書き手がリストへ列挙する側に置く。畳み表を手で持つと表 1 つごとに
-    pin が要るうえ、'ー' はかな文字なので畳むとかな側と衝突する。この線引きは
-    test_check_leak_guard_denylist.py の Fold が両側から挟んで pin している。
+    pin が要るうえ、'ー' はかな文字なので畳むとかな側と衝突する。この線引きは配布元の
+    scripts/package-tests/test_check_leak_guard_denylist.py (配布物には入らない) の Fold が
+    両側から挟んで pin している。
     """
     s = unicodedata.normalize("NFKC", text)
     s = "".join(c for c in s if unicodedata.category(c) != "Cf")

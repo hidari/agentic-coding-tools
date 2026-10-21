@@ -5,7 +5,7 @@
 層 2 を subprocess で呼ぶ入口 (check-outgoing-text.py) に取り付けは無く、CI から呼ばないことの
 負の pin だけを Attachment が層 2 と一緒に持つ。
 
-機構そのもののテストは検査スクリプトの隣にある。あちらが全部緑でも、pre-commit から
+機構そのもののテストは scripts/package-tests/ にある。あちらが全部緑でも、pre-commit から
 呼ばれていなければ一度も走らない。commit-msg stage は特に、配線 1 行で黙って skip に
 なる形を複数持つ。層 1 の対照 (scripts/check-leak-guard-rules.py) も同じで、config が
 正しくても pre-commit と CI が別の形で呼べば、その呼び出しの結果は対照と一致しない。
