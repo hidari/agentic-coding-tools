@@ -743,6 +743,20 @@ class InvariantD(FixtureCase):
         self.assertEqual(rc, 1)
         self.assertIn("closed/ISSUE-1_parent", err)
 
+    def test_an_unreadable_children_value_is_not_judged(self):
+        """children の値を読めない Issue は免除を判定できないので、違反ではなく注記に留める。
+
+        読めないことを「children が無い」と読むと、Phase E で閉じた親かもしれない Issue に
+        理由を要求する。「読めなかった」が「規約違反」を名乗る形で、C が辺の判定で避けている
+        ものと同じ。
+        """
+        rc, out, err = self._run(lambda fx: fx.add_issue(
+            "closed/ISSUE-1_probe",
+            issue_md("closed", ["- [ ] 未"], frontmatter=("children:", "  - ISSUE-2"))))
+        self.assertEqual(rc, 0, err)
+        self.assertIn("値を読めない 1 個", out)
+        self.assertNotIn("クローズ理由", err)
+
 
 class Population(FixtureCase):
     """どの Issue ディレクトリが母集団に入るか。

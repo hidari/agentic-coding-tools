@@ -66,7 +66,8 @@ Phase G が散文で持つ規約を検査へ落としたもの。消化の判定
   まま消化せずに閉じた親も素通りする。その形は「親が closed で子が active」になりうるが、
   そこは C の限界に書いた逆向きの不整合で、ISSUE-45 の射程
 - 見るのは見出しの有無だけで、節の中身と位置は見ない
-- frontmatter を切り出せない Issue は children を読めず免除を判定できないので見ない
+- frontmatter を切り出せない Issue と、親子キーの値を読めない Issue は、children を把握
+  できず免除を判定できないので見ない
 """
 from __future__ import annotations
 
@@ -638,12 +639,12 @@ def collect(root: Path) -> CollectResult:
         # frontmatter の切り出しは 1 回だけ行い、status と親子リンクの両方で使い回す
         front = frontmatter(text)
         parent_value, children_values = read_links(front)
+        unreadable = unreadable_link_keys(front)
         if number is not None:
             # 宣言を完全には把握できていない Issue は辺の対称性の検査から外す。欠けている
             # のか読めていないだけなのかを区別できないので、外さないと「読めなかった」が
             # 「規約違反」を名乗る。frontmatter ごと切り出せない形と、キー行はあるのに値を
             # 読めない形の両方が同じ扱いになる
-            unreadable = unreadable_link_keys(front)
             if front is None:
                 unread.add(number)
             elif unreadable:
@@ -687,9 +688,9 @@ def collect(root: Path) -> CollectResult:
         has_heading, total, unchecked = _scan_lines_for_tasks(lines)
         if is_closed:
             # 不変条件 D: 消化しないまま閉じたなら理由の節を持つこと。frontmatter を
-            # 切り出せない Issue は children を読めず Phase E の免除を判定できないので見ない
-            # (status が読めない注記が既に名乗っている)
-            if (front is not None and not children_values
+            # 切り出せない Issue と親子キーの値を読めない Issue は children を把握できず
+            # Phase E の免除を判定できないので見ない (どちらも注記が既に名乗っている)
+            if (front is not None and not unreadable and not children_values
                     and not is_completed(has_heading, total, unchecked)
                     and not any(CLOSE_REASON_HEADING.match(line) for line in lines)):
                 violations.append(
