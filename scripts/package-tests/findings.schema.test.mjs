@@ -1,5 +1,5 @@
 // findings.schema.json の出力契約テスト (zero-dep / node 組み込みのみ)
-//   実行: node --test plugins/web-monkey-qa/schemas/tests/findings.schema.test.mjs
+//   実行: node --test scripts/package-tests/*.test.mjs
 //
 // 設計: 完全な JSON Schema バリデータは持ち込まず (local-first / zero-dep)、
 //   schema 文書から「実際に効くべき制約」を読み取り、現実的な findings payload に適用する。
@@ -13,7 +13,10 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const schema = JSON.parse(readFileSync(join(here, '..', 'findings.schema.json'), 'utf8'));
+// テストは配布物に入れないため scripts/package-tests/ に居る。2 段上がリポジトリの root
+const schema = JSON.parse(
+  readFileSync(join(here, '..', '..', 'plugins', 'web-monkey-qa', 'schemas', 'findings.schema.json'), 'utf8'),
+);
 
 const topRequired = schema.required ?? [];
 const findingSchema = schema.properties.findings.items;

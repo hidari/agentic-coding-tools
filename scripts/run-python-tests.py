@@ -14,8 +14,9 @@ canonical (テストソース) の再掲になって drift し、下限を割ら
 同じ構図)。赤の run では更新を拒否する。壊れた収集や skip を baseline へ
 焼き込ませないため。
 
-テストは検証対象モジュールと同じディレクトリに置かれ、そこを import path として
-起動する必要があるので、ファイルごとに cwd を切り替えて実行する。
+テストはモジュール名 (ファイルの stem) で読み込み、テストどうしも素の import で helper を
+借りる (例: jevlint のテストが test_jevlint_fs を読む)。どちらもテストの置き場を import path
+として起動する必要があるので、ファイルごとに cwd を切り替えて実行する。
 
 skip と expectedFailure は manifest では捕まらないので実行側で別途赤にする。
 skip されたテストも suite (= 列挙) に載り、expectedFailure は wasSuccessful() が
@@ -54,11 +55,12 @@ ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_NAME = "python-tests-manifest.txt"
 UPDATE_CMD = "python3 scripts/run-python-tests.py --update-manifest"
 
-# check-package-shape.py の集合に `.cache` を足したもの。rglob はドット始まりの
-# ディレクトリも node_modules も辿るので (実測)、除外しないと skill が持つ venv の
-# site-packages のテストまで収集して実行する。`.cache` は隔離実験やスクラッチの
-# ツリーが置かれる場所で、実リポの rglob が拾う test_*.py の大半はここに当たる。
+# rglob はドット始まりのディレクトリも node_modules も辿るので (実測)、除外しないと
+# skill が持つ venv の site-packages のテストまで収集して実行する。`.cache` は隔離実験や
+# スクラッチのツリーが置かれる場所で、実リポの rglob が拾う test_*.py の大半はここに当たる。
 # 収集すると実験のコピーが本物の検査を汚す。
+# check-package-shape.py の規約 8 は、この集合と discover を借りてパッケージの中のテストを
+# 数える。ここを変えると規約 8 の判定も一緒に変わる。
 SKIP_DIRS = {".git", ".venv", ".cache", "node_modules", "__pycache__"}
 
 # 先頭に再生成コマンドを書くのは、利用者が文面から原因へ辿り着けるようにするため
@@ -122,8 +124,9 @@ def child_env(pycache: Path) -> dict[str, str]:
     作って git を呼ぶテストの読み書き先が呼び出し元の index へ向く (実測: この形で
     2 ファイルが落ち、コミットが成立しなくなった)。
 
-    各テストファイルも自前で同じ消毒を持つ。配布される skill のテストは runner の
-    無い環境へ配られるので、こちらだけでは配布物を守れない。逆にこの層だけが、
+    git を呼ぶテストファイルは自前でも同じ消毒を持つ。runner を介さずに単体で起動した
+    とき (開発時の `python3 -m unittest` や、git hook から継承した環境) はこの層が無く、
+    プロセス内で製品を呼ぶ経路は起動元の環境をそのまま使うため。逆にこの層だけが、
     まだ書かれていないテストファイルを取り付け無しで覆う。射程が違うので両方置く。
 
     個別の変数名を並べないのは、git が変数を増やしたとき列挙だけが古びるため。

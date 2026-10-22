@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """issue-id.py の取り付けを pin する。検査機構ではなく「呼ばれていること」を見る。
 
-検査機構そのもののテストは skill 側の test_issue_id.py が持つ。あちらが緑でも
+検査機構そのもののテストは scripts/package-tests/test_issue_id.py が持つ。あちらが緑でも
 pre-commit と CI から呼ばれていなければ一度も走らないので、取り付けは別に pin する。
 
 先例は scripts/test_run_python_tests.py の Attachment。あちらは run-python-tests.py の

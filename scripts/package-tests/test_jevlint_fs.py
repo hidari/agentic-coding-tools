@@ -11,9 +11,15 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+# 製品の置き場。製品は兄弟を素の `import jevlint_*` で読むので、パスで読み込む形では代わりにならず sys.path に足す
+TARGET = ROOT / "skills" / "tooling" / "jev-lint-curated" / "scripts"
+sys.path.insert(0, str(TARGET))
 
 import jevlint_fs
 

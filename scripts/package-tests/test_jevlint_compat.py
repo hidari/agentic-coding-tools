@@ -12,7 +12,14 @@ compat の比較は、上流の `rules --json` を読んだ 2 つの表 (pin し
 from __future__ import annotations
 
 import json
+import sys
 import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+# 製品の置き場。製品は兄弟を素の `import jevlint_*` で読むので、パスで読み込む形では代わりにならず sys.path に足す
+TARGET = ROOT / "skills" / "tooling" / "jev-lint-curated" / "scripts"
+sys.path.insert(0, str(TARGET))
 
 import jevlint_compat
 from jevlint_compat import CompatReport, RuleInfo

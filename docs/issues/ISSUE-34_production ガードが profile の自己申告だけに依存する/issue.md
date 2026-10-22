@@ -79,7 +79,8 @@ monkey 側は材料そのものが schema に存在しない。
 - [ ] profile の schema 適合検証を配布側の責任範囲に置けるか検討する。
       現状は消費側が自作するしかなく、作った消費側でも自動経路へ配線されていない
 - [ ] schema のテストを走らせる経路を作る。テストは 2 本存在するが、
-      pre-commit にも CI にも実行系の言及が 0 件で一度も走っていない
+      pre-commit にも CI にも実行系の言及が 0 件で一度も走っていない。
+      追記 (2026-10-21): ISSUE-76 でテストは配布物の外 (`scripts/package-tests/`) へ移った。`node --test scripts/package-tests/*.test.mjs` で 17 件が通る (手で回した値)。経路は未だ無い
 - [ ] `commands/security-redteam.md` が埋め込む parse 断片を、実行環境に PyYAML が無くても
       成立する形にする。monkey 側は PR #30 で対応済み
 

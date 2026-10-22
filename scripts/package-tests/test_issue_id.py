@@ -26,11 +26,15 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
+ROOT = Path(__file__).resolve().parents[2]
+# テストの置き場。自分を子プロセスで起動し直すときの cwd に使う
 HERE = Path(__file__).resolve().parent
+# 製品の置き場。テストは配布物に入れないため製品とは別のディレクトリに居る
+TARGET = ROOT / "plugins" / "dev-workflow" / "skills" / "in-repo-issue" / "scripts"
 
 # ハイフン名のスクリプトは import 文では読めないため importlib で読む
 # (scripts/test_run_python_tests.py と同じ定型)
-spec = importlib.util.spec_from_file_location("issue_id", HERE / "issue-id.py")
+spec = importlib.util.spec_from_file_location("issue_id", TARGET / "issue-id.py")
 assert spec is not None and spec.loader is not None
 issue_id = importlib.util.module_from_spec(spec)
 sys.modules["issue_id"] = issue_id

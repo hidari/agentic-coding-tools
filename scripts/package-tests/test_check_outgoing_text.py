@@ -24,7 +24,7 @@ Traceback と、パスのうちこのテスト自身の一時ディレクトリ 
 写しの config は元の本文への文字列置換で作り、置換が 1 回起きたことを assert する。起きて
 いないとテストが対象を壊していない dead pin になる。
 
-SkillTable は、隣の SKILL.md の「送る前の検査」節にある (終了コード, result) ごとの行動の表と、
+SkillTable は、入口を持つ skill の SKILL.md の「送る前の検査」節にある (終了コード, result) ごとの行動の表と、
 入口の定数の一致を見る。行動の canonical は SKILL.md、値の canonical は入口で、片方だけが
 動くと手順は存在しない組を読むか、ある組の行動を持たなくなる。表がどの組にも当たらない
 結果を受ける「上記以外」の行を 1 本持つことも見る。
@@ -49,14 +49,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-# 入口・層 2・config はこのテストの隣にある。配布先でも同じ位置関係で読めるよう、
-# リポジトリの root からではなくファイルの隣を指す
-HERE = Path(__file__).resolve().parent
-ENTRY = HERE / "check-outgoing-text.py"
-DENYLIST = HERE / "check-leak-guard-denylist.py"
-CUSTOM_RULES = HERE / "leak-guard.gitleaks.toml"
-DEFAULT_RULES = HERE / "leak-guard-default.gitleaks.toml"
-SKILL_MD = HERE.parent / "SKILL.md"
+ROOT = Path(__file__).resolve().parents[2]
+# 製品の置き場。出力の非表示が守るのは製品の隣のパスで、このテストの置き場ではない
+TARGET = ROOT / "plugins" / "dev-workflow" / "skills" / "commit-and-pr-message" / "scripts"
+ENTRY = TARGET / "check-outgoing-text.py"
+DENYLIST = TARGET / "check-leak-guard-denylist.py"
+CUSTOM_RULES = TARGET / "leak-guard.gitleaks.toml"
+DEFAULT_RULES = TARGET / "leak-guard-default.gitleaks.toml"
+SKILL_MD = TARGET.parent / "SKILL.md"
 
 # SKILL.md の表を引く節の見出し。見出しを変えるときはここも変える
 CHECK_SECTION = "### 送る前の検査"
@@ -242,7 +242,7 @@ class Case(unittest.TestCase):
         self.assertEqual(err, "", "stderr に何か出ている")
         parsed = parse_output(out, summary)
         lowered = out.lower()
-        for word in (WORD, WORD2, NAME, UUID, PAT, str(self.dir), str(HERE), "Traceback", *forbidden):
+        for word in (WORD, WORD2, NAME, UUID, PAT, str(self.dir), str(TARGET), "Traceback", *forbidden):
             self.assertNotIn(word.lower(), lowered, f"出力に {word!r} が漏れている")
         return parsed
 
