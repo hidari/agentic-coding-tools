@@ -94,7 +94,7 @@ docstring と SKILL.md 側の宣言から判定する。載せてよい条件も
 
 - 報告 (実測): 既に in-repo Issue を運用している配布先へ、pre-commit stage に `--check-diff`、commit-msg stage に `--check-text`、CI に `--check-diff --base origin/main` を取り付けた。既存の違反を残したまま新しく入る違反だけを止められ、staged に違反を仕込んだ対照は rc=1、本物の変更は rc=0、commit-msg も対照で赤・正常で緑だった。取り付けの前の `--check` の全走査では、旧形式のディレクトリ名・他のリポジトリの Issue を裸の数字で書いたメモ・自リポジトリの古い記法・偽陽性の 4 種で 57 件あった
 - 報告 (実測): 「初期化」節は新規プロジェクト向けで、既存の Issue を抱えたまま後から取り付ける経路 (`--check-diff` を使い、`--check` はまだ赤い) が節の中に無い。`issue-id.py` の docstring には書いてあるので、読めば辿り着ける。報告者の提案 (ドキュメントのみ): 増分の入口を使うことと、`--check` を backstop にする時期をどう決めるかを初期化の節に足す
-- 報告: `--check-diff --base main` はコミット済みの差分しか見ず、作業ツリーを数えない。使い方の罠として SKILL.md に書くかを決める。`issue-id.py` の CLI 自体の変更 (接頭辞と走査の除外を外から渡す) は dotfiles の ISSUE-121 が扱っており、ここで扱うのは SKILL.md の記述だけ
+- 報告: `--check-diff --base main` はコミット済みの差分しか見ず、作業ツリーを数えない。この罠を SKILL.md に書くかの判断は、dotfiles の ISSUE-121 のタスク「報告された使い方の罠を SKILL.md に書くか決める」が既に持っている。書くと決まったときに載る先が、層 2 で書く配線手順になる
 - 報告 (実測): 本リポジトリの `.pre-commit-config.yaml` のコメントにある「commit-msg の hook は `always_run: true` が無いと常に skip される」が再現しなかった。pre-commit 4.7.0 の使い捨てのリポジトリで、本物の git commit で `always_run` の有無を比べたら、どちらでも hook が走ってコミットを止めた。報告者の提案: 版を添えて測り直す
 
 最後の項は、コメントの側の主張が条件付きであることに注意する。コメントは「ファイル名やファイル型で絞る指定があると、渡るファイルが message ファイル 1 本しかないので集合が空になる」ことを理由にしており、絞り込みが無い構成とは比べている条件が違う。報告に絞り込みの有無は書かれていない。SKILL.md の「初期化」節はこの設定ファイルを取り付けの実例として名指しするので、配布先が写すコメントでもある。
@@ -106,7 +106,7 @@ docstring と SKILL.md 側の宣言から判定する。載せてよい条件も
 - [x] 層 1: `--check-diff` を実装する。spec のテスト方針表の全項目を pin する
 - [ ] 層 2: SKILL.md へ加入判定と配線手順を書く。hook block は固定テンプレートにする
   - 既存の Issue を抱えた配布先へ後から取り付ける経路 (`--check-diff` を使い、`--check` を backstop にする時期の決め方) を含める
-  - `--check-diff` がコミット済みの差分だけを見ることを使い方の罠として書くかを決める
+  - dotfiles の ISSUE-121 で `--check-diff` の使い方の罠を書くと決まったら、配線手順に含める
 - [ ] `.pre-commit-config.yaml` の commit-msg の hook の `always_run` のコメントを、pre-commit の版と絞り込みの有無を揃えて測り直し、版を添えて書き直す
 - [ ] 層 4: template の写しを置く要求を SKILL.md から外す
 - [ ] 層 3 (dotfiles の ISSUE-53) の完成後、規模の小さい配布先から実地で取り付けを通す

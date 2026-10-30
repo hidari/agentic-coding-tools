@@ -6,7 +6,7 @@ status: open
 
 ## 背景
 
-出所は dotfiles の ISSUE-132 (受け箱に届いた skill の改善提案) の「pre-merge-quality-gate: ゲートの順序、増分、CI の待ち方」節の最初の 3 項目。どれも別のリポジトリのセッションの申告で、本リポジトリでも dotfiles でも再現していない。同じ節の 4 項目め (simplify の Efficiency 観点の判断の軸) と「simplify: 並列の reviewer を読み取り専用にする」節は、dotfiles 側で確かめてから渡されるのでここには含めない。
+出所は dotfiles の ISSUE-132 (受け箱に届いた skill の改善提案) の「pre-merge-quality-gate: ゲートの順序、増分、CI の待ち方」節の最初の 3 項目。どれも別のリポジトリのセッションの申告で、本リポジトリでも dotfiles でも再現していない。同じ節の 4 項目め (simplify の Efficiency 観点の判断の軸) と「simplify: 並列の reviewer を読み取り専用にする」節は、dotfiles 側で確かめてから渡すかを決めるので、ここには含めない。
 
 `dev-workflow:pre-merge-quality-gate` は、前のゲートが見た commit と HEAD の差を扱う手順を持たない。CI を待つ手順は `gh pr checks <num> --watch` を名指ししている (Phase 3 のクローズ同梱の項)。
 
