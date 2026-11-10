@@ -322,6 +322,49 @@ class NextIdentifier(unittest.TestCase):
         self.assertIn(f"docs/issues/{PREFIX}8_あちらの課題", err)
         self.assertIn("refs/heads/topic", err)
 
+    def test_unrecognized_directory_stops_numbering(self):
+        # 採番が数える形 (接頭辞の有無を問わない <N>_) に当たらない名前を黙って飛ばすと、
+        # 番号を持つ 2-b があっても ISSUE-2 を rc 0 で再発行する (実測)。番号を持たない名前も
+        # 同じく止める。どの番号を持つ Issue かを採番の側では判定できないため
+        for name in ("2-b", "3", "foo", f"closed/{PREFIX}2-b"):
+            with self.subTest(name=name), TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                init_repo(root, (f"{PREFIX}1_最初の課題", name))
+                rc, out, err = run(["--next", "--root", str(root)])
+                self.assertEqual(rc, 1)
+                # 識別子を出さないこと。出すと呼び出し側が既存と衝突する識別子で起票を続ける
+                self.assertEqual(out, "")
+                self.assertIn(f"docs/issues/{name}", err)
+                self.assertIn("現ツリー", err)
+
+    def test_unrecognized_directory_in_other_ref_stops_numbering(self):
+        # 番号の重複と同じく全 ref を見る。現ツリーに無ければ ref 経路を通らないと赤くならない
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            git(root, "checkout", "-q", "-b", "topic")
+            write(root, "docs/issues/2-b/issue.md")
+            commit(root, "unrecognized")
+            git(root, "checkout", "-q", "main")
+            leftover = (root / "docs" / "issues" / "2-b").exists()
+            rc, out, err = run(["--next", "--root", str(root)])
+        self.assertFalse(leftover, "checkout 後に 2-b が現ツリーへ残っている")
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn("refs/heads/topic: docs/issues/2-b", err)
+
+    def test_templates_and_loose_files_do_not_stop_numbering(self):
+        # 止める側の対照。templates/ と docs/issues 直下のファイルは Issue ディレクトリではない
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題", "templates"))
+            write(root, "docs/issues/README.md")
+            write(root, "docs/issues/closed/README.md")
+            commit(root, "loose files")
+            rc, out, err = run(["--next", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out, f"{PREFIX}2\n")
+
 
 class ScanText(unittest.TestCase):
     def flags(self, text: str, label: str = "probe.md") -> list[str]:

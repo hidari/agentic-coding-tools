@@ -505,14 +505,26 @@ def _identity(name: str) -> str:
     return name[len(PREFIX) :] if name.startswith(PREFIX) else name
 
 
-def collect_numbers(root: Path) -> dict[int, dict[str, set[str]]]:
-    """番号 -> 同一性キー -> 出所の集合。現ツリーと全 ref を混ぜて集める。"""
+class Numbering(NamedTuple):
+    """--next が現ツリーと全 ref から集めたもの。"""
+
+    # 番号 -> 同一性キー -> 出所の集合
+    found: dict[int, dict[str, set[str]]]
+    # ANY_ISSUE_DIR に当たらないディレクトリの出所。番号を読めないので found に入れられない
+    unrecognized: set[str]
+
+
+def collect_numbers(root: Path) -> Numbering:
+    """現ツリーと全 ref を混ぜて Issue ディレクトリの番号を集める。"""
     found: dict[int, dict[str, set[str]]] = {}
+    unrecognized: set[str] = set()
 
     def record(name: str, where: str) -> None:
         m = ANY_ISSUE_DIR.match(name)
         if m:
             found.setdefault(int(m.group(1)), {}).setdefault(_identity(name), set()).add(where)
+        else:
+            unrecognized.add(where)
 
     for rel, name in issue_dirs(root):
         record(name, f"現ツリー: {rel}")
@@ -521,7 +533,7 @@ def collect_numbers(root: Path) -> dict[int, dict[str, set[str]]]:
             got = issue_dir_of(path)
             if got:
                 record(got[0], f"{ref}: {got[1]}")
-    return found
+    return Numbering(found, unrecognized)
 
 
 def _duplicates(found: dict[int, dict[str, set[str]]]) -> list[str]:
@@ -559,8 +571,16 @@ def _finish(violations: list[str], summary: str) -> int:
 
 
 def run_next(root: Path) -> int:
-    found = collect_numbers(root)
+    found, unrecognized = collect_numbers(root)
     violations = _duplicates(found)
+    # 数えられない名前を黙って飛ばすと、2-b のように番号を持つディレクトリがあっても同じ番号を
+    # rc 0 で再発行する (実測)。旧形式の <N>_ は数えられるので止めない (ISSUE_DIR で判定すると
+    # 移行前のリポジトリで採番が全部止まる)
+    violations.extend(
+        "採番が数えられない Issue ディレクトリ"
+        f" ({PREFIX}<N>_<title> か <N>_<title> の形にする): {where}"
+        for where in sorted(unrecognized)
+    )
     if violations:
         _report(violations)
         return 1
