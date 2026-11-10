@@ -105,3 +105,5 @@ single message」とある (実測)。
   本 Issue は Phase 1 節の記述が実態より狭い側。直す箇所も機序も重ならない
 - ISSUE-36: skill と plugin が消費側へ要求する取り付けを棚卸しする。
   skill の宣言と実態の食い違いを扱う点で近い
+- ISSUE-102: Phase 1 の code-reviewer が Bash を持たないのに git diff を取らせる。同じ項目を触る
+- ISSUE-103: レビューに観点ごとの反証役を足す提案。採ると Phase 1 の起動数が変わる
