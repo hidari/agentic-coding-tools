@@ -13,6 +13,12 @@ status: open
 - 報告 (実測): 指示どおりに起動すると、reviewer は `git diff` を実行できない。diff をファイルへ書き出して Read させる形が要る
 - 本リポジトリでの確認: 2026-11-10 のセッションで Agent ツールが示す agent 型の一覧では、`feature-dev:code-reviewer` の道具は Glob / Grep / LS / Read / NotebookRead / WebFetch / TodoWrite / WebSearch / KillShell / BashOutput で、Bash を含まない。起動して挙動を見たわけではない
 
+追記 (2026-11-10、dotfiles のセッションから追加で受けた報告): 別のリポジトリ 2 つから同じ報告が届いた。
+
+- 報告 (実測): 差分を書いた diff ファイルのパスを code-reviewer に渡しても読めなかった。置き場は git-ignore されたディレクトリ (`.cache/`) の下だった。2 回とも作業ツリーの一部を Read と Grep で読むだけになり、報告は「部分的なレビュー」と自己申告で返ったので見落としに気づけた。報告者の提案: (a) か (b) のどちらでも、実際に何を何件読んだかを報告させる
+- 報告 (提案): diff を prompt に埋め込む形も候補
+- dotfiles 側には「diff はファイルへ書き出して Read させる」で通った記録がある。読めなかった原因が置き場の違いか、検索ツールの ignore の扱いかは切り分けていない。(a) を採るなら、ignore 配下のファイルが code-reviewer から読めるかを先に確かめる
+
 Bash が無い reviewer は、取れない diff の代わりに変更ファイルの全文を Read して読むことがある。そうなると削除された行は見えないので、「消した内容が正しいか」という観点が黙って落ちる。
 
 ## タスク
