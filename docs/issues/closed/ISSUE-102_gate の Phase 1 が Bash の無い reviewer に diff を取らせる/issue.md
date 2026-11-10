@@ -1,5 +1,5 @@
 ---
-status: open
+status: closed
 ---
 
 # fix: gate の Phase 1 が Bash の無い reviewer に diff を取らせる
@@ -21,11 +21,30 @@ status: open
 
 Bash が無い reviewer は、取れない diff の代わりに変更ファイルの全文を Read して読むことがある。そうなると削除された行は見えないので、「消した内容が正しいか」という観点が黙って落ちる。
 
+## 決定 (2026-11-10)
+
+(b) を採った。Hidari の裁定で ISSUE-103 とまとめ、コードレビューのレーンを `general-purpose` にした。Phase 1 の `Agent` tool で起動するレーンと反証役には、何を何件読んだかを報告させる。プロジェクトの CLAUDE.md が `feature-dev:code-reviewer` を指定しているときに限り、(a) の形 (差分を書いたファイルの絶対パスを渡す) を残した。
+
+### 実測 (2026-11-10)
+
+ignore された `.cache/` の下に差分 (75 行、先頭が `+` の行 50) を書き、2 つの agent 型に同じ問いを出して自己申告させた。
+
+| 項目 | `feature-dev:code-reviewer` | `general-purpose` |
+|---|---|---|
+| 持っている道具 | Read / Glob / Grep / WebFetch / WebSearch / TaskStop ほか。Bash は無い | Bash / Read / Edit / Write / Agent / Skill ほか。Glob と Grep は無い |
+| `git diff main..HEAD` | 実行できない | 75 行 / 50 行 |
+| 差分のファイルを絶対パスで Read | 75 行 / 50 行 | 75 行 / 50 行 |
+| 同じファイルを Grep / Glob | どちらもヒット | 道具が無い |
+
+報告にあった「ignore 配下のファイルが code-reviewer から読めなかった」は、絶対パスで渡す形では再現しなかった。渡し方 (相対パスか、検索経由で探させたか) の違いかもしれないが、切り分けていない。SKILL.md には、指定されたときは読めた行数を報告させて突き合わせる形で書いた。
+
+Phase 1 の他の項目も見た。`simplify` は親が `Skill` tool で起動するので、起動先の道具の問題は起きない。boy-scout sweep と PUBLIC 漏洩スイープと反証役は `general-purpose` で、prompt は Read と Bash で足りる指示だけを持ち、Glob と Grep を前提にしていない。
+
 ## タスク
 
-- [ ] 手当ての形を決める。候補は 2 つ: (a) 親が diff をファイルへ書き出し、そのパスを prompt で渡して Read させる (b) diff を見る観点だけ Bash を持つ agent 型 (general-purpose) へ移す。(a) は書き出し先を配布先でどこに置くかも決める (本リポジトリの `.cache/` の規約は配布先の規約ではない)
-- [ ] 変更前と変更後で reviewer に diff が実際に届くかを、agent に受け取った道具と読めた diff の範囲を自己申告させて確かめる。変更前を対照に並べる
-- [ ] Phase 1 の他の項目 (simplify への args、boy-scout sweep の prompt) にも、起動先が持たない道具を前提にした指示が無いかを見る
+- [x] 手当ての形を決める。候補は 2 つ: (a) 親が diff をファイルへ書き出し、そのパスを prompt で渡して Read させる (b) diff を見る観点だけ Bash を持つ agent 型 (general-purpose) へ移す。(a) は書き出し先を配布先でどこに置くかも決める (本リポジトリの `.cache/` の規約は配布先の規約ではない)
+- [x] 変更前と変更後で reviewer に diff が実際に届くかを、agent に受け取った道具と読めた diff の範囲を自己申告させて確かめる。変更前を対照に並べる
+- [x] Phase 1 の他の項目 (simplify への args、boy-scout sweep の prompt) にも、起動先が持たない道具を前提にした指示が無いかを見る
 
 ## 関連
 

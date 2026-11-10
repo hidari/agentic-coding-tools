@@ -46,18 +46,25 @@ Issue のクローズをこの PR へ同梱するかの判定に要る事実 (ma
 
 ### Phase 1: 並列でレビュー実行
 
-simplify / code-reviewer / boy-scout-sweep / dev-workflow:e2e-scenario-impact-check / PUBLIC 漏洩スイープ は独立しているので **同じメッセージ内で並列に launch する**。最後の 1 つはリポジトリが PUBLIC のときだけ起動するので、体数は 4 か 5 になる。
+simplify / コードレビュー / boy-scout-sweep / dev-workflow:e2e-scenario-impact-check / PUBLIC 漏洩スイープ は独立しているので **同じメッセージ内で並列に launch する**。最後の 1 つはリポジトリが PUBLIC のときだけ起動する。`Agent` tool で起動するレーン (コードレビュー、boy-scout-sweep、PUBLIC 漏洩スイープ) は、指摘を返したら 6 の反証役を 1 体ずつ付ける。
+
+起動する agent の総数は、`Agent` tool で起動するレーンの数と、それに付く反証役の数と、`Skill` tool で起動するレーンが内部で起動する数 (`simplify` と e2e skill がそれぞれ持つ) の和になる。レーンの数は agent の総数ではない。反証役はレーン 1 本に 1 体までなので、`Agent` tool で起動する側はレーンの数の 2 倍を超えない。起動数に上限を設けている運用では、launch の前にこの和を見積もる。
+
+`Agent` tool で起動するレーンと反証役には、何を何件読んだか (ファイル数と行数、読めなかった範囲) を報告に書かせる。「指摘 0 件」が全部を読んだ結果なのか、一部しか読めなかった結果なのかは、報告がこれを持たないと区別できない (実測: 差分を取れなかった reviewer が作業ツリーの一部だけを読み、「部分的なレビュー」と自己申告したので見落としに気づけた)。
 
 1. **`Skill` tool で `simplify` を起動**
    - args: 変更概要 + 変更ファイルのリスト
    - 変更ファイルは `git diff <base>..HEAD --name-only` で抽出
    - `simplify` 自体が reuse / simplification / efficiency / altitude の 4 並列内部実行を行う
 
-2. **`Agent` tool で `feature-dev:code-reviewer` を起動** (subagent_type=feature-dev:code-reviewer)
-   - prompt: 変更概要 + 全 diff の取得方法 (`git diff <base>..HEAD`) + レビュー観点 (CLAUDE.md 由来: バグ / セキュリティ / a11y / 関数型 / DRY / テスト網羅性) + 「confidence-based filtering で本当に修正したい指摘のみ返してほしい」
+2. **`Agent` tool で `general-purpose` を起動 (コードレビュー)**
+   - prompt: 変更概要 + 「`git diff <base>..HEAD` を自分で取って全部読む」 + レビュー観点 (CLAUDE.md 由来: バグ / セキュリティ / a11y / 関数型 / DRY / テスト網羅性) + 「confidence-based filtering で本当に修正したい指摘のみ返してほしい」
+   - `feature-dev:code-reviewer` を使わないのは、この agent 型が Bash を持たず `git diff` を実行できないため (実測)。差分を取れない reviewer は変更ファイルの全文を読む方へ乗り換えることがあり、削除された行は差分にしか無いので「消した内容が正しいか」が黙って落ちる
+   - プロジェクトの CLAUDE.md が `feature-dev:code-reviewer` を指定しているときは、親が差分をファイルへ書き出し、その絶対パスを prompt で渡して Read させる。ignore されたディレクトリの下のファイルも、絶対パスなら Read で読めた (実測)。それでも読めなかったという報告が別の環境からあり、原因は切り分けていないので、読めた行数を報告させて突き合わせる
 
 3. **`Agent` tool で `general-purpose` を起動 (Boy Scout Sweep)**
    - prompt: 「**触ったファイル** (今回 PR で diff のあるファイル) を読み、CLAUDE.md ボーイスカウトルールに該当する箇所のみ抽出。
+     - 触ったファイルは差分の周辺だけでなく全部を通して読む。読めなかった範囲 (大きすぎた、読み込みが途中で切れた) があれば、ファイルと行の範囲を報告に書く
      - **抽出対象は『触ったファイル』のみ**。 同 directory の隣接ファイル (`<sibling>.tsx` など) は **抽出対象ではなく**、 触ったファイル内の表記揺れ検出のための **コンテキスト参照** として読む (隣接ファイル自体に boy scout 候補があっても、それは別 PR で扱う / 別 issue 提案として返す)。
      - **必ず検出する対象**:
        - タスク参照コメント (`// Issue #N: ...`, `// PR #N`, `// Closes #N` のような GitHub の番号記法に加え、 in-repo Issue の識別子を書いたコメントも同じ) — PR description にあるべき情報、コードでは rot する。 参照先が既に復元できないものは推測で番号や識別子を割り当て直さず、 参照を伴わない記述へ書き換える
@@ -92,9 +99,18 @@ simplify / code-reviewer / boy-scout-sweep / dev-workflow:e2e-scenario-impact-ch
    - 観点の根拠: グローバル CLAUDE.md「どんなときでもユーザーデータを守るセキュリティを第一に考える」とプロジェクト CLAUDE.md の PUBLIC 制約。ISSUE-15 で機械検査の層を作ったが、**読解を要する分は落とせない**ことが実測で確定している
    - 一般化するときは発火条件の具体性を残し、出所だけを落とす。削ると文書の価値が目減りする
 
-6. 揃った結果を **アグリゲート** する
+6. **`Agent` tool で `general-purpose` を起動 (反証役)** — `Agent` tool で起動したレーンのうち、指摘を返したものごとに 1 体
+   - レーンが返った順に起動する。全レーンが揃うのを待たない
+   - 渡す前に、親が指摘へ ID を振る (レーンの名前と連番)。突き合わせにレーンが書いた見出しや要約を使わない。モデルが書き直す文字列は、同じ指摘でも呼び出しごとに揺れる
+   - prompt: ID 付きの指摘の一覧 + 差分の取り方 + 「指摘を 1 件ずつ一次資料 (差分、コード、仕様の canonical) で検証し、事実か、直さないと実害があるか、修正案に欠陥や不足 (直すと別の箇所と食い違うなど) が無いかを判定して、根拠を書く。修正案に欠陥や不足があれば代案を書く。同じ観点の見落としがあれば返す」
+   - 判定に迷ったときの既定値 (「確信が無ければ反証済みとする」など) を渡さない。既定値はそのまま結論を片側へ寄せる
+   - 落とすのは、事実と実害の両方が反証された指摘だけにする。修正案に欠陥や不足があるとされた指摘は、代案と見比べてから直す (実測: 反証役が、レーンの修正案のままだと別の箇所と食い違う不足を補った)
+   - `simplify` と e2e skill には付けない。どちらも `Skill` tool で起動するレーンで、自分の手順を持つ (`simplify` は修正の適用まで行う)
+   - 利用者が Workflow tool の起動を許している環境では、レーンから反証役への流れをそちらの pipeline で組んでよい。形 (観点ごとのレーン、指摘のあったレーンごとに反証役 1 体、ID は親が振る) は同じにする
 
-並列で投げると 30〜90 秒で結果が揃う。逐次にしない。
+7. 揃った結果を **アグリゲート** する
+
+レーンは並列で投げる。逐次にしない。反証役の分だけ所要時間は延びる (実測: レーン 4 本と反証役 3 体で約 3 分、変異注入を伴うと約 12 分)。
 
 ### Phase 2: 指摘事項の判断
 
@@ -115,9 +131,13 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 
 並列レビューは観点ごとに独立して走るので、同じ箇所に正反対の結論が返ることがある。これは並列化の産物であって失敗ではない。片方だけを読んで従うと単一レビュアーと同じ盲点に戻るため、必ず両方の根拠を読んでから裁定し、採らなかった側は理由を記録する。
 
-裁定は印象や confidence の大小ではなく **その変更で検証力が増えるか減るか** で決める。既定は「pin が 1 本減るなら採らない」。
+裁定は印象や confidence の大小ではなく、次の順に引いて決める。先に引いたもので決まれば、後ろは引かない。
 
-実例: `simplification` が「全行が同じ値のタプルは平坦化しろ (YAGNI)」、`altitude` が「将来の分岐余地として残せ」と正反対を返した。どちらも confidence 80 台で印象では決められなかったが、平坦化すると分類表と実装の食い違いを突合していたテストがその能力を失う (pin を 1 本失う) と分かって決着した。
+1. その論点に規約の canonical (規約を持つ skill の節、スクリプトの docstring、検査の定義) があれば、それに従う。実例: 関連節を「識別子だけにする」と「リンクに戻す」が衝突したとき、`dev-workflow:in-repo-issue` の「Issue 間の参照」節で決着した
+2. 説明や定義の置き場が割れたときは、参照の向きで決める。プロダクトからテストを指さない。実例: 説明の canonical をテストに置くかプロダクトに置くかで割れたとき、この向きで決着した
+3. どちらでも決まらなければ、**その変更で検証力が増えるか減るか** で決める。既定は「pin が 1 本減るなら採らない」
+
+3 の実例: `simplification` が「全行が同じ値のタプルは平坦化しろ (YAGNI)」、`altitude` が「将来の分岐余地として残せ」と正反対を返した。どちらも confidence 80 台で印象では決められなかったが、平坦化すると分類表と実装の食い違いを突合していたテストがその能力を失う (pin を 1 本失う) と分かって決着した。
 
 `simplify` の指摘には挙動を変える提案が混ざる。マージ直前のブランチでは、挙動を変える提案は既定で別 issue へ回す。`simplify` は品質の改善であって仕様変更の場ではない。
 
@@ -173,8 +193,9 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 ## Pre-Merge Quality Gate Result
 
 - simplify: [completed / skipped (reason)]
-- feature-dev:code-reviewer: [completed / skipped (reason)]
+- code-review: [completed / skipped (reason)]
 - boy-scout-sweep: [completed / skipped (reason)]
+- verifiers: [N 体 (指摘 M 件のうち K 件を落とした) / not needed (指摘を返した Agent のレーンが無い)]
 - dev-workflow:e2e-scenario-impact-check: [completed / skipped (reason: e.g., no frontend changes)]
 - public-leak-sweep: [completed / skipped (reason: e.g., private repository)]
 - Findings applied: [N items (incl. M boy scout, K e2e impact, L leak) / no findings]
@@ -191,7 +212,7 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 - `dev-workflow:commit-and-pr-message` (sibling skill): 本文の書き方と渡し方、および `gh pr create` / `gh pr merge` へ渡すフラグの形。Phase 4 はどちらの実行もここへ委ねる。同 skill は「何をどう書いて渡すか」だけを持ち「いつ実行してよいか」は持たないので、判断は本 skill に残る
 - `dev-workflow:in-repo-issue` (sibling skill): Issue のライフサイクル。同梱の判定 (Phase 0 で事実収集、Phase 2 で判断、Phase 3 で適用) と、マージ後の自動クローズ (Phase 5) がここを参照する
 - `simplify` (built-in skill): 4 並列レビューと修正適用
-- `feature-dev:code-reviewer` (subagent): バグ・logic・security の confidence-based filtering
+- `feature-dev:code-reviewer` (subagent): Phase 1 の 2 では既定にしない。理由と、指定されたときの渡し方は同項目が持つ
 - `dev-workflow:e2e-scenario-impact-check` (sibling skill): フロント変更が E2E シナリオテストを壊す可能性を静的検出。Phase 1 の 4 つ目並列タスク
 - `verification-before-completion` (superpowers): 完了主張前の検証
 - `requesting-code-review` (superpowers): レビュー依頼の作法
@@ -199,4 +220,4 @@ CLAUDE.md「3 lines vs premature abstraction」原則を守る: 3 箇所程度�
 ## 関連 CLAUDE.md ルール
 
 - `~/.claude/CLAUDE.md`: 「Simplify、レビュー、ボーイスカウトルール全てを適用後の Push」
-- 各プロジェクトの `CLAUDE.md` に「PRのマージ前には必ず /simplify と feature-dev:code-reviewer」がある場合はそれが優先
+- 各プロジェクトの `CLAUDE.md` に「PRのマージ前には必ず /simplify と feature-dev:code-reviewer」がある場合はそれが優先 (差分の渡し方は Phase 1 の 2)
