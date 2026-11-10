@@ -579,12 +579,13 @@ def _unrecognized_report(unrecognized: dict[str, set[str]]) -> tuple[list[str], 
     if any(s.startswith(LOCAL_REFS) for s in sources):
         hints.append(
             f"出所が {LOCAL_REFS} のものは作業ツリーの改名では解けない。"
-            "そのブランチで改名してコミットするか、不要なブランチを消す"
+            "そのブランチで直して (改名・移動) コミットするか、不要なブランチを消す"
         )
     if any(s.startswith(REMOTE_REFS) for s in sources):
         hints.append(
             f"出所が {REMOTE_REFS} のものは手元で消しても次の fetch で戻る。"
-            "上流のブランチで改名して push するか、上流で消してから git fetch --prune"
+            "上流のブランチで直して (改名・移動) push する (別の clone で直したなら手元で git fetch)"
+            " か、上流で消してから git fetch --prune"
         )
     return violations, hints
 
