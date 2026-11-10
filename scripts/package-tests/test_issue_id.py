@@ -322,6 +322,116 @@ class NextIdentifier(unittest.TestCase):
         self.assertIn(f"docs/issues/{PREFIX}8_あちらの課題", err)
         self.assertIn("refs/heads/topic", err)
 
+    def test_unrecognized_directory_stops_numbering(self):
+        # 採番が数える形 (接頭辞の有無を問わない <N>_) に当たらない名前を黙って飛ばすと、
+        # 番号を持つ 2-b があっても ISSUE-2 を rc 0 で再発行する (実測)。番号を持たない名前も
+        # 同じく止める。どの番号を持つ Issue かを採番の側では判定できないため
+        for name in ("2-b", "3", "foo", f"closed/{PREFIX}2-b"):
+            with self.subTest(name=name), TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                init_repo(root, (f"{PREFIX}1_最初の課題", name))
+                rc, out, err = run(["--next", "--root", str(root)])
+                self.assertEqual(rc, 1)
+                # 識別子を出さないこと。出すと呼び出し側が既存と衝突する識別子で起票を続ける
+                self.assertEqual(out, "")
+                # 現ツリーと main の両方にある同じディレクトリは、出所を並べた 1 行にまとめる
+                self.assertIn(
+                    f"  [x] 採番が数えられない Issue ディレクトリ: docs/issues/{name}"
+                    " (現ツリー, refs/heads/main)\n",
+                    err,
+                )
+                self.assertEqual(err.count("[x]"), 1)
+                # 直し方は規約の形だけを示す。旧形式を並べると、従った結果が --check で赤くなる。
+                # 接頭辞の無い <N>_<title> が 1 つでも出たら赤にする (言い回しに依存しない)。
+                # 規約の形の assertIn を残すのは、どちらも 0 件のときに等式が素通りするため
+                self.assertIn(f"Issue なら {PREFIX}<N>_<title> へ改名する", err)
+                self.assertEqual(err.count("<N>_<title>"), err.count(f"{PREFIX}<N>_<title>"))
+                # Issue をまとめたディレクトリを外へ移すと、中の Issue の番号が再発行される (実測)。
+                # 外へ移すのは Issue を含まないものに限り、まとめは平らにする直し方を示す
+                self.assertIn(
+                    "Issue をまとめたディレクトリなら、中の Issue を docs/issues/ 直下か"
+                    " closed/ 直下へ移し、空になったディレクトリを消す",
+                    err,
+                )
+                self.assertIn("Issue を含まないものだけを docs/issues/ の外へ移す", err)
+
+    def test_unrecognized_directory_in_other_ref_stops_numbering(self):
+        # 番号の重複と同じく全 ref を見る。現ツリーに無ければ ref 経路を通らないと赤くならない
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            git(root, "checkout", "-q", "-b", "topic")
+            write(root, "docs/issues/2-b/issue.md")
+            commit(root, "unrecognized")
+            git(root, "checkout", "-q", "main")
+            leftover = (root / "docs" / "issues" / "2-b").exists()
+            rc, out, err = run(["--next", "--root", str(root)])
+        self.assertFalse(leftover, "checkout 後に 2-b が現ツリーへ残っている")
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn(
+            "  [x] 採番が数えられない Issue ディレクトリ: docs/issues/2-b (refs/heads/topic)\n", err
+        )
+        # ref が出所のものは作業ツリーの改名では解けないので、ref の側の直し方を添える。
+        # ローカルのブランチに remote 向けの直し方 (fetch で戻る) を出すと読み手を迷わせる
+        self.assertIn("出所が refs/heads/ のものは作業ツリーの改名では解けない", err)
+        self.assertNotIn("出所が refs/remotes/", err)
+
+    def test_unrecognized_directory_in_remote_ref_has_upstream_hint(self):
+        # remote-tracking ref は手元で消しても次の fetch で戻る (実測)。番号を持つ Issue が
+        # 載っていれば、消した間に同じ番号を rc 0 で再発行する。上流で直す道だけを示す
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            git(root, "checkout", "-q", "-b", "topic")
+            write(root, "docs/issues/2-b/issue.md")
+            commit(root, "unrecognized")
+            sha = git_out(root, "rev-parse", "HEAD")
+            git(root, "checkout", "-q", "main")
+            git(root, "update-ref", "refs/remotes/origin/topic", sha)
+            git(root, "branch", "-q", "-D", "topic")
+            rc, out, err = run(["--next", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn(
+            "  [x] 採番が数えられない Issue ディレクトリ: docs/issues/2-b"
+            " (refs/remotes/origin/topic)\n",
+            err,
+        )
+        self.assertIn("出所が refs/remotes/ のものは手元で消しても次の fetch で戻る", err)
+        self.assertIn("git fetch --prune", err)
+        self.assertNotIn("出所が refs/heads/", err)
+
+    def test_ref_hint_is_absent_when_only_the_working_tree_has_it(self):
+        # ref のヒントの対照。未追跡のディレクトリはどの ref にも無いので、ref の直し方は出さない
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            write(root, "docs/issues/assets/issue.md")
+            rc, out, err = run(["--next", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn(
+            "  [x] 採番が数えられない Issue ディレクトリ: docs/issues/assets (現ツリー)\n", err
+        )
+        # 共通のヒントは出ていることを並べる。ヒントごと消えた形でも下の assertNotIn は通るため
+        self.assertIn(f"Issue なら {PREFIX}<N>_<title> へ改名する", err)
+        self.assertNotIn("出所が refs/", err)
+
+    def test_templates_and_loose_files_do_not_stop_numbering(self):
+        # 止める側の対照。templates/ (直下と closed/ の下) と docs/issues 直下のファイルは
+        # Issue ディレクトリではない。closed/templates を置かないと、closed 側の除外を外しても
+        # 緑のままになる (実測)
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題", "templates", "closed/templates"))
+            write(root, "docs/issues/README.md")
+            write(root, "docs/issues/closed/README.md")
+            commit(root, "loose files")
+            rc, out, err = run(["--next", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out, f"{PREFIX}2\n")
+
 
 class ScanText(unittest.TestCase):
     def flags(self, text: str, label: str = "probe.md") -> list[str]:
