@@ -26,3 +26,5 @@ status: open
 
 - ISSUE-17: C.2 の「gate が既に検証済み」が指す CI が別物。同じく gate が CI のどの run を見ているかを扱う
 - ISSUE-47: gate の Phase 1 が実際の同時起動数を書かない。並列レビューの順序と同じ Phase を触る
+- ISSUE-102: Phase 1 の code-reviewer が Bash を持たないのに git diff を取らせる。Phase 1 の文面が衝突しうる
+- ISSUE-103: レビューに観点ごとの反証役を足す提案。並列レビューを先に回す順序と組み合わさる
