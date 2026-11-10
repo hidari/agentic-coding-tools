@@ -341,10 +341,19 @@ class NextIdentifier(unittest.TestCase):
                     err,
                 )
                 self.assertEqual(err.count("[x]"), 1)
-                # 直し方は規約の形だけを示す。旧形式を並べると、従った結果が --check で赤くなる
+                # 直し方は規約の形だけを示す。旧形式を並べると、従った結果が --check で赤くなる。
+                # 接頭辞の無い <N>_<title> が 1 つでも出たら赤にする (言い回しに依存しない)。
+                # 規約の形の assertIn を残すのは、どちらも 0 件のときに等式が素通りするため
                 self.assertIn(f"Issue なら {PREFIX}<N>_<title> へ改名する", err)
-                self.assertIn("Issue でなければ docs/issues/ の外へ移す", err)
-                self.assertNotIn("<N>_<title> か", err)
+                self.assertEqual(err.count("<N>_<title>"), err.count(f"{PREFIX}<N>_<title>"))
+                # Issue をまとめたディレクトリを外へ移すと、中の Issue の番号が再発行される (実測)。
+                # 外へ移すのは Issue を含まないものに限り、まとめは平らにする直し方を示す
+                self.assertIn(
+                    "Issue をまとめたディレクトリなら、中の Issue を docs/issues/ 直下か"
+                    " closed/ 直下へ移し、空になったディレクトリを消す",
+                    err,
+                )
+                self.assertIn("Issue を含まないものだけを docs/issues/ の外へ移す", err)
 
     def test_unrecognized_directory_in_other_ref_stops_numbering(self):
         # 番号の重複と同じく全 ref を見る。現ツリーに無ければ ref 経路を通らないと赤くならない
@@ -363,8 +372,35 @@ class NextIdentifier(unittest.TestCase):
         self.assertIn(
             "  [x] 採番が数えられない Issue ディレクトリ: docs/issues/2-b (refs/heads/topic)\n", err
         )
-        # ref が出所のものは作業ツリーの改名では解けないので、ref の側の直し方を添える
+        # ref が出所のものは作業ツリーの改名では解けないので、ref の側の直し方を添える。
+        # ローカルのブランチに remote 向けの直し方 (fetch で戻る) を出すと読み手を迷わせる
+        self.assertIn("出所が refs/heads/ のものは作業ツリーの改名では解けない", err)
+        self.assertNotIn("出所が refs/remotes/", err)
+
+    def test_unrecognized_directory_in_remote_ref_has_upstream_hint(self):
+        # remote-tracking ref は手元で消しても次の fetch で戻る (実測)。番号を持つ Issue が
+        # 載っていれば、消した間に同じ番号を rc 0 で再発行する。上流で直す道だけを示す
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            git(root, "checkout", "-q", "-b", "topic")
+            write(root, "docs/issues/2-b/issue.md")
+            commit(root, "unrecognized")
+            sha = git_out(root, "rev-parse", "HEAD")
+            git(root, "checkout", "-q", "main")
+            git(root, "update-ref", "refs/remotes/origin/topic", sha)
+            git(root, "branch", "-q", "-D", "topic")
+            rc, out, err = run(["--next", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn(
+            "  [x] 採番が数えられない Issue ディレクトリ: docs/issues/2-b"
+            " (refs/remotes/origin/topic)\n",
+            err,
+        )
+        self.assertIn("出所が refs/remotes/ のものは手元で消しても次の fetch で戻る", err)
         self.assertIn("git fetch --prune", err)
+        self.assertNotIn("出所が refs/heads/", err)
 
     def test_ref_hint_is_absent_when_only_the_working_tree_has_it(self):
         # ref のヒントの対照。未追跡のディレクトリはどの ref にも無いので、ref の直し方は出さない
@@ -378,7 +414,9 @@ class NextIdentifier(unittest.TestCase):
         self.assertIn(
             "  [x] 採番が数えられない Issue ディレクトリ: docs/issues/assets (現ツリー)\n", err
         )
-        self.assertNotIn("git fetch --prune", err)
+        # 共通のヒントは出ていることを並べる。ヒントごと消えた形でも下の assertNotIn は通るため
+        self.assertIn(f"Issue なら {PREFIX}<N>_<title> へ改名する", err)
+        self.assertNotIn("出所が refs/", err)
 
     def test_templates_and_loose_files_do_not_stop_numbering(self):
         # 止める側の対照。templates/ (直下と closed/ の下) と docs/issues 直下のファイルは

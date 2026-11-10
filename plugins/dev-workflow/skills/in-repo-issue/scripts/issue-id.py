@@ -92,6 +92,10 @@ ISSUE_ROOT = ("docs", "issues")
 CLOSED = "closed"
 TEMPLATES = "templates"
 
+# --next が走査する ref の名前空間。--next が止まったときの直し方がどちらかで変わる
+LOCAL_REFS = "refs/heads/"
+REMOTE_REFS = "refs/remotes/"
+
 # 増分モードでディレクトリ名の検査を起こす唯一のファイル。配下の任意ファイルを起点にすると、
 # 旧記法のディレクトリを触るたびに赤くなり、増分の ratchet が成立しない
 ISSUE_FILE = "issue.md"
@@ -291,7 +295,7 @@ def resolve_root(explicit: str | None) -> Path:
 
 
 def _refs(root: Path) -> list[str]:
-    out = _git(root, "for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes")
+    out = _git(root, "for-each-ref", "--format=%(refname)", LOCAL_REFS, REMOTE_REFS)
     return [r for r in out.decode("utf-8", "replace").splitlines() if r]
 
 
@@ -551,8 +555,11 @@ def _unrecognized_report(unrecognized: dict[str, set[str]]) -> tuple[list[str], 
     """数えられない名前の違反と、利用者が直し方を選ぶためのヒントを返す。
 
     直し方は規約の形だけを示す。旧形式も数えはするが、旧形式へ改名すると --check で赤くなる。
-    ref が出所のものは作業ツリーの改名では解けず、remote-tracking ref は消しても次の fetch で
-    戻るので、ref の側の直し方を別に添える
+    外へ移す直し方を Issue を含まないものに限るのは、closed/<年>/ のような Issue のまとめを
+    外へ移すと、中の Issue の番号を rc 0 で再発行するため (実測)。git mv は空になった親を
+    残し、それがまた止める原因になる (実測)。
+    ref が出所のものは作業ツリーの改名では解けない。remote-tracking ref は手元で消しても次の
+    fetch で戻り、消した間は載っている Issue の番号を再発行しうるので、上流で直す道だけを示す
     """
     violations = [
         f"採番が数えられない Issue ディレクトリ: {rel}"
@@ -562,13 +569,22 @@ def _unrecognized_report(unrecognized: dict[str, set[str]]) -> tuple[list[str], 
     if not violations:
         return [], []
     hints = [
-        f"Issue なら {PREFIX}<N>_<title> へ改名する。Issue でなければ docs/issues/ の外へ移す"
+        f"Issue なら {PREFIX}<N>_<title> へ改名する",
+        f"Issue をまとめたディレクトリなら、中の Issue を docs/issues/ 直下か {CLOSED}/ 直下へ"
+        "移し、空になったディレクトリを消す (git mv は空になった親を残す)",
+        "Issue を含まないものだけを docs/issues/ の外へ移す"
         f" (直下で例外になるのは {TEMPLATES}/ と {CLOSED}/ だけ)",
     ]
-    if any(s != WORKING_TREE for sources in unrecognized.values() for s in sources):
+    sources = {s for group in unrecognized.values() for s in group}
+    if any(s.startswith(LOCAL_REFS) for s in sources):
         hints.append(
-            "出所が ref のものは作業ツリーの改名では解けない。その ref で改名するか、不要な"
-            "ブランチを消す。上流で消えた remote ブランチなら git fetch --prune"
+            f"出所が {LOCAL_REFS} のものは作業ツリーの改名では解けない。"
+            "そのブランチで改名してコミットするか、不要なブランチを消す"
+        )
+    if any(s.startswith(REMOTE_REFS) for s in sources):
+        hints.append(
+            f"出所が {REMOTE_REFS} のものは手元で消しても次の fetch で戻る。"
+            "上流のブランチで改名して push するか、上流で消してから git fetch --prune"
         )
     return violations, hints
 
