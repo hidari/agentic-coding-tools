@@ -334,8 +334,17 @@ class NextIdentifier(unittest.TestCase):
                 self.assertEqual(rc, 1)
                 # 識別子を出さないこと。出すと呼び出し側が既存と衝突する識別子で起票を続ける
                 self.assertEqual(out, "")
-                self.assertIn(f"docs/issues/{name}", err)
-                self.assertIn("現ツリー", err)
+                # 現ツリーと main の両方にある同じディレクトリは、出所を並べた 1 行にまとめる
+                self.assertIn(
+                    f"  [x] 採番が数えられない Issue ディレクトリ: docs/issues/{name}"
+                    " (現ツリー, refs/heads/main)\n",
+                    err,
+                )
+                self.assertEqual(err.count("[x]"), 1)
+                # 直し方は規約の形だけを示す。旧形式を並べると、従った結果が --check で赤くなる
+                self.assertIn(f"Issue なら {PREFIX}<N>_<title> へ改名する", err)
+                self.assertIn("Issue でなければ docs/issues/ の外へ移す", err)
+                self.assertNotIn("<N>_<title> か", err)
 
     def test_unrecognized_directory_in_other_ref_stops_numbering(self):
         # 番号の重複と同じく全 ref を見る。現ツリーに無ければ ref 経路を通らないと赤くならない
@@ -351,13 +360,33 @@ class NextIdentifier(unittest.TestCase):
         self.assertFalse(leftover, "checkout 後に 2-b が現ツリーへ残っている")
         self.assertEqual(rc, 1)
         self.assertEqual(out, "")
-        self.assertIn("refs/heads/topic: docs/issues/2-b", err)
+        self.assertIn(
+            "  [x] 採番が数えられない Issue ディレクトリ: docs/issues/2-b (refs/heads/topic)\n", err
+        )
+        # ref が出所のものは作業ツリーの改名では解けないので、ref の側の直し方を添える
+        self.assertIn("git fetch --prune", err)
 
-    def test_templates_and_loose_files_do_not_stop_numbering(self):
-        # 止める側の対照。templates/ と docs/issues 直下のファイルは Issue ディレクトリではない
+    def test_ref_hint_is_absent_when_only_the_working_tree_has_it(self):
+        # ref のヒントの対照。未追跡のディレクトリはどの ref にも無いので、ref の直し方は出さない
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            init_repo(root, (f"{PREFIX}1_最初の課題", "templates"))
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            write(root, "docs/issues/assets/issue.md")
+            rc, out, err = run(["--next", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn(
+            "  [x] 採番が数えられない Issue ディレクトリ: docs/issues/assets (現ツリー)\n", err
+        )
+        self.assertNotIn("git fetch --prune", err)
+
+    def test_templates_and_loose_files_do_not_stop_numbering(self):
+        # 止める側の対照。templates/ (直下と closed/ の下) と docs/issues 直下のファイルは
+        # Issue ディレクトリではない。closed/templates を置かないと、closed 側の除外を外しても
+        # 緑のままになる (実測)
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題", "templates", "closed/templates"))
             write(root, "docs/issues/README.md")
             write(root, "docs/issues/closed/README.md")
             commit(root, "loose files")

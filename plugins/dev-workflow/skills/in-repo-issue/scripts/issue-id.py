@@ -50,6 +50,11 @@ scripts/check-leak-guard-rules.py と同じ理由で、「規約違反」と「�
   報告する (偽陽性側に倒している)。重複と判定されると --next は識別子を出さず exit 1 で
   止まる。つまり新規起票が一切できなくなるので、Issue ディレクトリを rename するときは
   番号もタイトル部も保存し、接頭辞の付与だけに留めること
+- --next は採番が数えられない名前 (旧形式の <N>_ にも当たらないもの) のディレクトリが現ツリーか
+  どれか 1 つの ref にあるだけで、識別子を出さず exit 1 で止まる。Issue ではない補助ディレクトリ
+  (未追跡や隠しディレクトリを含む) も同じく止める。ref にしか無い名前は --check が見ないので、
+  --check が緑でも --next は止まりうる。remote-tracking ref は手元で消しても次の fetch で戻るので、
+  上流のブランチで改名するか、上流で消えたものを prune するまで止まり続ける
 - --check-diff の免除は記録に残らないので、件数を監査できない。--check が全走査の backstop
   になる。取り付ける側は増分だけに頼らないこと
 - --check-diff は rename の回転やスワップを rename として見ない。git の rename 検出は片側に
@@ -510,30 +515,62 @@ class Numbering(NamedTuple):
 
     # 番号 -> 同一性キー -> 出所の集合
     found: dict[int, dict[str, set[str]]]
-    # ANY_ISSUE_DIR に当たらないディレクトリの出所。番号を読めないので found に入れられない
-    unrecognized: set[str]
+    # ANY_ISSUE_DIR に当たらないディレクトリ: 相対パス -> 出所 (WORKING_TREE か ref 名) の集合。
+    # 番号を読めないので found に入れられない。パスで束ねるのは、同じディレクトリが ref の数だけ
+    # 別の行に出て読めなくなるため
+    unrecognized: dict[str, set[str]]
+
+
+WORKING_TREE = "現ツリー"
 
 
 def collect_numbers(root: Path) -> Numbering:
     """現ツリーと全 ref を混ぜて Issue ディレクトリの番号を集める。"""
     found: dict[int, dict[str, set[str]]] = {}
-    unrecognized: set[str] = set()
+    unrecognized: dict[str, set[str]] = {}
 
-    def record(name: str, where: str) -> None:
+    def record(name: str, source: str, rel: str) -> None:
         m = ANY_ISSUE_DIR.match(name)
         if m:
+            where = f"{source}: {rel}"
             found.setdefault(int(m.group(1)), {}).setdefault(_identity(name), set()).add(where)
         else:
-            unrecognized.add(where)
+            unrecognized.setdefault(rel, set()).add(source)
 
     for rel, name in issue_dirs(root):
-        record(name, f"現ツリー: {rel}")
+        record(name, WORKING_TREE, rel)
     for ref in _refs(root):
         for path in _ls_tree(root, ref):
             got = issue_dir_of(path)
             if got:
-                record(got[0], f"{ref}: {got[1]}")
+                record(got[0], ref, got[1])
     return Numbering(found, unrecognized)
+
+
+def _unrecognized_report(unrecognized: dict[str, set[str]]) -> tuple[list[str], list[str]]:
+    """数えられない名前の違反と、利用者が直し方を選ぶためのヒントを返す。
+
+    直し方は規約の形だけを示す。旧形式も数えはするが、旧形式へ改名すると --check で赤くなる。
+    ref が出所のものは作業ツリーの改名では解けず、remote-tracking ref は消しても次の fetch で
+    戻るので、ref の側の直し方を別に添える
+    """
+    violations = [
+        f"採番が数えられない Issue ディレクトリ: {rel}"
+        f" ({', '.join(sorted(sources, key=lambda s: (s != WORKING_TREE, s)))})"
+        for rel, sources in sorted(unrecognized.items())
+    ]
+    if not violations:
+        return [], []
+    hints = [
+        f"Issue なら {PREFIX}<N>_<title> へ改名する。Issue でなければ docs/issues/ の外へ移す"
+        f" (直下で例外になるのは {TEMPLATES}/ と {CLOSED}/ だけ)",
+    ]
+    if any(s != WORKING_TREE for sources in unrecognized.values() for s in sources):
+        hints.append(
+            "出所が ref のものは作業ツリーの改名では解けない。その ref で改名するか、不要な"
+            "ブランチを消す。上流で消えた remote ブランチなら git fetch --prune"
+        )
+    return violations, hints
 
 
 def _duplicates(found: dict[int, dict[str, set[str]]]) -> list[str]:
@@ -576,13 +613,12 @@ def run_next(root: Path) -> int:
     # 数えられない名前を黙って飛ばすと、2-b のように番号を持つディレクトリがあっても同じ番号を
     # rc 0 で再発行する (実測)。旧形式の <N>_ は数えられるので止めない (ISSUE_DIR で判定すると
     # 移行前のリポジトリで採番が全部止まる)
-    violations.extend(
-        "採番が数えられない Issue ディレクトリ"
-        f" ({PREFIX}<N>_<title> か <N>_<title> の形にする): {where}"
-        for where in sorted(unrecognized)
-    )
+    unrecognized_violations, hints = _unrecognized_report(unrecognized)
+    violations.extend(unrecognized_violations)
     if violations:
         _report(violations)
+        for hint in hints:
+            print(f"      {hint}", file=sys.stderr)
         return 1
     print(f"{PREFIX}{(max(found) if found else 0) + 1}")
     return 0
