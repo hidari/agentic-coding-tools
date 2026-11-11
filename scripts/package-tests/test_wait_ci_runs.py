@@ -5,9 +5,8 @@ CI の run を commit の SHA で特定し、登録されるまで引き直し�
 読んで判定する入口を pin する。gh はプロセス境界の外にあるので、PATH の先頭に置いた stub で
 差し替える。stub は呼ばれた argv を記録し、決めた応答を順に返す (尽きたら最後の応答を返し
 続ける)。登録前の `[]` と rc=0 は本物の gh で実測した形で、ここではそれを stub が返す。
-
-終了コードは 0 (全部の run が通った) / 1 (通らなかった run がある) / 2 (判定できない)。
-2 を 1 と分けるのは、「CI が落ちた」と「CI を見られなかった」を同じ赤にしないため。
+本物の gh は `--json` で頼まれた項目しか返さない (実測) ので、stub も run を頼まれた項目へ
+削ってから返す。
 """
 
 from __future__ import annotations
@@ -41,6 +40,9 @@ STUB = textwrap.dedent(
     n = int(open(counter).read()) if os.path.exists(counter) else 0
     open(counter, "w").write(str(n + 1))
     r = responses[min(n, len(responses) - 1)]
+    if "runs" in r:
+        fields = sys.argv[sys.argv.index("--json") + 1].split(",")
+        r["stdout"] = json.dumps([{k: run[k] for k in fields if k in run} for run in r["runs"]])
     sys.stdout.write(r.get("stdout", ""))
     sys.stderr.write(r.get("stderr", ""))
     sys.exit(r.get("rc", 0))
@@ -54,7 +56,7 @@ def run_entry(name, status, conclusion=""):
 
 
 def listing(*runs):
-    return {"rc": 0, "stdout": json.dumps(list(runs))}
+    return {"rc": 0, "runs": list(runs)}
 
 
 class WaitCiRuns(unittest.TestCase):
@@ -73,8 +75,11 @@ class WaitCiRuns(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if not k.startswith(("GH_", "GITHUB_"))}
         env["STUB_STATE"] = str(self.state)
         env["PATH"] = path if path is not None else f"{self.bindir}{os.pathsep}{env.get('PATH', '')}"
+        # 待ちの上限を短く置くのは、待ち方を壊したときに subprocess の timeout ではなく
+        # rc のアサーションで赤くするため。テストが上限を渡すときは後ろの args が勝つ
         proc = subprocess.run(
-            [sys.executable, str(ENTRY), *args, "--interval", "0"],
+            [sys.executable, str(ENTRY), "--register-timeout", "5", "--complete-timeout", "5",
+             *args, "--interval", "0"],
             capture_output=True, text=True, env=env, timeout=60,
         )
         return proc.returncode, proc.stdout, proc.stderr
@@ -106,6 +111,12 @@ class WaitCiRuns(unittest.TestCase):
         first = self.calls()[0]
         self.assertEqual(first[:2], ["run", "list"])
         self.assertEqual(first[first.index("--commit") + 1], SHA)
+        # gh の --limit の既定は 20 で、それより多い run は黙って落ちる
+        self.assertEqual(first[first.index("--limit") + 1], "100")
+        self.assertLessEqual(
+            {"databaseId", "name", "status", "conclusion"},
+            set(first[first.index("--json") + 1].split(",")),
+        )
 
     # --- 登録を待つ -------------------------------------------------------------
 
@@ -134,6 +145,19 @@ class WaitCiRuns(unittest.TestCase):
         self.assertEqual(rc, 0, out + err)
         self.assertEqual(len(self.calls()), 2)
 
+    def test_waits_until_every_run_has_completed(self):
+        # 1 本が終わっても、残りが終わるまでは判定しない。未完了の run の conclusion は空
+        rc, out, err = self.run_with(
+            [
+                listing(run_entry("CI", "completed", "success"), run_entry("Deploy", "in_progress")),
+                listing(run_entry("CI", "completed", "success"),
+                        run_entry("Deploy", "completed", "success")),
+            ],
+            SHA,
+        )
+        self.assertEqual(rc, 0, out + err)
+        self.assertEqual(len(self.calls()), 2)
+
     def test_run_never_completing_is_exit_2(self):
         rc, out, err = self.run_with(
             [listing(run_entry("CI", "queued"))], SHA, "--complete-timeout", "0"
@@ -144,9 +168,14 @@ class WaitCiRuns(unittest.TestCase):
     # --- conclusion の判定 -------------------------------------------------------
 
     def test_success_is_exit_0(self):
-        rc, out, err = self.run_with([listing(run_entry("CI", "completed", "success"))], SHA)
+        # 行の形は release skill の手順が読む (run ごとの行の末尾の run-id を次のコマンドへ渡す)
+        run = run_entry("CI", "completed", "success")
+        rc, out, err = self.run_with([listing(run)], SHA)
         self.assertEqual(rc, 0, out + err)
-        self.assertIn("success CI", out)
+        self.assertEqual(
+            out.splitlines(),
+            [f"success CI {run['databaseId']}", "run 1 件のうち通らなかったもの 0 件"],
+        )
 
     def test_failure_is_exit_1(self):
         rc, out, err = self.run_with([listing(run_entry("CI", "completed", "failure"))], SHA)
@@ -157,7 +186,6 @@ class WaitCiRuns(unittest.TestCase):
         # skipped と neutral は「実行して落ちた」ではないので通す
         for conclusion in ("skipped", "neutral"):
             with self.subTest(conclusion=conclusion):
-                (self.state / "count").unlink(missing_ok=True)
                 rc, out, err = self.run_with(
                     [listing(run_entry("CI", "completed", conclusion))], SHA
                 )
@@ -167,7 +195,6 @@ class WaitCiRuns(unittest.TestCase):
         # cancelled は検証を終えていないので通さない。知らない値も通さない
         for conclusion in ("cancelled", "timed_out", "action_required", "startup_failure", ""):
             with self.subTest(conclusion=conclusion):
-                (self.state / "count").unlink(missing_ok=True)
                 rc, out, err = self.run_with(
                     [listing(run_entry("CI", "completed", conclusion))], SHA
                 )

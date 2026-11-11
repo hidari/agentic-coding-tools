@@ -791,6 +791,7 @@ scripts/package-tests/test_wait_ci_runs.py::test_wait_ci_runs.WaitCiRuns.test_sh
 scripts/package-tests/test_wait_ci_runs.py::test_wait_ci_runs.WaitCiRuns.test_skipped_and_neutral_pass
 scripts/package-tests/test_wait_ci_runs.py::test_wait_ci_runs.WaitCiRuns.test_success_is_exit_0
 scripts/package-tests/test_wait_ci_runs.py::test_wait_ci_runs.WaitCiRuns.test_unparseable_output_is_exit_2
+scripts/package-tests/test_wait_ci_runs.py::test_wait_ci_runs.WaitCiRuns.test_waits_until_every_run_has_completed
 scripts/package-tests/test_winvm.py::test_winvm.BuildExecPowershell.test_command_runs_only_in_the_inner_invocation
 scripts/package-tests/test_winvm.py::test_winvm.BuildExecPowershell.test_merged_records_keep_the_stream_they_had_without_the_wrapper
 scripts/package-tests/test_winvm.py::test_winvm.BuildExecPowershell.test_outer_assumes_success_until_the_inner_reports

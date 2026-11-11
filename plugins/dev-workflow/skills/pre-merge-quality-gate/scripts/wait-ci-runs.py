@@ -10,8 +10,9 @@
 この形にしている理由 (どれも実測):
 
 - PR の checks を watch する形 (gh の pr checks サブコマンドに --watch) は、push の直後で
-  新しい head の check が 0 件のとき、待たずに「no checks reported」と rc=1 で終わることがある。登録前は `gh run list --commit <SHA>` も
-  `[]` と rc=0 を返すので、空を「無い」と読まずに引き直す
+  新しい head の check が 0 件のとき、待たずに「no checks reported」と rc=1 で終わることが
+  ある。登録前は `gh run list --commit <SHA>` も `[]` と rc=0 を返すので、空を「無い」と
+  読まずに引き直す
 - 短縮した SHA を --commit に渡しても `[]` と rc=0 が返り、登録前と区別できない。だから
   40 桁の 16 進だけを受け付ける
 - 判定は `gh run watch --exit-status` の rc ではなく、終わった run の conclusion を読み直して
