@@ -45,7 +45,7 @@ Phase 1 が消費する agent の内訳:
 
 追記 (2026-10-01): PUBLIC 漏洩スイープのレーン (`general-purpose`、Agent、リポジトリが PUBLIC のときだけ 1) が加わったので、今の合計は 6〜8 になる。
 
-追記 (2026-11-10): ISSUE-102 と ISSUE-103 の PR で Phase 1 を書き換えた。表のコードレビューのレーンは `feature-dev:code-reviewer` から `general-purpose` に替わった (数は 1 のまま)。反証役 (指摘を返した `Agent` tool のレーンごとに 0 か 1 体、最大 3 体) が加わったので、合計は 6〜11 になる (下限は指摘 0 件で変わらない)。「体数は 4 か 5」の文は消え、総数を「`Agent` tool で起動するレーンの数、それに付く反証役の数、`Skill` tool で起動するレーンが内部で起動する数の和」と導出の形で書いた。e2e の 1 本は gate 側に数としては無いままで、「`simplify` と e2e skill がそれぞれ持つ」と指すだけになっている。
+追記 (2026-11-10): ISSUE-102 と ISSUE-103 の PR で Phase 1 を書き換えた。表のコードレビューのレーンは `feature-dev:code-reviewer` から `general-purpose` に替わった (数は 1 のまま)。反証役 (指摘を返した `Agent` tool のレーンごとに 0 か 1 体、最大 3 体) が加わったので、合計は 6〜11 になる (下限は指摘 0 件で変わらない)。「体数は 4 か 5」の文は消え、総数を「`Agent` tool で起動するレーンの数と、それに付く反証役の数と、`Skill` tool で起動するレーンが内部で起動する数 (`simplify` と e2e skill がそれぞれ持つ) の和」と導出の形で書いた。e2e の 1 本は gate 側に数としては無いままで、この括弧書きが e2e skill を指すだけになっている。
 
 e2e は「フロント変更がある場合、`Agent` tool で `general-purpose` を起動する」(同 skill の
 Phase 2)。早期 skip の条件は同 skill の Phase 1 が持つ。
