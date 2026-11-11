@@ -55,6 +55,10 @@ scripts/check-leak-guard-rules.py と同じ理由で、「規約違反」と「�
   (未追跡や隠しディレクトリを含む) も同じく止める。ref にしか無い名前は --check が見ないので、
   --check が緑でも --next は止まりうる。remote-tracking ref は手元で消しても次の fetch で戻るので、
   上流のブランチで改名するか、上流で消えたものを prune するまで止まり続ける
+- --check は追跡下のファイルに加え、Issue ディレクトリ配下の未追跡で ignore されていない
+  ファイルも読む。pre-commit は未追跡のファイルを stash しないので、違反のある書きかけの
+  issue.md を git add せずに置いているあいだは、無関係なコミットでも hook が赤くなる。
+  起票した直後の issue.md を読まずに緑を返す方 (実測) を避けるために引き受けている
 - --check-diff の免除は記録に残らないので、件数を監査できない。--check が全走査の backstop
   になる。取り付ける側は増分だけに頼らないこと
 - --check-diff は rename の回転やスワップを rename として見ない。git の rename 検出は片側に
@@ -317,6 +321,23 @@ def _ls_tree(root: Path, ref: str) -> list[str]:
 def _tracked_files(root: Path) -> list[str]:
     out = _git(root, "ls-files", "-z")
     return [p for p in out.decode("utf-8", "replace").split("\0") if p]
+
+
+def _untracked_issue_files(root: Path) -> list[str]:
+    """Issue ディレクトリ配下の、未追跡で ignore されていないファイルを返す。
+
+    issue_dirs() は filesystem を見るので起票直後のディレクトリを数えるが、本文の走査が
+    追跡下だけだと、その issue.md を読まずに緑を返した (実測)。母集団を Issue ディレクトリに
+    限るのは、それ以外の未追跡は作業中のスクラッチで、赤くする理由が無いため。
+    intent-to-add (git add -N) のファイルは index にあるので --others に出ず、追跡下の側と
+    重ならない (実測)
+    """
+    out = _git(
+        root, "ls-files", "-z", "--others", "--exclude-standard", "--", "/".join(ISSUE_ROOT) + "/"
+    )
+    return [
+        p for p in out.decode("utf-8", "replace").split("\0") if p and issue_dir_of(p)
+    ]
 
 
 def _diff_records(root: Path, rng: str, *filters: str) -> list[tuple[str, str | None, str]]:
@@ -654,7 +675,7 @@ def run_check(root: Path) -> int:
         return 2
 
     scanned = excluded = unreadable = 0
-    for rel in tracked:
+    for rel in tracked + _untracked_issue_files(root):
         if Path(rel).suffix in SKIP_SUFFIXES:
             excluded += 1
             continue

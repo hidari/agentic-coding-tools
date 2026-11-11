@@ -593,7 +593,7 @@ class CheckRepository(unittest.TestCase):
         self.assertIn("違反 1 件", out)
 
     def test_untracked_file_is_not_scanned(self):
-        # 走査対象は追跡下だけ。作業中のスクラッチで赤くしない
+        # Issue ディレクトリの外の未追跡は走査しない。作業中のスクラッチで赤くしない
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             init_repo(root, (f"{PREFIX}1_最初の課題",))
@@ -642,6 +642,58 @@ class CheckRepository(unittest.TestCase):
             rc, out, err = run(["--check", "--root", str(root)])
         self.assertEqual(rc, 1)
         self.assertIn("docs/issues/13_未追跡の課題:", err)
+
+    def test_untracked_file_in_issue_directory_is_scanned(self):
+        # 起票した直後の issue.md は git add するまで未追跡のまま。追跡下だけを読むと、
+        # ディレクトリは数えるのに本文を読まず「違反なし」の rc 0 になった (実測)
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_a",))
+            write(root, f"docs/issues/{PREFIX}2_b/issue.md", f"直したのは {SIGIL}12\n")
+            rc, out, err = run(["--check", "--root", str(root)])
+        self.assertEqual(rc, 1, out)
+        self.assertIn(f"docs/issues/{PREFIX}2_b/issue.md:1:", err)
+        self.assertIn("検査した Issue ディレクトリ: 2 個 / 走査したファイル: 3 個", out)
+        self.assertIn("違反 1 件", out)
+
+    def test_intent_to_add_file_is_scanned_once(self):
+        # git add -N の後は追跡下に入る。未追跡の側からも拾うと同じファイルを 2 回数える
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_a",))
+            rel = f"docs/issues/{PREFIX}2_b/issue.md"
+            write(root, rel, f"直したのは {SIGIL}12\n")
+            git(root, "add", "-N", rel)
+            rc, out, err = run(["--check", "--root", str(root)])
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(err.count(f"{rel}:1:"), 1, err)
+        self.assertIn("検査した Issue ディレクトリ: 2 個 / 走査したファイル: 3 個", out)
+        self.assertIn("違反 1 件", out)
+
+    def test_untracked_files_outside_issue_directories_are_not_scanned(self):
+        # 拾うのは Issue ディレクトリの中だけ。docs/issues 直下のファイルと templates/ は
+        # Issue ディレクトリではないので、未追跡のまま置いた下書きで赤くしない
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_a",))
+            write(root, "docs/issues/draft.md", f"直したのは {SIGIL}12\n")
+            write(root, "docs/issues/templates/issue.md", f"直したのは {SIGIL}12\n")
+            rc, out, err = run(["--check", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("走査したファイル: 2 個", out)
+
+    def test_ignored_file_in_issue_directory_is_not_scanned(self):
+        # 未追跡のうち拾うのは ignore されていないものだけ。ignore は「リポジトリに入れない」
+        # という宣言なので、Issue ディレクトリの中に置いた書き捨てで赤くしない
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_a",))
+            write(root, ".gitignore", "*.scratch\n")
+            commit(root, "ignore scratch")
+            write(root, f"docs/issues/{PREFIX}1_a/memo.scratch", f"直したのは {SIGIL}12\n")
+            rc, out, err = run(["--check", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("走査したファイル: 3 個", out)
 
     def test_stylesheets_are_excluded(self):
         # 色指定は数字記法と同じ形になるので走査から外す

@@ -1,5 +1,5 @@
 ---
-status: open
+status: closed
 ---
 
 # e2e skill が差分を 2 点の形で取り base 側だけの変更を PR の変更と読む
@@ -14,8 +14,8 @@ e2e skill は「フロント変更が無ければ早期 skip」を変更ファ�
 
 ## タスク
 
-- [ ] e2e skill の SKILL.md の差分の取り方を `<base>...HEAD` に揃え、理由を一言添える
-- [ ] gate が e2e skill へ渡す args (base branch) と食い違わないことを確かめる
+- [x] e2e skill の SKILL.md の差分の取り方を `<base>...HEAD` に揃え、理由を一言添える
+- [x] gate が e2e skill へ渡す args (base branch) と食い違わないことを確かめる
 
 ## 関連
 

@@ -119,7 +119,7 @@ class Attachment(unittest.TestCase):
         )
 
     def test_repository_check_is_not_narrowed(self):
-        # 走査対象を追跡ファイル全体で固定するための対。実際に走ることを保証している
+        # 走査対象を hook の側で絞らないための対。実際に走ることを保証している
         # のは always_run: true の方で (実測: 絞り込みを足しても always_run があれば
         # 走る)、files: / exclude: を置かないのはその宣言。always_run だけが落ちると
         # 残った絞り込みが効き始め、走らなかったこと自体が出力に現れなくなる
