@@ -249,7 +249,7 @@ skill の deploy 先は 1 箇所しかなく、複数の設定ディレクトリ
 - 最終レビューで「別 Issue にすべき」と判定された項目を 6 件切り出した。いずれも本 Issue の
   範囲外だが、同じ skill と同じ検査機構を対象にしている
   - [ISSUE-16](<../../ISSUE-16_git commit -v の scissors 以降の diff で記法検査が偽陽性になる/issue.md>)
-  - [ISSUE-17](<../../ISSUE-17_C.2 の「gate が既に検証済み」が指す CI が別物/issue.md>)
+  - [ISSUE-17](<../ISSUE-17_C.2 の「gate が既に検証済み」が指す CI が別物/issue.md>)
   - [ISSUE-18](<../../ISSUE-18_手順書のコードブロックに未定義変数の silent 空振りが残る/issue.md>)
   - [ISSUE-19](<../../ISSUE-19_フォールバック起動契機の記述が C.1 より狭い/issue.md>)
   - [ISSUE-20](<../ISSUE-20_squash merge commit のメッセージが規約の免除形と一致しない/issue.md>)

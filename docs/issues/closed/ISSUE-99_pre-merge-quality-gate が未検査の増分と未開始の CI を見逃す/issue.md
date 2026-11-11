@@ -1,5 +1,5 @@
 ---
-status: open
+status: closed
 ---
 
 # docs: pre-merge-quality-gate が未検査の増分と未開始の CI を見逃す
@@ -16,11 +16,20 @@ status: open
 - 報告 (実測): push の直後で新しい run が pending のとき、`gh pr checks --watch` は待たずに「no checks reported」で rc=1 で終わった。前の head の run が in_progress でも同じだった。同じ報告で、新しい run を `gh run list --branch <branch> --json databaseId,headSha` で引き、push した commit と一致する run の ID を `gh run watch --exit-status` に渡すと、pending の間も待ち続けて rc 0 で終わった (実測)。報告者の提案: CI を待つ手順を headSha で run を特定して `gh run watch` で待つ形へ置き換えるか、rc=1 と「no checks reported」の組を「まだ始まっていない」と扱う注記を足す
 - 報告 (実測): 長いゲート (20〜30 分) の前に並列レビューを先に回し、修正を入れてから最終のゲートを 1 回だけ回す順序にした
 
+## 決めたこと (2026-11-11)
+
+Hidari の裁定で次のようにした。
+
+- 増分の手順は散文にせず、マージを head の SHA に縛った。gate の Phase 0 でゲートが見た SHA を控え、Phase 4 で `gh pr merge --match-head-commit <SHA>` を `--delete-branch` と並べて gate が決めるフラグにした。ゲートの後に積んだコミットがあると GitHub がマージを拒否するので、Phase 0 からやり直すしかなくなる。散文の手順は書き忘れれば緑のまま通るので採らなかった。使い捨てのリポジトリで、前のゲートが見た commit からの差分は main を取り込むと main 側の変更が混ざることも確かめており、増分の取り方を書かずに済む形を選んだ
+- CI を待つ形は、gate に同梱するスクリプト `scripts/wait-ci-runs.py` を canonical にした。40 桁の SHA だけを受け付け、run が登録されるまで引き直し、終わった run の conclusion を読んで 0 / 1 / 2 を返す。gate の Phase 4、in-repo-issue の C.2、release skill の手順 1 はこれを指す。登録前の `gh run list --commit <SHA>` が `[]` と rc=0 を返すこと、短縮した SHA でも `[]` になることは実測した。CI の待ち方が 3 箇所でばらばらだったので、ISSUE-17 と同じ PR で決めた
+- 「no checks reported」の rc=1 を未開始と読む注記は、文言の照合に頼り、workflow が複数ある場合の早期終了も塞げないので採らなかった
+- 長いゲートの前に並列レビューを先に回す順序は、既に Phase 1 から Phase 3 の並びとして書かれているので書かなかった
+
 ## タスク
 
-- [ ] 前のゲートが見た commit から HEAD までの増分にゲートを当てる手順を、マージの経路に足すかを決める
-- [ ] CI を待つ手順を、headSha で run を特定して `gh run watch --exit-status` で待つ形へ置き換えるか、「no checks reported」の rc=1 を未開始として扱う注記にするかを決める。本リポジトリで pending の直後に `gh pr checks --watch` を打って挙動を確かめてから決める
-- [ ] 長いゲートの前に並列レビューを先に回す順序を、ゲートの手順に書くかを決める
+- [x] 前のゲートが見た commit から HEAD までの増分にゲートを当てる手順を、マージの経路に足すかを決める
+- [x] CI を待つ手順を、headSha で run を特定して `gh run watch --exit-status` で待つ形へ置き換えるか、「no checks reported」の rc=1 を未開始として扱う注記にするかを決める。本リポジトリで pending の直後に `gh pr checks --watch` を打って挙動を確かめてから決める (確かめる代わりに、登録前の挙動に依存しないスクリプトで待つ形にした)
+- [x] 長いゲートの前に並列レビューを先に回す順序を、ゲートの手順に書くかを決める
 
 ## 関連
 
