@@ -1,6 +1,6 @@
 """issue-id.py の仕様 pin。
 
-git を歩く経路 (--next の ref 横断と --check の追跡下ファイル列挙) は、実ツリーではなく
+git を歩く経路 (--next の ref 横断と --check のファイル列挙) は、実ツリーではなく
 tempfile + git init の fixture リポジトリで検証する。実ツリーに依存させると、実ツリーが
 たまたま条件を満たしているだけで緑になり dead pin になる。
 

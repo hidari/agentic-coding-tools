@@ -89,7 +89,7 @@ repos:
         always_run: true
         verbose: true
 
-      # コミットメッセージはリポジトリのファイルではないので --check の走査集合に入らない。
+      # コミットメッセージは追跡ファイルではないので --check の走査集合に入らない。
       # always_run: true が無いと、この stage では絞り込みが「絞る」ではなく「常に skip」に
       # なる (渡るファイルが message ファイル 1 本しかないため)。理由の実測は下の
       # issue-id-notation-commit-msg のコメントが持つ。
