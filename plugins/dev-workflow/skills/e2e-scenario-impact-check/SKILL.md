@@ -34,11 +34,11 @@ CI の lint と typecheck は E2E テストの **実行時整合性** を検出�
 `Bash` で以下を取得する:
 
 ```bash
-git diff <base>..HEAD --name-only           # 変更ファイル一覧
-git diff <base>..HEAD --stat                # 変更概要
+git -c core.quotepath=off diff <base>...HEAD --name-only   # 変更ファイル一覧
+git -c core.quotepath=off diff <base>...HEAD --stat        # 変更概要
 ```
 
-`<base>` は通常 `main`。
+`<base>` は通常 `main`。この skill の git diff は、どれも上の 2 つと同じ形 (merge-base からの差分と `-c core.quotepath=off`) で取る。どちらの理由も `dev-workflow:pre-merge-quality-gate` の Phase 0 が持つ。この skill に固有の害は、ドットが 2 つの形だと base 側だけのフロント変更で Phase 1 の skip が外れること。
 
 ### Phase 1: 早期スキップ判定
 
@@ -79,9 +79,9 @@ E2E テストかどうかは、Phase 2 が決める E2E の置き場、それも
 
 - subagent_type: `general-purpose`
 - prompt: 以下を渡す
-  - フロント変更の概要（`git diff <base>..HEAD --stat` の結果）
+  - フロント変更の概要（`git -c core.quotepath=off diff <base>...HEAD --stat` の結果）
   - 変更ファイル一覧
-  - 全 diff 取得の指示（agent が `git diff <base>..HEAD` を必要に応じて実行）
+  - 全 diff 取得の指示（agent が `git -c core.quotepath=off diff <base>...HEAD` を必要に応じて実行）
   - E2E テストファイルの一覧 (置き場の決め方は下記)
   - 検出パターン hint（下記）
   - 出力フォーマット指定（下記 Phase 3）

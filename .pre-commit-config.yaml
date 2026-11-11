@@ -9,11 +9,11 @@
 #   hook も config ごとに 2 本ある (下の該当 hook のコメントを参照)。
 # - claude plugin validate --strict で plugin.json の妥当性を機械検証する。
 #   フィールド名を散文へ再掲しないための canonical な検証手段。
-# - issue-id.py が Issue 識別子の記法を検査する。追跡ファイルとコミットメッセージで
+# - issue-id.py が Issue 識別子の記法を検査する。リポジトリのファイルとコミットメッセージで
 #   surface が違うため hook を 2 本に分ける (下の該当 hook のコメントを参照)。
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-# commit-msg を足すのは、コミットメッセージが追跡ファイルではなく pre-commit stage の
+# commit-msg を足すのは、コミットメッセージがリポジトリのファイルではなく pre-commit stage の
 # 走査に入らないため。ここに書かないと `pre-commit install` が commit-msg の hook を
 # 置かず、設定にはあるのに一度も発火しない形になる (実測: この行を入れる前の開発機には
 # .git/hooks/commit-msg が無かった)。既にインストール済みの環境では
@@ -126,19 +126,19 @@ repos:
         pass_filenames: false
         always_run: true
 
-      # 記法違反はどのファイルにも書けるので、走査対象は追跡ファイル全体で固定する
+      # 記法違反はどのファイルにも書けるので、走査対象を hook の側で絞らない
       # (対象集合の canonical は issue-id.py の --check)。ファイル名で絞る指定を
       # 置かないのはその宣言で、実際に走ることを保証しているのは always_run: true の方。
       # always_run があると pre-commit のファイル名フィルタは効かなくなる
       # (実測: 設定の top-level に exclude を置いてもこの hook は走った)。
       - id: issue-id-notation
-        name: Issue 識別子の記法を検査する (追跡ファイル)
+        name: Issue 識別子の記法を検査する (リポジトリのファイル)
         language: system
         entry: plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py --check
         pass_filenames: false
         always_run: true
 
-      # コミットメッセージは追跡ファイルではないので --check の走査集合に入らない。
+      # コミットメッセージはリポジトリのファイルではないので --check の走査集合に入らない。
       # pre-commit は commit-msg stage で message ファイルのパスを 1 つだけ渡すので、
       # --check-text の引数として素直に流れる。
       #

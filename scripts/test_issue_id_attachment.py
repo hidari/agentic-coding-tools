@@ -81,7 +81,7 @@ class Attachment(unittest.TestCase):
 
     def test_repository_check_runs_on_the_pre_commit_stage(self):
         # `stages: [manual]` を 1 行足すと、この hook は commit 時にも
-        # `pre-commit run --all-files` にも現れないまま追跡ファイル面が消え、他の pin は
+        # `pre-commit run --all-files` にも現れないまま --check の面が消え、他の pin は
         # 全部緑のまま残る (変異注入で確認)。この hook は stages を宣言しないので
         # top-level の default_stages を継承する
         lines = live_lines(PRE_COMMIT_CONFIG)
@@ -119,7 +119,7 @@ class Attachment(unittest.TestCase):
         )
 
     def test_repository_check_is_not_narrowed(self):
-        # 走査対象を追跡ファイル全体で固定するための対。実際に走ることを保証している
+        # 走査対象を hook の側で絞らないための対。実際に走ることを保証している
         # のは always_run: true の方で (実測: 絞り込みを足しても always_run があれば
         # 走る)、files: / exclude: を置かないのはその宣言。always_run だけが落ちると
         # 残った絞り込みが効き始め、走らなかったこと自体が出力に現れなくなる
