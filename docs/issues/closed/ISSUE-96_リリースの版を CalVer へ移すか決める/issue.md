@@ -1,5 +1,5 @@
 ---
-status: in_progress
+status: closed
 ---
 
 # chore: リリースの版を CalVer へ移すか決める
@@ -47,10 +47,22 @@ Hidari の判断で CalVer へ移すことにした。形式は `vYYYY.M.N` で�
 
 GitHub の releases の表示 (並びと Latest の付き方) は測っていない。本物の release を作らないと見られないので、最初の CalVer の release で確かめ、そのときにこの Issue を閉じる。release skill の手順 4 に、`gh release list` で見る確認を足してある。
 
+## 最初の CalVer の release での確認 (2026-11-11)
+
+最初の CalVer の release として v2026.11.0 を c54ced2 で切った。作った直後の `gh release list --limit 3` の出力 (列はタブ区切り) は次のとおりで、新しい release が先頭に並び、Latest が付いた。
+
+```
+v2026.11.0	Latest	v2026.11.0	2026-11-11T06:14:19Z
+v0.20.0: 配布物からテストを外す		v0.20.0	2026-10-22T12:57:45Z
+v0.19.0: in-repo-issue にタスクを消化せずに閉じる経路を足す		v0.19.0	2026-10-21T07:38:17Z
+```
+
+同じ時点の `git tag --sort=version:refname` の末尾 3 行は v0.19.0、v0.20.0、v2026.11.0 の順だった。release skill の手順 5 の検索は、このときこの Issue の 1 件だけを拾った (in_progress の Issue は 2 件)。
+
 ## タスク
 
 - [x] 移すか残すかを決める
-- [ ] 移すなら、形式と前後の並びを決め、並びを実測で確かめる (git 側は確かめた。GitHub の releases の表示は最初の CalVer リリースで確かめる)
+- [x] 移すなら、形式と前後の並びを決め、並びを実測で確かめる (git 側は 2026-10-23 に、GitHub の releases の表示は最初の CalVer の release の v2026.11.0 で確かめた)
 - [x] 移すなら、release skill を書き換え、消費側へ注記の変更を伝える
 
 ## 関連
