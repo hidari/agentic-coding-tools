@@ -40,7 +40,10 @@ git diff <base>...HEAD --stat        # 変更概要
 gh pr view <num> --json title,body   # PR メタ情報
 git diff <base>...HEAD | wc -l       # 差分の行数
 (cd "$(git rev-parse --show-toplevel)" && git diff -z --name-only --diff-filter=d <base>...HEAD | xargs -0 wc -l)  # 削除を除いた一覧と各ファイルの行数
+git rev-parse HEAD                   # ゲートが見た SHA (Phase 4 で使う)
 ```
+
+最後の SHA は Phase 4 で 2 つに使う。マージの前に待つ CI の run の特定と、マージを head がこの SHA のときに限る `--match-head-commit` である。
 
 `<base>...HEAD` は merge-base からの差分で、親が取る差分と prompt で渡す差分はこの形にする。2 点の `<base>..HEAD` は `<base>` と `HEAD` の比較なので、分岐の後に base が進んでいると、PR が触っていない base 側の変更が逆向きの差分として混ざる (実測: main だけに足したファイルが削除として出た)。
 
@@ -164,17 +167,17 @@ Phase 1 の指摘と gate 自身の判断を、次の軸で分類する:
    - Phase D を直接名指ししないのは、同梱経路の射程が Phase D 全体とは一致せず、狭める側の canonical が同梱節だから。ここで Phase D を名指しすると gate の宣言だけが canonical より広くなる
    - 「コミットへ含める」ではなく「適用する」と書くのは、同梱節の射程がコミットを作る操作だけではないため。次の Phase を起動する手順のようにコミットへ入る変更を作らないものが混ざるので、動詞をコミットに縛ると gate の宣言だけが canonical より狭くなる (広くする側と同じだけ危険で、狭い側は「やらなくてよい」に読める)
    - Phase 4 (執行) ではなくここへ置くのは、同梱が issue.md の編集と `git mv` と相対リンクの補正というファイル変更を伴うため。Phase 4 に置くと、この Phase の再検証を通らない変更が PR へ入る
-   - マージ経路から入ったときは、同梱で作ったコミットをリモートの対象ブランチへ push してから Phase 4 へ進む。`gh pr merge` がマージするのはリモート側の内容なので、手元に積んだだけだと同梱が黙って落ちる
-   - その push は必須チェックを pending へ戻す。待たずに Phase 4 へ進むと `gh pr merge` が拒否されるので、`gh pr checks <num> --watch` で緑を見てから進む。同梱をマージ経路で行うとこの再走のぶん CI が余計に走る (作成経路には無い費用で、同梱節が書く費用の比較は作成経路の話)
+   - マージ経路から入ったときは、同梱で作ったコミットも 6 のとおり push して Phase 0 へ戻る。同梱をマージ経路で行うとこのやり直しと CI の再走のぶん費用が増える (作成経路には無い費用で、同梱節が書く費用の比較は作成経路の話)
 3. フォーマッタを走らせる (該当エリアのみ)
 4. 全テストが pass することを確認する
    - どちらも入口はプロジェクトごとに違う。canonical はプロジェクトの CLAUDE.md なので、ここでは特定のコマンドを既定にしない
    - CLAUDE.md が書いていなければリポジトリのルートにあるタスクランナーの定義 (`Makefile` / `justfile` / `package.json` / `.pre-commit-config.yaml` など) を読んで確かめる。この列挙は手がかりであって網羅ではない
    - エリアで切られているプロジェクトでは、触ったエリアの target を選ぶ。エリアの切り方はデプロイ単位であることが多い
-5. UI 変更があり、プロジェクトの CLAUDE.md が実ブラウザでの確認を求めていれば、**chrome-devtools-mcp で実ブラウザ動作確認**
+5. UI 変更があり、CLAUDE.md (user スコープかプロジェクトのどちらか) が実ブラウザでの確認を求めていれば、**chrome-devtools-mcp で実ブラウザ動作確認**
    - 主要ツール: `mcp__plugin_chrome-devtools-mcp_chrome-devtools__navigate_page`, `take_snapshot`, `take_screenshot`, `list_console_messages`, `click`, `hover`, `fill`
    - フロントエンドを再起動した後は `isolatedContext` パラメータを使う
 6. 必要なら追加コミット (同じブランチに積むか、既にマージ済みなら follow-up ブランチ)
+   - マージ経路では、積んだコミットをリモートの対象ブランチへ push してから Phase 0 へ戻り、ゲートをやり直す。`gh pr merge` がマージするのはリモート側の内容なので、手元に積んだだけだと修正が黙って落ちる。Phase 0 で控えた SHA は push の前の head なので、戻らずに Phase 4 へ進むと古い SHA の CI を待った末に `--match-head-commit` に拒否される
 
 ### Phase 4: マージ / PR 作成実行
 
@@ -182,7 +185,12 @@ Phase 1 の指摘と gate 自身の判断を、次の軸で分類する:
 
 マージ側の形をここへ再掲しないのは、squash の subject が in-repo Issue の識別子規約に縛られており、その canonical が本 skill の外にあるため。写すと規約が変わったときに写した側だけが取り残される。しかも subject はサーバ側で生成されるので commit-msg hook が届かず、どの経路も赤くならないまま履歴へ違反が残る。`--subject` を省いた形でマージすると実際に違反が 1 件履歴へ入った (実測)。
 
-ブランチ削除だけは本 skill が決める。Phase C が示す形に `--delete-branch` を足して渡すこと。このフラグはローカルとリモートの両方を消すので、リモート側の `delete_branch_on_merge` を有効にしているリポジトリでも要る (設定が消すのはリモートだけで、ローカルは残る)。
+マージの前に、Phase 0 で控えた SHA の CI の run を、同梱の `${CLAUDE_SKILL_DIR}/scripts/wait-ci-runs.py <SHA>` で待つ。待ちはエージェントのコマンドの時間制限 (Claude Code の Bash は最大 10 分) を超えうるので、background で起動し (Claude Code なら `run_in_background`)、`; echo "rc=$?"` を付けて終了の通知から rc を読む。制限に合わせて `--complete-timeout` を縮めない。CI が制限より長いと、落ちていないのに rc 2 で終わる。rc 0 を見てから進み、1 なら Phase 3 の 1 から直して 6 のとおり push し、Phase 0 へ戻る。2 なら理由を読んで止まる。rc の意味、登録の待ち方と判定の規則、PR の checks を watch する形を使わない理由は、スクリプトの docstring が canonical。
+
+マージのフラグのうち 2 つは本 skill が決める。Phase C が示す形に次の 2 つを足して渡すこと。
+
+- `--delete-branch`: ローカルとリモートの両方を消す。リモート側の `delete_branch_on_merge` を有効にしているリポジトリでも要る (設定が消すのはリモートだけで、ローカルは残る)
+- `--match-head-commit <Phase 0 で控えた SHA>`: PR の head がその SHA のときだけマージさせる。Phase 0 の後に head が動いた (Phase 3 の 6 の戻りを飛ばした、別の誰かが push した) ときに、ゲートが見ていない内容のマージを止める。拒否されたら、手元のブランチとリモートの head を揃えてから (飛ばした push をする、他人の push を取り込む) Phase 0 からゲートをやり直し、控え直した SHA で打つ。Phase 0 は手元の HEAD を控えるので、揃えずに戻ると同じ SHA を控えて同じ拒否を繰り返す
 
 ### Phase 5: Issue クローズ処理 (gh pr merge 実行時のみ)
 

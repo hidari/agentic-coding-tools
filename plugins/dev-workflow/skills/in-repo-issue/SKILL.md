@@ -240,14 +240,9 @@ gh pr view <PR> --json title,body --jq '.title, .body' \
 - パターンを `(Closes|Fixes) #[0-9]+` のような **GitHub 素形式専用へ戻さないこと**。 in-repo Issue の識別子は数字記法を使わないので抽出が 0 件化し、 自動クローズが静かに止まる
 - なお現行パターンは `Closes #12` から `#12` **も**拾う (実測)。 数字記法は Issue ディレクトリ名にならないので C.3 の「見つからない」で no-op になるが、 ログには残る。 本文の数字記法はそもそも記法違反なので、 止めるのは C.1 ではなく `issue-id.py --check-text` の側
 
-C.2 起動契機 2 (gate 未経由フォールバック) の場合のみ、 main の最新 CI 成功を確認:
+C.2 gate を経由せずに起動されたとき (「いつ使うか」のフォールバックの項) だけ、 マージで main にできたコミットの CI を確認する。 待ち方は `dev-workflow:pre-merge-quality-gate` の Phase 4 に従い、 同 skill が同梱するスクリプトに `gh pr view <PR> --json mergeCommit --jq .mergeCommit.oid` が出す SHA を渡す。 同じ plugin の skill は並べて置かれるので、 パスは `${CLAUDE_SKILL_DIR}/../pre-merge-quality-gate/scripts/wait-ci-runs.py` になる。 rc が 0 以外なら Phase C 終了 (Phase D 実行を保留)。
 
-```bash
-CI=$(gh run list --branch main --limit 1 --json status,conclusion --jq '.[0]')
-echo "$CI" | jq -e '.status == "completed" and .conclusion == "success"' >/dev/null
-```
-
-CI 未成功なら Phase C 終了 (Phase D 実行を保留)。 gate Phase 5 経由の場合は gate が既に検証済みなのでこのチェックをスキップ。
+gate Phase 5 経由の場合はこのチェックを飛ばす。 ただし gate がマージの前に待ったのは PR の head の run で、 main のマージコミットの run ではない (後者はマージの後にしか作られない)。 PR と main で CI の trigger と job が同じプロジェクトでは、 PR の run の結果がそのまま当てはまる。 main にしか無い job (デプロイなど) を持つプロジェクトでは、 その成否は gate も C.2 も見ていないので、 マージコミットの SHA で上の待ち方を手で当てる。
 
 C.3 該当 Issue の `## タスク` チェックリスト判定 (`${ID}` は C.1 が抽出した識別子):
 

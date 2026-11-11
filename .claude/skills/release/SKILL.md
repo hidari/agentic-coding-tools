@@ -57,9 +57,11 @@ CI も main の最新 SHA で確認する。run の success だけでは足り�
 
 ```bash
 sha=$(git rev-parse HEAD)
-gh run list --commit "$sha" --json name,status,conclusion
+python3 plugins/dev-workflow/skills/pre-merge-quality-gate/scripts/wait-ci-runs.py "$sha"; echo "rc=$?"
 gh run view <run-id> --json jobs --jq '.jobs[] | .steps[] | "\(.conclusion) \(.name)"'
 ```
+
+1 本目は run の登録と完了を待って conclusion で判定する。起動の仕方は `dev-workflow:pre-merge-quality-gate` の Phase 4 に従う。run ごとの行 (最後の集計行を除く) の末尾が run-id で、2 本目に渡す。
 
 ### 2. 前回の release からの差分を読む
 
