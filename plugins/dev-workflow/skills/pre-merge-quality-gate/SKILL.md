@@ -185,12 +185,12 @@ Phase 1 の指摘と gate 自身の判断を、次の軸で分類する:
 
 マージ側の形をここへ再掲しないのは、squash の subject が in-repo Issue の識別子規約に縛られており、その canonical が本 skill の外にあるため。写すと規約が変わったときに写した側だけが取り残される。しかも subject はサーバ側で生成されるので commit-msg hook が届かず、どの経路も赤くならないまま履歴へ違反が残る。`--subject` を省いた形でマージすると実際に違反が 1 件履歴へ入った (実測)。
 
-マージの前に、Phase 0 で控えた SHA の CI の run を、同梱の `${CLAUDE_SKILL_DIR}/scripts/wait-ci-runs.py <SHA>` で待つ。待ちはエージェントのコマンドの時間制限 (Claude Code の Bash は最大 10 分) を超えうるので、background で起動し (Claude Code なら `run_in_background`)、`; echo "rc=$?"` を付けて終了の通知から rc を読む。制限に合わせて `--complete-timeout` を縮めない。CI が制限より長いと、落ちていないのに rc 2 で終わる。rc 0 を見てから進み、1 なら直して Phase 0 からやり直し、2 なら理由を読んで止まる。rc の意味、登録の待ち方と判定の規則、PR の checks を watch する形を使わない理由は、スクリプトの docstring が canonical。
+マージの前に、Phase 0 で控えた SHA の CI の run を、同梱の `${CLAUDE_SKILL_DIR}/scripts/wait-ci-runs.py <SHA>` で待つ。待ちはエージェントのコマンドの時間制限 (Claude Code の Bash は最大 10 分) を超えうるので、background で起動し (Claude Code なら `run_in_background`)、`; echo "rc=$?"` を付けて終了の通知から rc を読む。制限に合わせて `--complete-timeout` を縮めない。CI が制限より長いと、落ちていないのに rc 2 で終わる。rc 0 を見てから進み、1 なら Phase 3 の 1 から直して 6 のとおり push し、Phase 0 へ戻る。2 なら理由を読んで止まる。rc の意味、登録の待ち方と判定の規則、PR の checks を watch する形を使わない理由は、スクリプトの docstring が canonical。
 
 マージのフラグのうち 2 つは本 skill が決める。Phase C が示す形に次の 2 つを足して渡すこと。
 
 - `--delete-branch`: ローカルとリモートの両方を消す。リモート側の `delete_branch_on_merge` を有効にしているリポジトリでも要る (設定が消すのはリモートだけで、ローカルは残る)
-- `--match-head-commit <Phase 0 で控えた SHA>`: PR の head がその SHA のときだけマージさせる。Phase 0 の後に head が動いた (Phase 3 の 6 の戻りを飛ばした、別の誰かが push した) ときに、ゲートが見ていない内容のマージを止める。拒否されたら Phase 0 からゲートをやり直し、控え直した SHA で打つ
+- `--match-head-commit <Phase 0 で控えた SHA>`: PR の head がその SHA のときだけマージさせる。Phase 0 の後に head が動いた (Phase 3 の 6 の戻りを飛ばした、別の誰かが push した) ときに、ゲートが見ていない内容のマージを止める。拒否されたら、手元のブランチとリモートの head を揃えてから (飛ばした push をする、他人の push を取り込む) Phase 0 からゲートをやり直し、控え直した SHA で打つ。Phase 0 は手元の HEAD を控えるので、揃えずに戻ると同じ SHA を控えて同じ拒否を繰り返す
 
 ### Phase 5: Issue クローズ処理 (gh pr merge 実行時のみ)
 
