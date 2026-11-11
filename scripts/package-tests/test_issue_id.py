@@ -592,8 +592,8 @@ class CheckRepository(unittest.TestCase):
         self.assertIn("notes.md:1:", err)
         self.assertIn("違反 1 件", out)
 
-    def test_untracked_file_is_not_scanned(self):
-        # Issue ディレクトリの外の未追跡は走査しない。作業中のスクラッチで赤くしない
+    def test_untracked_file_outside_docs_issues_is_not_scanned(self):
+        # 作業中のスクラッチで赤くしない
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             init_repo(root, (f"{PREFIX}1_最初の課題",))

@@ -9,11 +9,11 @@
 #   hook も config ごとに 2 本ある (下の該当 hook のコメントを参照)。
 # - claude plugin validate --strict で plugin.json の妥当性を機械検証する。
 #   フィールド名を散文へ再掲しないための canonical な検証手段。
-# - issue-id.py が Issue 識別子の記法を検査する。追跡ファイルとコミットメッセージで
+# - issue-id.py が Issue 識別子の記法を検査する。リポジトリのファイルとコミットメッセージで
 #   surface が違うため hook を 2 本に分ける (下の該当 hook のコメントを参照)。
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-# commit-msg を足すのは、コミットメッセージが追跡ファイルではなく pre-commit stage の
+# commit-msg を足すのは、コミットメッセージがリポジトリのファイルではなく pre-commit stage の
 # 走査に入らないため。ここに書かないと `pre-commit install` が commit-msg の hook を
 # 置かず、設定にはあるのに一度も発火しない形になる (実測: この行を入れる前の開発機には
 # .git/hooks/commit-msg が無かった)。既にインストール済みの環境では
@@ -89,7 +89,7 @@ repos:
         always_run: true
         verbose: true
 
-      # コミットメッセージは追跡ファイルではないので --check の走査集合に入らない。
+      # コミットメッセージはリポジトリのファイルではないので --check の走査集合に入らない。
       # always_run: true が無いと、この stage では絞り込みが「絞る」ではなく「常に skip」に
       # なる (渡るファイルが message ファイル 1 本しかないため)。理由の実測は下の
       # issue-id-notation-commit-msg のコメントが持つ。
@@ -138,7 +138,7 @@ repos:
         pass_filenames: false
         always_run: true
 
-      # コミットメッセージは追跡ファイルではないので --check の走査集合に入らない。
+      # コミットメッセージはリポジトリのファイルではないので --check の走査集合に入らない。
       # pre-commit は commit-msg stage で message ファイルのパスを 1 つだけ渡すので、
       # --check-text の引数として素直に流れる。
       #

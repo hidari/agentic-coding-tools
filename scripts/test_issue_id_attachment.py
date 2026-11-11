@@ -81,7 +81,7 @@ class Attachment(unittest.TestCase):
 
     def test_repository_check_runs_on_the_pre_commit_stage(self):
         # `stages: [manual]` を 1 行足すと、この hook は commit 時にも
-        # `pre-commit run --all-files` にも現れないまま追跡ファイル面が消え、他の pin は
+        # `pre-commit run --all-files` にも現れないまま --check の面が消え、他の pin は
         # 全部緑のまま残る (変異注入で確認)。この hook は stages を宣言しないので
         # top-level の default_stages を継承する
         lines = live_lines(PRE_COMMIT_CONFIG)

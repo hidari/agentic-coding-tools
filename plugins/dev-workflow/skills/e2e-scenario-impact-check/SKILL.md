@@ -35,10 +35,10 @@ CI の lint と typecheck は E2E テストの **実行時整合性** を検出�
 
 ```bash
 git -c core.quotepath=off diff <base>...HEAD --name-only   # 変更ファイル一覧
-git diff <base>...HEAD --stat                # 変更概要
+git -c core.quotepath=off diff <base>...HEAD --stat        # 変更概要
 ```
 
-`<base>` は通常 `main`。`<base>...HEAD` は merge-base からの差分で、この skill の差分はこの形で取る。ドットが 2 つの形は `<base>` と `HEAD` の比較なので、分岐の後に base が進んでいると、PR が触っていない base 側の変更を逆向きの差分として混ぜ (実測: main だけに足したファイルが削除として出た)、base 側だけのフロント変更で Phase 1 の skip を外してしまう。`-c core.quotepath=off` は、ASCII 以外を含むパスを 8 進のエスケープにさせないため (実測: 日本語のディレクトリ名がすべてエスケープされた)。
+`<base>` は通常 `main`。この skill の git diff は、どれも上の 2 つと同じ形 (merge-base からの差分と `-c core.quotepath=off`) で取る。どちらの理由も `dev-workflow:pre-merge-quality-gate` の Phase 0 が持つ。この skill に固有の害は、ドットが 2 つの形だと base 側だけのフロント変更で Phase 1 の skip が外れること。
 
 ### Phase 1: 早期スキップ判定
 
@@ -79,9 +79,9 @@ E2E テストかどうかは、Phase 2 が決める E2E の置き場、それも
 
 - subagent_type: `general-purpose`
 - prompt: 以下を渡す
-  - フロント変更の概要（`git diff <base>...HEAD --stat` の結果）
+  - フロント変更の概要（`git -c core.quotepath=off diff <base>...HEAD --stat` の結果）
   - 変更ファイル一覧
-  - 全 diff 取得の指示（agent が `git diff <base>...HEAD` を必要に応じて実行）
+  - 全 diff 取得の指示（agent が `git -c core.quotepath=off diff <base>...HEAD` を必要に応じて実行）
   - E2E テストファイルの一覧 (置き場の決め方は下記)
   - 検出パターン hint（下記）
   - 出力フォーマット指定（下記 Phase 3）
