@@ -116,6 +116,7 @@ NOTATION_SOURCE = "plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py
 # 借りる名前。private 名を含むので、rename が静かな素通りにならないよう実在を検査する
 BORROWED = (
     "GitError",
+    "DeclarationError",
     "ANY_ISSUE_DIR",
     "GITHUB_REF",
     "CROSS_REPO_REF",
@@ -127,7 +128,6 @@ BORROWED = (
     "issue_dirs",
     "issue_dir_of",
     "load_non_issue_dirs",
-    "DeclarationError",
     "resolve_root",
 )
 

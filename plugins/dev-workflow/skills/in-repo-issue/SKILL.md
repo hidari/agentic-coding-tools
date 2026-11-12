@@ -38,7 +38,7 @@ surface で決まる (コミットメッセージという surface は CI に無
 置き場は `docs/issues/` の**外**にすること。 `docs/issues/` 直下のディレクトリは `templates/` と
 `closed/` を除いて Issue ディレクトリとみなされ、 検査スクリプト自身が命名違反として報告される
 (実測)。 プロジェクトの規約で `docs/issues/` の中に置くと決まっている補助ディレクトリ (雛形の置き場など) は、
-`issue-id.py` が読む宣言で外せる。 宣言の置き場と形の canonical は同スクリプトの `DECLARATION` で、 ここには再掲しない。
+`issue-id.py` が読む宣言で外せる。 宣言の置き場と形の canonical は同スクリプトの `DECLARATION`、 宣言できない名前の canonical は `_declaration_problem` で、 ここには再掲しない。
 
 templates と `issue-id.py` のセットアップは「初期化」として起票とは別コミットに切る
 (例: `chore(issues): in-repo-issue のテンプレートと採番スクリプトを追加`)。

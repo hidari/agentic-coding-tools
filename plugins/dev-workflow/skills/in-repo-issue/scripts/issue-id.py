@@ -53,11 +53,15 @@ scripts/check-leak-guard-rules.py と同じ理由で、「規約違反」と「�
 - --next は採番が数えられない名前 (旧形式の <N>_ にも当たらないもの) のディレクトリが現ツリーか
   どれか 1 つの ref にあるだけで、識別子を出さず exit 1 で止まる。Issue ではない補助ディレクトリ
   (未追跡や隠しディレクトリを含む) も同じく止める。名前も置き場も規約で決まっていて動かせない
-  ものは、DECLARATION で宣言すれば止まらない (宣言の形と、宣言できない名前は DECLARATION の
-  定義が持つ)。宣言は名前で外すので、宣言した名前の中に番号を持つディレクトリがあれば止める。
+  ものは、DECLARATION で宣言すれば止まらない (宣言の置き場と形は DECLARATION、宣言できない
+  名前は _declaration_problem が持つ)。宣言は名前で外すので、宣言した名前の中に番号を
+  持ちうるディレクトリがあれば止める (どれを止めるかは _may_hide_number が持つ)。
   ref にしか無い名前は --check が見ないので、--check が緑でも --next は止まりうる。
-  remote-tracking ref は手元で消しても次の fetch で戻るので、
-  上流のブランチで改名するか、上流で消えたものを prune するまで止まり続ける
+  remote-tracking ref は手元で消しても次の fetch で戻るので、上流のブランチで改名するか、
+  上流で消えたものを prune するまで止まり続ける
+- 宣言は --next と --check が作業ツリーから、--check-diff が差分の後側 (index か HEAD の
+  tree) から読む。--check-diff は走査の内容を後側に揃えているので、宣言だけを作業ツリーから
+  読むと、stage していない宣言の編集が増分の判定を変える
 - --check は追跡下のファイルに加え、Issue ディレクトリ配下の未追跡で ignore されていない
   ファイルも読む。pre-commit は未追跡のファイルを stash しないので、違反のある書きかけの
   issue.md を git add せずに置いているあいだは、無関係なコミットでも hook が赤くなる。
@@ -475,6 +479,14 @@ def _blob_text(root: Path, oid: str) -> str | None:
         return None
 
 
+def _declaration_blob(root: Path, entry: tuple[str, str]) -> str:
+    """index / tree にある宣言の本文を返す。UTF-8 で読めなければ検査不能にする。"""
+    text = _blob_text(root, entry[1])
+    if text is None:
+        raise DeclarationError(f"{DECLARATION} を UTF-8 で読めない")
+    return text
+
+
 # --- Issue ディレクトリ --------------------------------------------------------
 
 
@@ -492,13 +504,24 @@ def _declaration_problem(name: object) -> str | None:
 
 
 def load_non_issue_dirs(root: Path) -> frozenset[str]:
-    """Issue ではないディレクトリの名前を返す。templates/ に宣言の分を足したもの。"""
+    """作業ツリーの宣言から Issue ではないディレクトリの名前を返す。"""
     path = root / DECLARATION
     if not path.exists():
         return frozenset({TEMPLATES})
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        raise DeclarationError(f"{DECLARATION} を読めない: {e}") from e
+    return parse_non_issue_dirs(text)
+
+
+def parse_non_issue_dirs(text: str | None) -> frozenset[str]:
+    """宣言の本文から、templates/ に宣言の分を足した名前の集合を返す。None は宣言なし。"""
+    if text is None:
+        return frozenset({TEMPLATES})
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
         raise DeclarationError(f"{DECLARATION} を読めない: {e}") from e
     # 知らないキーを黙って通すと、綴りを間違えた宣言が「宣言なし」として静かに効かなくなる
     if not isinstance(data, dict) or set(data) != {DECLARATION_KEY}:
@@ -536,8 +559,10 @@ def issue_dirs(root: Path, non_issue: frozenset[str]) -> list[tuple[str, str]]:
 
 
 def _top_level(path: str) -> tuple[list[str], int] | None:
-    """docs/issues 配下のファイルパスを要素に割り、直下 (closed/ の中なら closed/ 直下) の
-    ディレクトリの位置を返す。ディレクトリの配下に無いファイルは None。"""
+    """docs/issues 配下のファイルパスを要素に割り、直下のディレクトリの位置を返す。
+
+    closed/ の中のファイルなら closed/ 直下の位置を返す。ディレクトリの配下に無いファイルは None
+    """
     parts = path.split("/")
     if tuple(parts[:2]) != ISSUE_ROOT:
         return None
@@ -562,11 +587,23 @@ def issue_dir_of(path: str, non_issue: frozenset[str]) -> tuple[str, str] | None
     return parts[depth], "/".join(parts[: depth + 1])
 
 
-def hidden_issue_dir_of(path: str, non_issue: frozenset[str]) -> str | None:
-    """Issue ではないディレクトリの中で、番号を持つディレクトリの相対パスを返す。
+def _may_hide_number(name: str, holds_issue_file: bool) -> bool:
+    """Issue ではないディレクトリの中で、番号を持つ Issue でありうるディレクトリか。
 
     外したディレクトリの中に Issue が残っていると、その番号を数えずに再発行する。
-    最後の要素はファイルなので見ない。番号を持つ最も外側のディレクトリを返す
+    採番が数える形は中身を問わず止める。数字で始まるだけの名前 (2-b) は、直下に
+    ISSUE_FILE を持つときだけ止める。持たないもの (年で分けた archive/2026/ など) まで
+    止めると、規約で決まった保管庫を宣言しても起票できないままになる。ISSUE_FILE の
+    有無は名前の完全一致で見る。大小を区別しない FS で exists() を使うと、現ツリーだけが
+    ISSUE.md にも当たり、文字列で比べる ref の側と判定が割れる
+    """
+    return bool(ANY_ISSUE_DIR.match(name)) or (holds_issue_file and bool(NUMBER_LEAD.match(name)))
+
+
+def hidden_issue_dir_of(path: str, non_issue: frozenset[str]) -> str | None:
+    """Issue ではないディレクトリの中で、番号を持ちうるディレクトリの相対パスを返す。
+
+    最後の要素はファイルなので名前としては見ない。最も外側のものを返す
     """
     got = _top_level(path)
     if got is None:
@@ -574,8 +611,9 @@ def hidden_issue_dir_of(path: str, non_issue: frozenset[str]) -> str | None:
     parts, depth = got
     if parts[depth] not in non_issue:
         return None
-    for i in range(depth + 1, len(parts) - 1):
-        if ANY_ISSUE_DIR.match(parts[i]):
+    last_dir = len(parts) - 2
+    for i in range(depth + 1, last_dir + 1):
+        if _may_hide_number(parts[i], i == last_dir and parts[-1] == ISSUE_FILE):
             return "/".join(parts[: i + 1])
     return None
 
@@ -593,10 +631,13 @@ def hidden_issue_dirs(root: Path, non_issue: frozenset[str]) -> list[str]:
                 continue
             for dirpath, dirnames, _files in os.walk(top):
                 dirnames.sort()
-                for d in [d for d in dirnames if ANY_ISSUE_DIR.match(d)]:
-                    found.append((Path(dirpath) / d).relative_to(root).as_posix())
-                    # 番号を持つディレクトリの中は報告済みなので降りない
-                    dirnames.remove(d)
+                for d in list(dirnames):
+                    child = Path(dirpath) / d
+                    # listdir が返すのは実際の名前なので、完全一致の判定が ref の側と揃う
+                    if _may_hide_number(d, ISSUE_FILE in os.listdir(child)):
+                        found.append(child.relative_to(root).as_posix())
+                        # 報告したディレクトリの中は降りない (ref の側も最も外側だけを返す)
+                        dirnames.remove(d)
     return found
 
 
@@ -838,7 +879,6 @@ def run_check(root: Path) -> int:
 
 
 def run_check_diff(root: Path, base: str | None) -> int:
-    non_issue = load_non_issue_dirs(root)
     if base is None:
         rng, label = "--cached", "index"
         blobs = _index_entries(root)
@@ -847,6 +887,10 @@ def run_check_diff(root: Path, base: str | None) -> int:
         # 混ざる (実測)。見たいのは分岐点から現在までの変更なので merge-base 基準が正しい
         rng = label = f"{base}...HEAD"
         blobs = _tree_entries(root, "HEAD")
+    # 宣言も差分の後側から読む。作業ツリーから読むと、stage していない宣言の編集が増分の
+    # 判定を変え、宣言を含めずにコミットした内容を手元だけが緑にする
+    declared = blobs.get(DECLARATION)
+    non_issue = parse_non_issue_dirs(None if declared is None else _declaration_blob(root, declared))
 
     # ディレクトリ名は、新しく現れた名前だけを見る。起点を issue.md に限るのは、配下の
     # 任意ファイルを起点にすると旧記法のディレクトリを触るたび赤くなるため。
@@ -869,6 +913,11 @@ def run_check_diff(root: Path, base: str | None) -> int:
 
     violations = _dir_name_violations(new_dirs)
     violations.extend(_number_conflicts(_issue_dirs_from_paths(list(blobs), non_issue)))
+    # 番号の重複と同じく、絞っても逃げられる先が無いので後側の全体を見る
+    violations.extend(
+        f"{HIDDEN_MESSAGE}: {rel}"
+        for rel in sorted({hidden_issue_dir_of(p, non_issue) for p in blobs} - {None})
+    )
 
     scanned = excluded = unreadable = submodules = 0
     added_total = 0

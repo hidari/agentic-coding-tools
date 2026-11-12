@@ -505,6 +505,19 @@ class LinkBaseline(unittest.TestCase):
             f"実体の無い baseline が報告されていない: {messages(findings)}",
         )
 
+    def test_declared_directory_keys_by_path(self):
+        # 宣言した置き場のファイルは Issue ディレクトリではないので、鍵はパスになる。宣言を
+        # 読まないと 2 本とも置き場の名前 1 つへ束ねられ、baseline に無い鍵の超過と、実体の
+        # 無い baseline の 2 件ずつとして報告される。宣言できる名前は番号として数えられない
+        # ので、宣言の効き目が観測できるのは母集団ではなくこの鍵の側だけ
+        fx = Fixture(self)
+        fx.add_issue("ISSUE-2_beta", "- なし")
+        a = fx.add_raw("docs/issues/_template/a/issue.md", issue_doc(self.LINK))
+        b = fx.add_raw("docs/issues/_template/b/issue.md", issue_doc(self.LINK))
+        fx.add_raw(crr.notation().DECLARATION, '{"non_issue_dirs": ["_template"]}')
+        findings, _ = fx.check({a: 1, b: 1})
+        self.assertEqual([], findings, messages(findings))
+
     def test_baseline_survives_closing_an_issue(self):
         # 鍵をパスにすると、クローズの `git mv` で「baseline に記録があるのに見つからない」と
         # 「リンクが増えた」の 2 件が同時に出る。後者は 1 本も増えていないので診断が誤りで、
@@ -577,6 +590,17 @@ class ExitCodes(unittest.TestCase):
         proc = fx.run_cli()
         self.assertEqual(1, proc.returncode, proc.stdout + proc.stderr)
         self.assertIn("ISSUE-77", proc.stderr)
+
+    def test_broken_declaration_exits_two(self):
+        # 宣言を読めないのは違反ではなく検査不能。借用先の例外を寄せ損ねると traceback の rc 1
+        # になり、「違反あり」と取り違える
+        fx = Fixture(self)
+        fx.add_issue("ISSUE-1_alpha", "- なし")
+        fx.add_raw(crr.notation().DECLARATION, "{")
+        proc = fx.run_cli()
+        self.assertEqual(2, proc.returncode, proc.stdout + proc.stderr)
+        self.assertIn(crr.notation().DECLARATION, proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
 
     def test_nothing_to_scan_exits_two(self):
         # 「規約違反」と「検査を走らせられなかった」を同じ赤にしない
