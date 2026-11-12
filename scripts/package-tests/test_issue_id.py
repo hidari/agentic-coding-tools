@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import os
 import subprocess
 import sys
@@ -143,6 +144,11 @@ def init_repo(root: Path, dirs: tuple[str, ...] = ()) -> None:
         write(root, f"docs/issues/{name}/issue.md")
     write(root, "README.md")
     commit(root, "init")
+
+
+def declare(root: Path, value: object) -> None:
+    """Issue ではないディレクトリの宣言を作業ツリーへ置く (コミットはしない)。"""
+    write(root, issue_id.DECLARATION, json.dumps(value, ensure_ascii=False))
 
 
 def run(argv: list[str]) -> tuple[int, str, str]:
@@ -432,6 +438,134 @@ class NextIdentifier(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertEqual(out, f"{PREFIX}2\n")
 
+    def test_declared_non_issue_dirs_do_not_stop_numbering(self):
+        # 規約で名前の決まった補助ディレクトリ (雛形の置き場と資料の保管庫) を宣言すれば
+        # 採番が通る。雛形の置き場は <置き場>/<雛形>/issue.md の形で、Issue をまとめた
+        # ディレクトリと構造が同じなので、形では見分けられない。closed/ の下にも置くのは、
+        # closed 側への適用を外しても緑のままにならないようにするため
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(
+                root,
+                (
+                    f"{PREFIX}1_最初の課題",
+                    "_template/NNN-template",
+                    "closed/_template/NNN-template",
+                ),
+            )
+            write(root, "docs/issues/archive/plans/20260208-1800_計画.md")
+            commit(root, "aside")
+            declare(root, {"non_issue_dirs": ["_template", "archive"]})
+            rc, out, err = run(["--next", "--root", str(root)])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out, f"{PREFIX}2\n")
+
+    def test_declaration_in_working_tree_applies_to_every_ref(self):
+        # 宣言は作業ツリーのものを全 ref に当てる。ref ごとの宣言を読むと、補助ディレクトリを
+        # 持つ全ブランチが宣言を取り込むまで採番が止まったままになる。宣言をコミットせずに
+        # 置くことで、ref の側から宣言を読む実装を赤くする
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題",))
+            git(root, "checkout", "-q", "-b", "topic")
+            write(root, "docs/issues/_template/NNN-template/issue.md")
+            # ref の番号は引き続き数える (宣言が ref の走査ごと止めていないことの対照)
+            write(root, f"docs/issues/{PREFIX}5_枝の課題/issue.md")
+            commit(root, "aside on topic")
+            git(root, "checkout", "-q", "-b", "remote-side", "main")
+            write(root, "docs/issues/archive/README.md")
+            commit(root, "aside on remote")
+            sha = git_out(root, "rev-parse", "HEAD")
+            git(root, "checkout", "-q", "main")
+            git(root, "update-ref", "refs/remotes/origin/remote-side", sha)
+            git(root, "branch", "-q", "-D", "remote-side")
+            before = run(["--next", "--root", str(root)])
+            declare(root, {"non_issue_dirs": ["_template", "archive"]})
+            rc, out, err = run(["--next", "--root", str(root)])
+        # 宣言が無ければ両方の ref が止める (fixture が ref の経路を通っていることの対照)
+        self.assertEqual(before[0], 1)
+        self.assertIn("docs/issues/_template (refs/heads/topic)", before[2])
+        self.assertIn("docs/issues/archive (refs/remotes/origin/remote-side)", before[2])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out, f"{PREFIX}6\n")
+
+    def test_undeclared_dirs_still_stop_numbering(self):
+        # 宣言は名前ごとに効く。片方だけ宣言したら、もう片方は ISSUE-104 のとおり止める
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題", "_template/NNN-template", "2-b"))
+            write(root, "docs/issues/archive/README.md")
+            commit(root, "aside")
+            declare(root, {"non_issue_dirs": ["_template"]})
+            rc, out, err = run(["--next", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn("採番が数えられない Issue ディレクトリ: docs/issues/2-b ", err)
+        self.assertIn("採番が数えられない Issue ディレクトリ: docs/issues/archive ", err)
+        self.assertNotIn("docs/issues/_template", err)
+        self.assertEqual(err.count("[x]"), 2)
+        # 止まったときに宣言の口があることを示す。示さないと改名か移動しか選べない
+        self.assertIn(issue_id.DECLARATION, err)
+
+    def test_numbered_name_inside_non_issue_dir_stops_numbering(self):
+        # 外したディレクトリの中に Issue が残っていると、その番号を rc 0 で再発行する。
+        # 宣言した名前だけでなく templates/ にも同じ規則を当てる。出所が ref だけのものも止める
+        cases = (
+            ("archive", f"docs/issues/archive/{PREFIX}5_しまった課題", False),
+            ("archive", "docs/issues/archive/old/5_旧形式の課題", False),
+            ("archive", f"docs/issues/closed/archive/{PREFIX}5_しまった課題", False),
+            ("templates", f"docs/issues/templates/{PREFIX}5_しまった課題", False),
+            ("archive", f"docs/issues/archive/{PREFIX}5_しまった課題", True),
+        )
+        for name, hidden, only_in_ref in cases:
+            with self.subTest(hidden=hidden, only_in_ref=only_in_ref), TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                init_repo(root, (f"{PREFIX}1_最初の課題",))
+                if only_in_ref:
+                    git(root, "checkout", "-q", "-b", "topic")
+                write(root, f"{hidden}/issue.md")
+                commit(root, "hidden")
+                if only_in_ref:
+                    git(root, "checkout", "-q", "main")
+                declare(root, {"non_issue_dirs": [name]})
+                rc, out, err = run(["--next", "--root", str(root)])
+                self.assertEqual(rc, 1)
+                self.assertEqual(out, "")
+                source = "refs/heads/topic" if only_in_ref else "現ツリー, refs/heads/main"
+                self.assertIn(
+                    f"  [x] Issue ではないディレクトリの中に番号を持つディレクトリがある: {hidden}"
+                    f" ({source})\n",
+                    err,
+                )
+                self.assertEqual(err.count("[x]"), 1)
+
+    def test_invalid_declaration_is_unverifiable(self):
+        # 宣言を読めないときは「検査不能」の 2 で止める。黙って無視すると宣言したつもりの
+        # 名前で止まり続け、黙って受けると番号を隠す名前を外してしまう
+        bad = (
+            "{",
+            [],
+            {"non_issue_dirs": "archive"},
+            {"non_issue_dirs": [1]},
+            {"non_issue_dirs": ["archive"], "typo": []},
+            {},
+        )
+        names = ("", ".", "..", "closed", "a/b", "a\\b", f"{PREFIX}3_x", "3_x", "2-b", "7")
+        values = [*bad, *({"non_issue_dirs": [n]} for n in names)]
+        for value in values:
+            for mode in ("--next", "--check", "--check-diff"):
+                with self.subTest(value=value, mode=mode), TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    init_repo(root, (f"{PREFIX}1_最初の課題",))
+                    if isinstance(value, str):
+                        write(root, issue_id.DECLARATION, value)
+                    else:
+                        declare(root, value)
+                    rc, out, err = run([mode, "--root", str(root)])
+                    self.assertEqual(rc, 2, err)
+                    self.assertEqual(out, "")
+                    self.assertIn(issue_id.DECLARATION, err)
+
 
 class ScanText(unittest.TestCase):
     def flags(self, text: str, label: str = "probe.md") -> list[str]:
@@ -618,6 +752,38 @@ class CheckRepository(unittest.TestCase):
             rc, out, err = run(["--check", "--root", str(root)])
         self.assertEqual(rc, 0, err)
         self.assertIn("検査した Issue ディレクトリ: 1 個", out)
+
+    def test_declared_non_issue_dirs_are_exempt(self):
+        # --next と同じ宣言を読む。片方だけが読むと、採番は通るのに --check が命名違反で
+        # 赤いまま (またはその逆) になる
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(
+                root,
+                (f"{PREFIX}1_最初の課題", "_template/NNN-template", "closed/_template/x"),
+            )
+            before = run(["--check", "--root", str(root)])
+            declare(root, {"non_issue_dirs": ["_template"]})
+            commit(root, "declare")
+            rc, out, err = run(["--check", "--root", str(root)])
+        self.assertEqual(before[0], 1)
+        self.assertIn("docs/issues/_template: ディレクトリ名が", before[2])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("検査した Issue ディレクトリ: 1 個", out)
+
+    def test_numbered_name_inside_non_issue_dir_is_flagged(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_repo(root, (f"{PREFIX}1_最初の課題", f"archive/{PREFIX}5_しまった課題"))
+            declare(root, {"non_issue_dirs": ["archive"]})
+            rc, out, err = run(["--check", "--root", str(root)])
+        self.assertEqual(rc, 1)
+        self.assertIn(
+            "Issue ではないディレクトリの中に番号を持つディレクトリがある:"
+            f" docs/issues/archive/{PREFIX}5_しまった課題",
+            err,
+        )
+        self.assertIn("違反 1 件", out)
 
     def test_duplicate_number_across_active_and_closed_is_flagged(self):
         with TemporaryDirectory() as tmp:

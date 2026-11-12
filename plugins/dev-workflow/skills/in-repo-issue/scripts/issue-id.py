@@ -52,8 +52,11 @@ scripts/check-leak-guard-rules.py と同じ理由で、「規約違反」と「�
   番号もタイトル部も保存し、接頭辞の付与だけに留めること
 - --next は採番が数えられない名前 (旧形式の <N>_ にも当たらないもの) のディレクトリが現ツリーか
   どれか 1 つの ref にあるだけで、識別子を出さず exit 1 で止まる。Issue ではない補助ディレクトリ
-  (未追跡や隠しディレクトリを含む) も同じく止める。ref にしか無い名前は --check が見ないので、
-  --check が緑でも --next は止まりうる。remote-tracking ref は手元で消しても次の fetch で戻るので、
+  (未追跡や隠しディレクトリを含む) も同じく止める。名前も置き場も規約で決まっていて動かせない
+  ものは、DECLARATION で宣言すれば止まらない (宣言の形と、宣言できない名前は DECLARATION の
+  定義が持つ)。宣言は名前で外すので、宣言した名前の中に番号を持つディレクトリがあれば止める。
+  ref にしか無い名前は --check が見ないので、--check が緑でも --next は止まりうる。
+  remote-tracking ref は手元で消しても次の fetch で戻るので、
   上流のブランチで改名するか、上流で消えたものを prune するまで止まり続ける
 - --check は追跡下のファイルに加え、Issue ディレクトリ配下の未追跡で ignore されていない
   ファイルも読む。pre-commit は未追跡のファイルを stash しないので、違反のある書きかけの
@@ -71,6 +74,8 @@ scripts/check-leak-guard-rules.py と同じ理由で、「規約違反」と「�
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import re
 import subprocess
 import sys
@@ -95,6 +100,19 @@ ANY_ISSUE_DIR = re.compile(r"^(?:" + re.escape(PREFIX) + r")?([0-9]+)_")
 ISSUE_ROOT = ("docs", "issues")
 CLOSED = "closed"
 TEMPLATES = "templates"
+
+# Issue ではないディレクトリの名前をリポジトリの側で足す宣言。リポジトリ直下に置き、
+# {"non_issue_dirs": ["<名前>", ...]} の形で書く。docs/issues 直下と closed/ 直下の両方で
+# templates/ と同じ扱いになる。規約で名前の決まった補助ディレクトリ (雛形の置き場や資料の
+# 保管庫) は、形では Issue をまとめたディレクトリと見分けられないので名前で宣言させる。
+# 宣言は作業ツリーのものを全 ref の走査に当てる。ref ごとに読むと、補助ディレクトリを持つ
+# 全ブランチが宣言を取り込むまで採番が止まったままになる
+DECLARATION = ".issue-id.json"
+DECLARATION_KEY = "non_issue_dirs"
+
+# 宣言できない名前の形。数字で始まる名前は番号を持ちうる (2-b は番号 2 の Issue でありうる)
+# ので、外すとその番号を再発行する。採番が数える形 (ANY_ISSUE_DIR) もここに含まれる
+NUMBER_LEAD = re.compile(r"^(?:" + re.escape(PREFIX) + r")?[0-9]")
 
 # --next が走査する ref の名前空間。--next が止まったときの直し方がどちらかで変わる
 LOCAL_REFS = "refs/heads/"
@@ -139,6 +157,14 @@ class Violation(NamedTuple):
 
 class GitError(RuntimeError):
     """git を走らせられなかった。違反 0 件と区別するために送出する。"""
+
+
+class DeclarationError(RuntimeError):
+    """Issue ではないディレクトリの宣言を読めない。
+
+    違反ではなく検査不能として止める。黙って無視すると宣言したつもりの名前で止まり続け、
+    黙って受けると番号を隠す名前まで外してしまう
+    """
 
 
 # --- テキスト走査 -------------------------------------------------------------
@@ -323,7 +349,7 @@ def _tracked_files(root: Path) -> list[str]:
     return [p for p in out.decode("utf-8", "replace").split("\0") if p]
 
 
-def _untracked_issue_files(root: Path) -> list[str]:
+def _untracked_issue_files(root: Path, non_issue: frozenset[str]) -> list[str]:
     """Issue ディレクトリ配下の、未追跡で ignore されていないファイルを返す。
 
     issue_dirs() は filesystem を見るので起票直後のディレクトリを数えるが、本文の走査が
@@ -336,7 +362,9 @@ def _untracked_issue_files(root: Path) -> list[str]:
         root, "ls-files", "-z", "--others", "--exclude-standard", "--", "/".join(ISSUE_ROOT) + "/"
     )
     return [
-        p for p in out.decode("utf-8", "replace").split("\0") if p and issue_dir_of(p)
+        p
+        for p in out.decode("utf-8", "replace").split("\0")
+        if p and issue_dir_of(p, non_issue)
     ]
 
 
@@ -450,21 +478,66 @@ def _blob_text(root: Path, oid: str) -> str | None:
 # --- Issue ディレクトリ --------------------------------------------------------
 
 
-def issue_dirs(root: Path) -> list[tuple[str, str]]:
-    """現ツリーの Issue ディレクトリを (リポジトリ相対パス, ディレクトリ名) で返す。"""
+def _declaration_problem(name: object) -> str | None:
+    """宣言できない名前なら理由を返す。"""
+    if not isinstance(name, str) or not name:
+        return "空でない文字列で書く"
+    if name in (".", "..") or "/" in name or "\\" in name:
+        return "ディレクトリ 1 段の名前で書く (パス区切りや . / .. は使えない)"
+    if name == CLOSED:
+        return f"{CLOSED} は閉じた Issue の置き場で、中の Issue を数える"
+    if NUMBER_LEAD.match(name):
+        return "数字で始まる名前は番号を持ちうるので外せない"
+    return None
+
+
+def load_non_issue_dirs(root: Path) -> frozenset[str]:
+    """Issue ではないディレクトリの名前を返す。templates/ に宣言の分を足したもの。"""
+    path = root / DECLARATION
+    if not path.exists():
+        return frozenset({TEMPLATES})
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise DeclarationError(f"{DECLARATION} を読めない: {e}") from e
+    # 知らないキーを黙って通すと、綴りを間違えた宣言が「宣言なし」として静かに効かなくなる
+    if not isinstance(data, dict) or set(data) != {DECLARATION_KEY}:
+        raise DeclarationError(
+            f"{DECLARATION} は {DECLARATION_KEY} だけを持つオブジェクトで書く"
+        )
+    names = data[DECLARATION_KEY]
+    if not isinstance(names, list):
+        raise DeclarationError(f"{DECLARATION} の {DECLARATION_KEY} は名前の配列で書く")
+    for name in names:
+        problem = _declaration_problem(name)
+        if problem:
+            raise DeclarationError(
+                f"{DECLARATION} の {DECLARATION_KEY} に宣言できない名前: {name!r} ({problem})"
+            )
+    return frozenset({TEMPLATES, *names})
+
+
+def _issue_parents(root: Path) -> list[tuple[Path, set[str]]]:
+    """Issue ディレクトリを直下に持つ場所と、そこで Issue として数えない名前。"""
     base = root.joinpath(*ISSUE_ROOT)
+    return [(base, {CLOSED}), (base / CLOSED, set())]
+
+
+def issue_dirs(root: Path, non_issue: frozenset[str]) -> list[tuple[str, str]]:
+    """現ツリーの Issue ディレクトリを (リポジトリ相対パス, ディレクトリ名) で返す。"""
     entries = []
-    for parent, skip in ((base, {TEMPLATES, CLOSED}), (base / CLOSED, {TEMPLATES})):
+    for parent, skip in _issue_parents(root):
         if not parent.is_dir():
             continue
         for child in sorted(parent.iterdir()):
-            if child.is_dir() and child.name not in skip:
+            if child.is_dir() and child.name not in skip | non_issue:
                 entries.append((child.relative_to(root).as_posix(), child.name))
     return entries
 
 
-def issue_dir_of(path: str) -> tuple[str, str] | None:
-    """docs/issues 配下のファイルパスから (ディレクトリ名, ディレクトリの相対パス) を返す。"""
+def _top_level(path: str) -> tuple[list[str], int] | None:
+    """docs/issues 配下のファイルパスを要素に割り、直下 (closed/ の中なら closed/ 直下) の
+    ディレクトリの位置を返す。ディレクトリの配下に無いファイルは None。"""
     parts = path.split("/")
     if tuple(parts[:2]) != ISSUE_ROOT:
         return None
@@ -475,10 +548,56 @@ def issue_dir_of(path: str) -> tuple[str, str] | None:
     # 1 要素以上ある。無いものは docs/issues 直下のファイルで Issue ディレクトリではない
     if len(parts) <= depth + 1:
         return None
-    name = parts[depth]
-    if name == TEMPLATES:
+    return parts, depth
+
+
+def issue_dir_of(path: str, non_issue: frozenset[str]) -> tuple[str, str] | None:
+    """docs/issues 配下のファイルパスから (ディレクトリ名, ディレクトリの相対パス) を返す。"""
+    got = _top_level(path)
+    if got is None:
         return None
-    return name, "/".join(parts[: depth + 1])
+    parts, depth = got
+    if parts[depth] in non_issue:
+        return None
+    return parts[depth], "/".join(parts[: depth + 1])
+
+
+def hidden_issue_dir_of(path: str, non_issue: frozenset[str]) -> str | None:
+    """Issue ではないディレクトリの中で、番号を持つディレクトリの相対パスを返す。
+
+    外したディレクトリの中に Issue が残っていると、その番号を数えずに再発行する。
+    最後の要素はファイルなので見ない。番号を持つ最も外側のディレクトリを返す
+    """
+    got = _top_level(path)
+    if got is None:
+        return None
+    parts, depth = got
+    if parts[depth] not in non_issue:
+        return None
+    for i in range(depth + 1, len(parts) - 1):
+        if ANY_ISSUE_DIR.match(parts[i]):
+            return "/".join(parts[: i + 1])
+    return None
+
+
+def hidden_issue_dirs(root: Path, non_issue: frozenset[str]) -> list[str]:
+    """現ツリーで hidden_issue_dir_of に当たるディレクトリを返す。
+
+    filesystem を見るのは issue_dirs() と同じ理由で、未追跡のまま置いたものも数えるため
+    """
+    found = []
+    for parent, _skip in _issue_parents(root):
+        for name in sorted(non_issue):
+            top = parent / name
+            if not top.is_dir():
+                continue
+            for dirpath, dirnames, _files in os.walk(top):
+                dirnames.sort()
+                for d in [d for d in dirnames if ANY_ISSUE_DIR.match(d)]:
+                    found.append((Path(dirpath) / d).relative_to(root).as_posix())
+                    # 番号を持つディレクトリの中は報告済みなので降りない
+                    dirnames.remove(d)
+    return found
 
 
 def _dir_name_violations(entries: list[tuple[str, str]]) -> list[str]:
@@ -511,7 +630,9 @@ def _number_conflicts(entries: list[tuple[str, str]]) -> list[str]:
     ]
 
 
-def _issue_dirs_from_paths(paths: list[str]) -> list[tuple[str, str]]:
+def _issue_dirs_from_paths(
+    paths: list[str], non_issue: frozenset[str]
+) -> list[tuple[str, str]]:
     """追跡下のパス一覧から Issue ディレクトリを (相対パス, 名前) で返す。
 
     issue_dirs() と同じ形を返すのでタプルの順序もそちらに合わせてある (issue_dir_of は
@@ -524,7 +645,7 @@ def _issue_dirs_from_paths(paths: list[str]) -> list[tuple[str, str]]:
     """
     found: dict[str, str] = {}
     for path in paths:
-        got = issue_dir_of(path)
+        got = issue_dir_of(path, non_issue)
         if got:
             found[got[1]] = got[0]
     return sorted(found.items())
@@ -544,15 +665,18 @@ class Numbering(NamedTuple):
     # 番号を読めないので found に入れられない。パスで束ねるのは、同じディレクトリが ref の数だけ
     # 別の行に出て読めなくなるため
     unrecognized: dict[str, set[str]]
+    # Issue ではないディレクトリの中で番号を持つディレクトリ: 相対パス -> 出所の集合
+    hidden: dict[str, set[str]]
 
 
 WORKING_TREE = "現ツリー"
 
 
-def collect_numbers(root: Path) -> Numbering:
+def collect_numbers(root: Path, non_issue: frozenset[str]) -> Numbering:
     """現ツリーと全 ref を混ぜて Issue ディレクトリの番号を集める。"""
     found: dict[int, dict[str, set[str]]] = {}
     unrecognized: dict[str, set[str]] = {}
+    hidden: dict[str, set[str]] = {}
 
     def record(name: str, source: str, rel: str) -> None:
         m = ANY_ISSUE_DIR.match(name)
@@ -562,14 +686,27 @@ def collect_numbers(root: Path) -> Numbering:
         else:
             unrecognized.setdefault(rel, set()).add(source)
 
-    for rel, name in issue_dirs(root):
+    for rel, name in issue_dirs(root, non_issue):
         record(name, WORKING_TREE, rel)
+    for rel in hidden_issue_dirs(root, non_issue):
+        hidden.setdefault(rel, set()).add(WORKING_TREE)
     for ref in _refs(root):
         for path in _ls_tree(root, ref):
-            got = issue_dir_of(path)
+            got = issue_dir_of(path, non_issue)
             if got:
                 record(got[0], ref, got[1])
-    return Numbering(found, unrecognized)
+            rel = hidden_issue_dir_of(path, non_issue)
+            if rel:
+                hidden.setdefault(rel, set()).add(ref)
+    return Numbering(found, unrecognized, hidden)
+
+
+def _with_sources(rel: str, sources: set[str]) -> str:
+    """同じディレクトリが複数の出所にあるときは、出所を並べた 1 行にまとめる。"""
+    return f"{rel} ({', '.join(sorted(sources, key=lambda s: (s != WORKING_TREE, s)))})"
+
+
+HIDDEN_MESSAGE = "Issue ではないディレクトリの中に番号を持つディレクトリがある"
 
 
 def _unrecognized_report(unrecognized: dict[str, set[str]]) -> tuple[list[str], list[str]]:
@@ -583,8 +720,7 @@ def _unrecognized_report(unrecognized: dict[str, set[str]]) -> tuple[list[str], 
     fetch で戻り、消した間は載っている Issue の番号を再発行しうるので、上流で直す道だけを示す
     """
     violations = [
-        f"採番が数えられない Issue ディレクトリ: {rel}"
-        f" ({', '.join(sorted(sources, key=lambda s: (s != WORKING_TREE, s)))})"
+        f"採番が数えられない Issue ディレクトリ: {_with_sources(rel, sources)}"
         for rel, sources in sorted(unrecognized.items())
     ]
     if not violations:
@@ -594,7 +730,9 @@ def _unrecognized_report(unrecognized: dict[str, set[str]]) -> tuple[list[str], 
         f"Issue をまとめたディレクトリなら、中の Issue を docs/issues/ 直下か {CLOSED}/ 直下へ"
         "移し、空になったディレクトリを消す (git mv は空になった親を残す)",
         "Issue を含まないものだけを docs/issues/ の外へ移す"
-        f" (直下で例外になるのは {TEMPLATES}/ と {CLOSED}/ だけ)",
+        f" (直下で例外になるのは {TEMPLATES}/ と {CLOSED}/ と、宣言した名前だけ)",
+        f"Issue を含まず、名前も置き場も規約で決まっているものは、リポジトリ直下の {DECLARATION}"
+        f" の {DECLARATION_KEY} で宣言する (宣言は作業ツリーのものを全 ref に当てる)",
     ]
     sources = {s for group in unrecognized.values() for s in group}
     if any(s.startswith(LOCAL_REFS) for s in sources):
@@ -646,8 +784,11 @@ def _finish(violations: list[str], summary: str) -> int:
 
 
 def run_next(root: Path) -> int:
-    found, unrecognized = collect_numbers(root)
+    found, unrecognized, hidden = collect_numbers(root, load_non_issue_dirs(root))
     violations = _duplicates(found)
+    violations.extend(
+        f"{HIDDEN_MESSAGE}: {_with_sources(rel, sources)}" for rel, sources in sorted(hidden.items())
+    )
     # 数えられない名前を黙って飛ばすと、2-b のように番号を持つディレクトリがあっても同じ番号を
     # rc 0 で再発行する (実測)。旧形式の <N>_ は数えられるので止めない (ISSUE_DIR で判定すると
     # 移行前のリポジトリで採番が全部止まる)
@@ -663,9 +804,11 @@ def run_next(root: Path) -> int:
 
 
 def run_check(root: Path) -> int:
-    entries = issue_dirs(root)
+    non_issue = load_non_issue_dirs(root)
+    entries = issue_dirs(root, non_issue)
     violations = _dir_name_violations(entries)
     violations.extend(_number_conflicts(entries))
+    violations.extend(f"{HIDDEN_MESSAGE}: {rel}" for rel in hidden_issue_dirs(root, non_issue))
 
     tracked = _tracked_files(root)
     if not tracked:
@@ -675,7 +818,7 @@ def run_check(root: Path) -> int:
         return 2
 
     scanned = excluded = unreadable = 0
-    for rel in tracked + _untracked_issue_files(root):
+    for rel in tracked + _untracked_issue_files(root, non_issue):
         if Path(rel).suffix in SKIP_SUFFIXES:
             excluded += 1
             continue
@@ -695,6 +838,7 @@ def run_check(root: Path) -> int:
 
 
 def run_check_diff(root: Path, base: str | None) -> int:
+    non_issue = load_non_issue_dirs(root)
     if base is None:
         rng, label = "--cached", "index"
         blobs = _index_entries(root)
@@ -711,20 +855,20 @@ def run_check_diff(root: Path, base: str | None) -> int:
     # 日常操作のたびに赤くなり、増分の ratchet が成立しない (実測)
     new_dirs: list[tuple[str, str]] = []
     for _kind, old, path in _diff_records(root, rng, "--diff-filter=AR"):
-        got = issue_dir_of(path)
+        got = issue_dir_of(path, non_issue)
         if got is None:
             continue
         name, rel = got
         if path != f"{rel}/{ISSUE_FILE}":
             continue
         if old is not None:
-            was = issue_dir_of(old)
+            was = issue_dir_of(old, non_issue)
             if was is not None and was[0] == name:
                 continue
         new_dirs.append((rel, name))
 
     violations = _dir_name_violations(new_dirs)
-    violations.extend(_number_conflicts(_issue_dirs_from_paths(list(blobs))))
+    violations.extend(_number_conflicts(_issue_dirs_from_paths(list(blobs), non_issue)))
 
     scanned = excluded = unreadable = submodules = 0
     added_total = 0
@@ -849,7 +993,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.check_diff:
             return run_check_diff(root, args.base)
         return run_check(root)
-    except GitError as e:
+    except (GitError, DeclarationError) as e:
         print(f"[x] {e}", file=sys.stderr)
         return 2
 

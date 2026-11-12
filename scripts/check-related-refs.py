@@ -126,6 +126,8 @@ BORROWED = (
     "_git",
     "issue_dirs",
     "issue_dir_of",
+    "load_non_issue_dirs",
+    "DeclarationError",
     "resolve_root",
 )
 
@@ -256,6 +258,15 @@ def resolve_root(explicit: str | None) -> Path:
     try:
         return module.resolve_root(explicit)
     except module.GitError as e:
+        raise CheckError(str(e)) from e
+
+
+def non_issue_dirs(root: Path) -> frozenset[str]:
+    """借用先で Issue ではないディレクトリの宣言を読む。読めないのも検査不能として寄せる。"""
+    module = notation()
+    try:
+        return module.load_non_issue_dirs(root)
+    except module.DeclarationError as e:
         raise CheckError(str(e)) from e
 
 
@@ -441,16 +452,16 @@ def target_files(root: Path) -> list[str]:
     return [p for p in out.decode("utf-8", "replace").split("\0") if p]
 
 
-def baseline_key(rel: str) -> str:
+def baseline_key(rel: str, non_issue: frozenset[str]) -> str:
     """baseline の鍵。Issue ディレクトリ名で、クローズの `git mv` で変わらない。
 
     Issue ディレクトリの外にあるファイル (テンプレート等) はパスをそのまま鍵にする。
     """
-    got = notation().issue_dir_of(rel)
+    got = notation().issue_dir_of(rel, non_issue)
     return got[0] if got else rel
 
 
-def existing_numbers(root: Path) -> set[int]:
+def existing_numbers(root: Path, non_issue: frozenset[str]) -> set[int]:
     """実在する Issue ディレクトリの番号。active と closed の両方を含む。
 
     整数で持つのは借用先が `int()` を鍵にしているため。文字列のままだと `ISSUE-07` が
@@ -458,7 +469,7 @@ def existing_numbers(root: Path) -> set[int]:
     """
     module = notation()
     numbers = set()
-    for _, name in module.issue_dirs(root):
+    for _, name in module.issue_dirs(root, non_issue):
         match = module.ANY_ISSUE_DIR.match(name)
         if match:
             numbers.add(int(match.group(1)))
@@ -495,7 +506,8 @@ def check(
             f"{TARGET_PATHSPEC} に一致する追跡ファイルが 1 件も無い。走査対象ゼロは合格ではない"
         )
 
-    numbers = existing_numbers(root)
+    non_issue = non_issue_dirs(root)
+    numbers = existing_numbers(root, non_issue)
     findings: list[tuple[str, str, str]] = []
     links_by_key: dict[str, int] = {}
     sources: dict[str, str] = {}
@@ -519,7 +531,7 @@ def check(
             issue_files += 1
         headings, found, count = section_refs(lines)
         identifiers += len(found)
-        key = baseline_key(rel)
+        key = baseline_key(rel, non_issue)
         # 同じ Issue ディレクトリに `## 関連` 節を持つファイルが複数あっても数を落とさない
         links_by_key[key] = links_by_key.get(key, 0) + count
         sources.setdefault(key, rel)

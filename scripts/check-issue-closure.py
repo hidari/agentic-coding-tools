@@ -84,8 +84,8 @@ ROOT = Path(__file__).resolve().parent.parent
 NOTATION_SOURCE = "plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py"
 
 # 借りる名前。rename が静かな素通りにならないよう実在を検査する
-BORROWED = ("ANY_ISSUE_DIR", "CLOSED", "FENCE_LINE", "GitError", "PREFIX",
-            "issue_dirs", "resolve_root")
+BORROWED = ("ANY_ISSUE_DIR", "CLOSED", "DeclarationError", "FENCE_LINE", "GitError", "PREFIX",
+            "issue_dirs", "load_non_issue_dirs", "resolve_root")
 
 # 見出しのレベルと空白の揺れを吸収する。厳密に `## タスク` だけを見ると、`### タスク` で
 # 書かれた完了済み Issue が「タスク節なし」として素通りする (fixture で実測)
@@ -383,6 +383,15 @@ def resolve_root(explicit: str | None) -> Path:
         raise CheckError(str(e)) from e
 
 
+def non_issue_dirs(root: Path) -> frozenset[str]:
+    """借用先で Issue ではないディレクトリの宣言を読む。読めないのも検査不能として寄せる。"""
+    module = notation()
+    try:
+        return module.load_non_issue_dirs(root)
+    except module.DeclarationError as e:
+        raise CheckError(str(e)) from e
+
+
 def issue_md_path(root: Path, rel_dir: str) -> Path | None:
     """Issue ディレクトリから issue.md を返す。名前の大小は無視する。
 
@@ -589,7 +598,7 @@ def collect(root: Path) -> CollectResult:
     なので、混ぜると要約行の宣言が実態より広くなる。
     """
     n = notation()
-    dirs = n.issue_dirs(root)
+    dirs = n.issue_dirs(root, non_issue_dirs(root))
     if not dirs:
         raise CheckError("Issue ディレクトリが 1 件も無い。走査対象ゼロは合格ではない")
     violations: list[str] = []

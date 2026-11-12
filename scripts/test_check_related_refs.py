@@ -649,7 +649,7 @@ class BorrowedNotation(unittest.TestCase):
 
     def test_real_directory_names_pass_the_borrowed_pattern(self):
         # 記法が変わってディレクトリ名が変われば、この対照が赤くなる
-        names = [name for _, name in issue_id.issue_dirs(ROOT)]
+        names = [name for _, name in issue_id.issue_dirs(ROOT, issue_id.load_non_issue_dirs(ROOT))]
         self.assertTrue(names, "実リポジトリの Issue ディレクトリが 0 件")
         unmatched = [n for n in names if not issue_id.ANY_ISSUE_DIR.match(n)]
         self.assertEqual([], unmatched, f"借用したパターンに一致しない実在名: {unmatched}")
