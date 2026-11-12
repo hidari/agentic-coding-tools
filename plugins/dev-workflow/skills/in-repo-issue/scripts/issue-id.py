@@ -159,11 +159,18 @@ class Violation(NamedTuple):
     message: str
 
 
-class GitError(RuntimeError):
-    """git を走らせられなかった。違反 0 件と区別するために送出する。"""
+class UncheckableError(RuntimeError):
+    """検査を走らせられなかった。違反 0 件 (rc 0) とも違反あり (rc 1) とも区別して rc 2 にする。
+
+    入口と借用する検査はこの型だけを捕まえる。派生を足しても捕まえる側を直さずに済む
+    """
 
 
-class DeclarationError(RuntimeError):
+class GitError(UncheckableError):
+    """git を走らせられなかった。"""
+
+
+class DeclarationError(UncheckableError):
     """Issue ではないディレクトリの宣言を読めない。
 
     違反ではなく検査不能として止める。黙って無視すると宣言したつもりの名前で止まり続け、
@@ -479,14 +486,6 @@ def _blob_text(root: Path, oid: str) -> str | None:
         return None
 
 
-def _declaration_blob(root: Path, entry: tuple[str, str]) -> str:
-    """index / tree にある宣言の本文を返す。UTF-8 で読めなければ検査不能にする。"""
-    text = _blob_text(root, entry[1])
-    if text is None:
-        raise DeclarationError(f"{DECLARATION} を UTF-8 で読めない")
-    return text
-
-
 # --- Issue ディレクトリ --------------------------------------------------------
 
 
@@ -507,21 +506,24 @@ def load_non_issue_dirs(root: Path) -> frozenset[str]:
     """作業ツリーの宣言から Issue ではないディレクトリの名前を返す。"""
     path = root / DECLARATION
     if not path.exists():
-        return frozenset({TEMPLATES})
+        return parse_non_issue_dirs(None)
     try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as e:
+        data = path.read_bytes()
+    except OSError as e:
         raise DeclarationError(f"{DECLARATION} を読めない: {e}") from e
-    return parse_non_issue_dirs(text)
+    return parse_non_issue_dirs(data)
 
 
-def parse_non_issue_dirs(text: str | None) -> frozenset[str]:
-    """宣言の本文から、templates/ に宣言の分を足した名前の集合を返す。None は宣言なし。"""
-    if text is None:
+def parse_non_issue_dirs(data: bytes | None) -> frozenset[str]:
+    """宣言の本文から、templates/ に宣言の分を足した名前の集合を返す。None は宣言なし。
+
+    本文はバイト列で受ける。作業ツリーと blob の両方の読み出し元が、UTF-8 の検証をここへ寄せる
+    """
+    if data is None:
         return frozenset({TEMPLATES})
     try:
-        data = json.loads(text)
-    except json.JSONDecodeError as e:
+        data = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
         raise DeclarationError(f"{DECLARATION} を読めない: {e}") from e
     # 知らないキーを黙って通すと、綴りを間違えた宣言が「宣言なし」として静かに効かなくなる
     if not isinstance(data, dict) or set(data) != {DECLARATION_KEY}:
@@ -552,8 +554,9 @@ def issue_dirs(root: Path, non_issue: frozenset[str]) -> list[tuple[str, str]]:
     for parent, skip in _issue_parents(root):
         if not parent.is_dir():
             continue
+        skip = skip | non_issue
         for child in sorted(parent.iterdir()):
-            if child.is_dir() and child.name not in skip | non_issue:
+            if child.is_dir() and child.name not in skip:
                 entries.append((child.relative_to(root).as_posix(), child.name))
     return entries
 
@@ -593,9 +596,7 @@ def _may_hide_number(name: str, holds_issue_file: bool) -> bool:
     外したディレクトリの中に Issue が残っていると、その番号を数えずに再発行する。
     採番が数える形は中身を問わず止める。数字で始まるだけの名前 (2-b) は、直下に
     ISSUE_FILE を持つときだけ止める。持たないもの (年で分けた archive/2026/ など) まで
-    止めると、規約で決まった保管庫を宣言しても起票できないままになる。ISSUE_FILE の
-    有無は名前の完全一致で見る。大小を区別しない FS で exists() を使うと、現ツリーだけが
-    ISSUE.md にも当たり、文字列で比べる ref の側と判定が割れる
+    止めると、規約で決まった保管庫を宣言しても起票できないままになる
     """
     return bool(ANY_ISSUE_DIR.match(name)) or (holds_issue_file and bool(NUMBER_LEAD.match(name)))
 
@@ -603,7 +604,9 @@ def _may_hide_number(name: str, holds_issue_file: bool) -> bool:
 def hidden_issue_dir_of(path: str, non_issue: frozenset[str]) -> str | None:
     """Issue ではないディレクトリの中で、番号を持ちうるディレクトリの相対パスを返す。
 
-    最後の要素はファイルなので名前としては見ない。最も外側のものを返す
+    最後の要素はファイルなので名前としては見ない。最も外側のものを返す。現ツリーも ref も
+    index もパスの列にしてここへ通すので、判定はここだけが持つ。ISSUE_FILE の有無も
+    パスの文字列の完全一致で見るので、大小を区別しない FS でも読み出し元ごとに割れない
     """
     got = _top_level(path)
     if got is None:
@@ -621,24 +624,15 @@ def hidden_issue_dir_of(path: str, non_issue: frozenset[str]) -> str | None:
 def hidden_issue_dirs(root: Path, non_issue: frozenset[str]) -> list[str]:
     """現ツリーで hidden_issue_dir_of に当たるディレクトリを返す。
 
-    filesystem を見るのは issue_dirs() と同じ理由で、未追跡のまま置いたものも数えるため
+    filesystem を見るのは issue_dirs() と同じ理由で、未追跡のまま置いたものも数えるため。
+    ファイルを 1 つも持たないディレクトリは拾わないが、Issue を持たないので番号も隠さない
     """
-    found = []
+    paths = []
     for parent, _skip in _issue_parents(root):
-        for name in sorted(non_issue):
-            top = parent / name
-            if not top.is_dir():
-                continue
-            for dirpath, dirnames, _files in os.walk(top):
-                dirnames.sort()
-                for d in list(dirnames):
-                    child = Path(dirpath) / d
-                    # listdir が返すのは実際の名前なので、完全一致の判定が ref の側と揃う
-                    if _may_hide_number(d, ISSUE_FILE in os.listdir(child)):
-                        found.append(child.relative_to(root).as_posix())
-                        # 報告したディレクトリの中は降りない (ref の側も最も外側だけを返す)
-                        dirnames.remove(d)
-    return found
+        for name in non_issue:
+            for dirpath, _dirnames, files in os.walk(parent / name):
+                paths.extend((Path(dirpath) / f).relative_to(root).as_posix() for f in files)
+    return sorted({hidden_issue_dir_of(p, non_issue) for p in paths} - {None})
 
 
 def _dir_name_violations(entries: list[tuple[str, str]]) -> list[str]:
@@ -750,8 +744,13 @@ def _with_sources(rel: str, sources: set[str]) -> str:
 HIDDEN_MESSAGE = "Issue ではないディレクトリの中に番号を持つディレクトリがある"
 
 
-def _unrecognized_report(unrecognized: dict[str, set[str]]) -> tuple[list[str], list[str]]:
-    """数えられない名前の違反と、利用者が直し方を選ぶためのヒントを返す。
+def _unrecognized_report(
+    unrecognized: dict[str, set[str]], hidden: dict[str, set[str]]
+) -> tuple[list[str], list[str]]:
+    """番号を数えられないディレクトリの違反と、利用者が直し方を選ぶためのヒントを返す。
+
+    数えられない名前と、Issue ではないディレクトリの中で番号を持ちうるものの 2 種を扱う。
+    どちらも出所が ref なら作業ツリーでは直せないので、ref の直し方は両方の出所から決める。
 
     直し方は規約の形だけを示す。旧形式も数えはするが、旧形式へ改名すると --check で赤くなる。
     外へ移す直し方を Issue を含まないものに限るのは、closed/<年>/ のような Issue のまとめを
@@ -761,21 +760,31 @@ def _unrecognized_report(unrecognized: dict[str, set[str]]) -> tuple[list[str], 
     fetch で戻り、消した間は載っている Issue の番号を再発行しうるので、上流で直す道だけを示す
     """
     violations = [
+        f"{HIDDEN_MESSAGE}: {_with_sources(rel, sources)}" for rel, sources in sorted(hidden.items())
+    ]
+    violations.extend(
         f"採番が数えられない Issue ディレクトリ: {_with_sources(rel, sources)}"
         for rel, sources in sorted(unrecognized.items())
-    ]
+    )
     if not violations:
         return [], []
-    hints = [
-        f"Issue なら {PREFIX}<N>_<title> へ改名する",
-        f"Issue をまとめたディレクトリなら、中の Issue を docs/issues/ 直下か {CLOSED}/ 直下へ"
-        "移し、空になったディレクトリを消す (git mv は空になった親を残す)",
-        "Issue を含まないものだけを docs/issues/ の外へ移す"
-        f" (直下で例外になるのは {TEMPLATES}/ と {CLOSED}/ と、宣言した名前だけ)",
-        f"Issue を含まず、名前も置き場も規約で決まっているものは、リポジトリ直下の {DECLARATION}"
-        f" の {DECLARATION_KEY} で宣言する (宣言は作業ツリーのものを全 ref に当てる)",
-    ]
-    sources = {s for group in unrecognized.values() for s in group}
+    hints = []
+    if unrecognized:
+        hints += [
+            f"Issue なら {PREFIX}<N>_<title> へ改名する",
+            f"Issue をまとめたディレクトリなら、中の Issue を docs/issues/ 直下か {CLOSED}/ 直下へ"
+            "移し、空になったディレクトリを消す (git mv は空になった親を残す)",
+            "Issue を含まないものだけを docs/issues/ の外へ移す"
+            f" (直下で例外になるのは {TEMPLATES}/ と {CLOSED}/ と、宣言した名前だけ)",
+            f"Issue を含まず、名前も置き場も規約で決まっているものは、リポジトリ直下の {DECLARATION}"
+            f" の {DECLARATION_KEY} で宣言する (宣言は作業ツリーのものを全 ref に当てる)",
+        ]
+    if hidden:
+        hints.append(
+            f"Issue ではないディレクトリの中の Issue は、docs/issues/ 直下か {CLOSED}/ 直下へ移す"
+            f" ({PREFIX}<N>_<title> の名前で)"
+        )
+    sources = {s for group in (*unrecognized.values(), *hidden.values()) for s in group}
     if any(s.startswith(LOCAL_REFS) for s in sources):
         hints.append(
             f"出所が {LOCAL_REFS} のものは作業ツリーの改名では解けない。"
@@ -827,13 +836,10 @@ def _finish(violations: list[str], summary: str) -> int:
 def run_next(root: Path) -> int:
     found, unrecognized, hidden = collect_numbers(root, load_non_issue_dirs(root))
     violations = _duplicates(found)
-    violations.extend(
-        f"{HIDDEN_MESSAGE}: {_with_sources(rel, sources)}" for rel, sources in sorted(hidden.items())
-    )
     # 数えられない名前を黙って飛ばすと、2-b のように番号を持つディレクトリがあっても同じ番号を
     # rc 0 で再発行する (実測)。旧形式の <N>_ は数えられるので止めない (ISSUE_DIR で判定すると
     # 移行前のリポジトリで採番が全部止まる)
-    unrecognized_violations, hints = _unrecognized_report(unrecognized)
+    unrecognized_violations, hints = _unrecognized_report(unrecognized, hidden)
     violations.extend(unrecognized_violations)
     if violations:
         _report(violations)
@@ -890,7 +896,9 @@ def run_check_diff(root: Path, base: str | None) -> int:
     # 宣言も差分の後側から読む。作業ツリーから読むと、stage していない宣言の編集が増分の
     # 判定を変え、宣言を含めずにコミットした内容を手元だけが緑にする
     declared = blobs.get(DECLARATION)
-    non_issue = parse_non_issue_dirs(None if declared is None else _declaration_blob(root, declared))
+    non_issue = parse_non_issue_dirs(
+        None if declared is None else _git(root, "cat-file", "blob", declared[1])
+    )
 
     # ディレクトリ名は、新しく現れた名前だけを見る。起点を issue.md に限るのは、配下の
     # 任意ファイルを起点にすると旧記法のディレクトリを触るたび赤くなるため。
@@ -1042,7 +1050,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.check_diff:
             return run_check_diff(root, args.base)
         return run_check(root)
-    except (GitError, DeclarationError) as e:
+    except UncheckableError as e:
         print(f"[x] {e}", file=sys.stderr)
         return 2
 

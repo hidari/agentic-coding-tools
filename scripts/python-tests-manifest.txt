@@ -214,6 +214,7 @@ scripts/package-tests/test_issue_id.py::test_issue_id.NextIdentifier.test_declar
 scripts/package-tests/test_issue_id.py::test_issue_id.NextIdentifier.test_duplicate_number_is_reported_with_source_and_path
 scripts/package-tests/test_issue_id.py::test_issue_id.NextIdentifier.test_empty_repository_starts_at_one
 scripts/package-tests/test_issue_id.py::test_issue_id.NextIdentifier.test_invalid_declaration_is_unverifiable
+scripts/package-tests/test_issue_id.py::test_issue_id.NextIdentifier.test_invalid_declaration_shapes_are_rejected
 scripts/package-tests/test_issue_id.py::test_issue_id.NextIdentifier.test_legacy_directories_share_the_number_space
 scripts/package-tests/test_issue_id.py::test_issue_id.NextIdentifier.test_mixed_formats_take_one_maximum
 scripts/package-tests/test_issue_id.py::test_issue_id.NextIdentifier.test_nested_issue_root_is_exit_2

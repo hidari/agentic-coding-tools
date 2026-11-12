@@ -115,8 +115,7 @@ NOTATION_SOURCE = "plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py
 
 # 借りる名前。private 名を含むので、rename が静かな素通りにならないよう実在を検査する
 BORROWED = (
-    "GitError",
-    "DeclarationError",
+    "UncheckableError",
     "ANY_ISSUE_DIR",
     "GITHUB_REF",
     "CROSS_REPO_REF",
@@ -257,7 +256,7 @@ def resolve_root(explicit: str | None) -> Path:
     module = notation()
     try:
         return module.resolve_root(explicit)
-    except module.GitError as e:
+    except module.UncheckableError as e:
         raise CheckError(str(e)) from e
 
 
@@ -266,7 +265,7 @@ def non_issue_dirs(root: Path) -> frozenset[str]:
     module = notation()
     try:
         return module.load_non_issue_dirs(root)
-    except module.DeclarationError as e:
+    except module.UncheckableError as e:
         raise CheckError(str(e)) from e
 
 
@@ -447,7 +446,7 @@ def target_files(root: Path) -> list[str]:
     module = notation()
     try:
         out = module._git(root, "ls-files", "-z", TARGET_PATHSPEC)
-    except module.GitError as e:
+    except module.UncheckableError as e:
         raise CheckError(str(e)) from e
     return [p for p in out.decode("utf-8", "replace").split("\0") if p]
 

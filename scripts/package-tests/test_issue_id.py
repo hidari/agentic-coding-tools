@@ -556,12 +556,17 @@ class NextIdentifier(unittest.TestCase):
                     err,
                 )
                 self.assertEqual(err.count("[x]"), 1)
+                # 直し方を添える。出所に ref があれば、数えられない名前と同じく ref の側の直し方を
+                # 出す (作業ツリーで動かしても解けないため)。どのケースもコミットしてあるので出所に
+                # ローカルのブランチが入る。数えられない名前のヒントは混ぜない
+                self.assertIn("Issue ではないディレクトリの中の Issue は、docs/issues/ 直下か", err)
+                self.assertIn("出所が refs/heads/ のものは作業ツリーの改名では解けない", err)
+                self.assertNotIn(f"Issue なら {PREFIX}<N>_<title> へ改名する", err)
 
-    def test_invalid_declaration_is_unverifiable(self):
-        # 宣言を読めないときは「検査不能」の 2 で止める。黙って無視すると宣言したつもりの
-        # 名前で止まり続け、黙って受けると番号を隠す名前を外してしまう
+    def test_invalid_declaration_shapes_are_rejected(self):
+        # 形の検証は本文だけで決まるので、リポジトリを作らずに当てる。黙って無視すると
+        # 宣言したつもりの名前で止まり続け、黙って受けると番号を隠す名前を外してしまう
         bad = (
-            "{",
             [],
             {"non_issue_dirs": "archive"},
             {"non_issue_dirs": [1]},
@@ -569,9 +574,24 @@ class NextIdentifier(unittest.TestCase):
             {},
         )
         names = ("", ".", "..", "closed", "a/b", "a\\b", f"{PREFIX}3_x", "3_x", "2-b", "7")
-        # UTF-8 で読めない本文と、ファイルではなくディレクトリの宣言。読み出しの段で落ちる形
-        unreadable = (b"\xff\xfe", DIRECTORY)
-        values = [*bad, *({"non_issue_dirs": [n]} for n in names), *unreadable]
+        texts = [b"{", *(json.dumps(v).encode() for v in bad)]
+        texts += [json.dumps({"non_issue_dirs": [n]}).encode() for n in names]
+        for text in texts:
+            with self.subTest(text=text), self.assertRaises(issue_id.DeclarationError) as ctx:
+                issue_id.parse_non_issue_dirs(text)
+            self.assertIn(issue_id.DECLARATION, str(ctx.exception))
+        # 受ける側の対照。拒む側だけだと、全部を拒む実装でも緑になる
+        self.assertEqual(
+            issue_id.parse_non_issue_dirs(json.dumps({"non_issue_dirs": ["_template"]}).encode()),
+            frozenset({"templates", "_template"}),
+        )
+        self.assertEqual(issue_id.parse_non_issue_dirs(None), frozenset({"templates"}))
+
+    def test_invalid_declaration_is_unverifiable(self):
+        # 宣言を読めないときは、どの入口も「検査不能」の 2 で止める。形の検証は上で当てて
+        # あるので、ここは入口ごとの読み出しと rc 2 への変換だけを見る。壊れた JSON、
+        # UTF-8 で読めない本文、ファイルではなくディレクトリの宣言の 3 形
+        values = ("{", b"\xff\xfe", DIRECTORY)
         for value in values:
             # --check-diff は宣言を index から読むので stage する。ディレクトリは stage できず
             # 宣言が無い扱いになるので、作業ツリーから読む入口だけで確かめる

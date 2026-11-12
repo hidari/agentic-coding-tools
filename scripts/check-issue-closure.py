@@ -84,7 +84,7 @@ ROOT = Path(__file__).resolve().parent.parent
 NOTATION_SOURCE = "plugins/dev-workflow/skills/in-repo-issue/scripts/issue-id.py"
 
 # 借りる名前。rename が静かな素通りにならないよう実在を検査する
-BORROWED = ("ANY_ISSUE_DIR", "CLOSED", "DeclarationError", "FENCE_LINE", "GitError", "PREFIX",
+BORROWED = ("ANY_ISSUE_DIR", "CLOSED", "FENCE_LINE", "PREFIX", "UncheckableError",
             "issue_dirs", "load_non_issue_dirs", "resolve_root")
 
 # 見出しのレベルと空白の揺れを吸収する。厳密に `## タスク` だけを見ると、`### タスク` で
@@ -379,7 +379,7 @@ def resolve_root(explicit: str | None) -> Path:
     module = notation()
     try:
         return module.resolve_root(explicit)
-    except module.GitError as e:
+    except module.UncheckableError as e:
         raise CheckError(str(e)) from e
 
 
@@ -388,7 +388,7 @@ def non_issue_dirs(root: Path) -> frozenset[str]:
     module = notation()
     try:
         return module.load_non_issue_dirs(root)
-    except module.DeclarationError as e:
+    except module.UncheckableError as e:
         raise CheckError(str(e)) from e
 
 
