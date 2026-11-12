@@ -781,6 +781,41 @@ class Population(FixtureCase):
         self.assertIn("active 1 個", out)
         self.assertIn("違反 0 件", out)
 
+    def test_declared_directory_is_out_of_the_population(self):
+        """宣言した補助ディレクトリも templates/ と同じく母集団に入らない。
+
+        宣言を読まないと、置き場は直下に issue.md を持たない active として数えられ、
+        「issue.md が無い」と「番号が採れない」の注記に出る。宣言の有無だけを変えた 2 回を
+        並べ、fixture が宣言の効く形になっていることも同時に確かめる
+        """
+        def build(declared):
+            def go(fx):
+                fx.add_issue("ISSUE-1_probe", issue_md("open", ["- [ ] 未"]))
+                fx.add_issue("_template/example", issue_md("open", ["- [x] 済み"]))
+                if declared:
+                    (fx.root / checker.notation().DECLARATION).write_text(
+                        '{"non_issue_dirs": ["_template"]}', encoding="utf-8")
+            return go
+
+        rc0, out0, err0 = self._run(build(False))
+        rc, out, err = self._run(build(True))
+        self.assertIn("active 2 個", out0)
+        self.assertIn("_template", err0)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("active 1 個", out)
+        self.assertNotIn("_template", err)
+
+    def test_broken_declaration_is_unverifiable(self):
+        """宣言を読めないのは違反ではなく検査不能 (rc 2)。寄せ損ねると traceback の rc 1 になる。"""
+        def build(fx):
+            fx.add_issue("ISSUE-1_probe", issue_md("open", ["- [ ] 未"]))
+            (fx.root / checker.notation().DECLARATION).write_text("{", encoding="utf-8")
+
+        rc, out, err = self._run(build)
+        self.assertEqual(rc, 2, out + err)
+        self.assertIn(checker.notation().DECLARATION, err)
+        self.assertNotIn("Traceback", err)
+
     def test_capitalized_issue_md_is_in_the_population(self):
         """`Issue.md` で作られた Issue も走査される。
 
