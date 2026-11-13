@@ -26,4 +26,4 @@ agent の dispatch は `web-monkey-qa:monkey-explorer-agent` の修飾名で行�
 
 すべての操作は実行前に denylist と照合される。allowlist 外のフォーム送信、オリジン外リンクの追跡、破壊的操作は行わない。production を対象にする場合は、dispatch の時点で匿名の読み取り専用へ落とす。
 
-HTTP Basic 認証の背後にあるオリジンでは、認証情報を URL へ埋め込まず専用の経路で渡す。
+HTTP Basic 認証の背後にあるオリジンでは、認証情報を URL へ埋め込まず、対象のオリジンにだけ付けて渡す。

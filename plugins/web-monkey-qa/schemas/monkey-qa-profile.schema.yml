@@ -15,7 +15,8 @@ properties:
       http_auth:
         type: object
         description: >-
-          Optional HTTP Basic credentials for the whole origin (e.g. a staging site behind Basic auth).
+          Optional HTTP Basic credentials for the target origin (e.g. a staging site behind Basic auth).
+          The explorer sends them to that exact origin only, never to other hosts the page loads from.
           Declares the NAMES of the environment variables holding the credentials, never the values.
         required: [username_env, password_env]
         additionalProperties: false

@@ -26,13 +26,14 @@ The usual dispatcher (`commands/monkey-qa.md`) reads the profile, applies the en
 - `BASE_URL`: the target origin, injected via env (the profile's `environment.base_url_env` names the var). (required) Every same-origin and network-origin decision compares against this.
 - `OUTPUT_DIR`: base output directory (from the profile's `output_dir`). (required)
 - `DATE_DIR`: `<OUTPUT_DIR>/<YYYY-MM-DD>` — where your fragment and screenshots go. (required)
+- `SCRATCH_DIR`: absolute path of a directory made for this one explorer instance, outside `OUTPUT_DIR`. Every helper script and intermediate file you write goes here and nowhere else. (optional — see Phase 0 step 7 when absent)
 - `DENYLIST_TEXTS`: array of substrings (from `safety.denylist_texts`). Any element whose accessible name contains one is never actuated. Matching is **case-insensitive substring**. (may be empty)
 - `DENYLIST_URLS`: array of URL substrings (from `safety.denylist_urls`). Any link/target whose href or resolved URL matches one is never followed. Matching is **case-insensitive substring**. (may be empty)
 - `SUBMIT_ALLOWLIST`: array of form accessible-names that MAY be submitted (from `safety.submit_allowlist`). Everything not listed is fill-only. (may be empty → nothing is submittable)
 - `BUDGET`: `{pages_per_agent, actions_per_page}` (from `budget`). Bounds the crawl.
 - `VIEWPORT`: `desktop` | `mobile` (from the section's `viewport`, default `desktop`). Sets device emulation and is recorded on every finding.
 - `AUTH_RECIPE`: free-text, product-specific login steps (from `auth.recipe`). Passed ONLY for a `seed_login` section; empty or absent for a `none` section.
-- `HTTP_AUTH_USERNAME_ENV` / `HTTP_AUTH_PASSWORD_ENV`: the **names** of the env vars holding the HTTP Basic credentials for the whole origin. (optional) Never read their values into your context or print them; pass them to `agent-browser` only via shell expansion.
+- `HTTP_AUTH_USERNAME_ENV` / `HTTP_AUTH_PASSWORD_ENV`: the **names** of the env vars holding the HTTP Basic credentials for the target origin (the origin of `BASE_URL` only). (optional) Never read their values into your context or print them; pass them to `agent-browser` only via shell expansion.
 - `READ_ONLY`: `true` | `false` (default `false`). When `true`, perform NO `fill` and NO `submit` at all (click / Esc / Tab / navigation only). **Phase 0's production gate overrides whatever arrives here**, so this default only takes effect after the profile has said `local` or `staging`.
 
 You run non-interactively: treat any missing input as unknown and proceed with the safe default (skip the action, skip the section, or use the documented default above). Never block waiting for the user.
@@ -48,16 +49,22 @@ You run non-interactively: treat any missing input as unknown and proceed with t
 
    The dispatcher (`commands/monkey-qa.md` step 2) applies the same policy before it fans out and remains the canonical statement of it. This step is not a copy kept for redundancy: it is the layer that holds when this agent is dispatched **directly as an agent type**, a path the dispatcher never observes.
 3. Prepare the browser session: use `--session monkey-<SECTION>` on EVERY agent-browser command (isolation between parallel explorers).
-4. **HTTP Basic credentials — before the first `open`.** If BOTH `HTTP_AUTH_USERNAME_ENV` and `HTTP_AUTH_PASSWORD_ENV` are provided, set the credentials on the session BEFORE any `open` (whether the first open is in Phase 1's recipe or Phase 2), so the whole origin's Basic-auth transport succeeds. Substitute the env var NAMES you were given into the command — you write `$<name>`, the shell expands it, and the value never enters your context. With `HTTP_AUTH_USERNAME_ENV=BASIC_AUTH_USERNAME` / `HTTP_AUTH_PASSWORD_ENV=BASIC_AUTH_PASSWORD` and `SECTION=public` the command reads:
+4. **HTTP Basic credentials — scoped to the target origin, on the first `open`.** If BOTH `HTTP_AUTH_USERNAME_ENV` and `HTTP_AUTH_PASSWORD_ENV` are provided, the very first navigation of the session is an `open` of `BASE_URL` that carries the Authorization header scoped to that origin (before Phase 1's recipe or Phase 2 opens anything). Substitute the env var NAMES you were given into the command — you write `$<name>`, the shell expands it, and the value never enters your context. With `HTTP_AUTH_USERNAME_ENV=BASIC_AUTH_USERNAME` / `HTTP_AUTH_PASSWORD_ENV=BASIC_AUTH_PASSWORD`, `SECTION=public` and `BASE_URL=https://staging.example.test`, run these two lines in ONE Bash call (a shell variable does not survive into the next call):
    ```bash
-   agent-browser --session monkey-public set credentials "$BASIC_AUTH_USERNAME" "$BASIC_AUTH_PASSWORD"
+   H="{\"Authorization\":\"Basic $(printf '%s:%s' "$BASIC_AUTH_USERNAME" "$BASIC_AUTH_PASSWORD" | base64 | tr -d '\n')\"}"
+   agent-browser --session monkey-public open "https://staging.example.test" --headers "$H" >/dev/null 2>&1; echo "rc=$?"
    ```
-   - Write the plain `"$NAME"` form shown above. Do NOT use shell indirect expansion (`${!VAR}` is bash-only and is a `bad substitution` under zsh, which the Bash tool may run). Do NOT `echo` the value.
+   - The header is sent only to the exact origin of that `open` (scheme, host and port): other hosts, subdomains and ports never receive it, also across redirects, and it stays on for every later navigation of this session's tab. Do NOT use `set credentials`: it attaches the credentials to requests for every origin (third-party scripts, images, CDNs, presigned storage URLs) and puts `authorization` into CORS preflights, which makes cross-origin features fail with a 403 that is the harness's fault, not the app's (both live-verified on agent-browser 0.39.1).
+   - Keep `>/dev/null 2>&1` and judge by `rc` only. When the header JSON is malformed, `open` prints its input — the encoded credentials — in the error message. Never `echo "$H"`.
+   - Write the plain `"$NAME"` form shown above. Do NOT use shell indirect expansion (`${!VAR}` is bash-only and is a `bad substitution` under zsh, which the Bash tool may run). `tr -d '\n'` is there because GNU `base64` wraps long output.
    - If a name is provided but the env var is unset/empty (`[ -z "$BASIC_AUTH_USERNAME" ]`), ABORT this section fail-fast (record `HTTP auth env not set`).
-   - After the FIRST `open`, check the document response: if it is `401` or `403`, the credentials were present but wrong — ABORT this section fail-fast (record `HTTP auth rejected`). Continuing to explore while holding a 401 turns every page into a 4xx finding and buries any real defect in noise.
+   - If `rc` is not 0, ABORT this section fail-fast (record `HTTP auth open failed`). A missing or wrong credential makes this `open` fail (`net::ERR_INVALID_AUTH_CREDENTIALS`).
+   - With `rc` 0, read the projected network list (the command in Phase 3) and look at the first `Document` request of `BASE_URL`'s origin: if its status is `401` or `403`, ABORT this section fail-fast (record `HTTP auth rejected`). Continuing to explore while holding a 401 turns every page into a 4xx finding and buries any real defect in noise.
+   - Once the check passes, run `console --clear` and `network requests --clear` and set `errors_cursor` to the current length of `.data.errors` from `errors --json`. This `open` loaded `BASE_URL`, which need not be an entry URL of this section, and its requests must not be charged to the first page of Phase 2. Phase 2 still opens every entry URL itself, even one equal to `BASE_URL`.
    - If the names are not provided, do nothing (an environment without Basic auth).
 5. If `VIEWPORT == mobile`, set the device once at start (note: `agent-browser set device` is cleared on navigation — re-assert after each open if mobile).
-6. Do NOT create `<DATE_DIR>/screenshots/` yet. Defer its creation until just before you write the first screenshot / fragment (Phase 3/4), so that a Phase 1 login abort leaves nothing under OUTPUT_DIR.
+6. Do NOT create `<DATE_DIR>/screenshots/` yet. Defer its creation until just before you write the first screenshot (Phase 3), so that a Phase 1 login abort leaves nothing under OUTPUT_DIR.
+7. **Scratch space.** Write helper scripts and intermediate files only under `SCRATCH_DIR`. If it was not passed (you were dispatched directly as an agent type), make your own with `mktemp -d` and remove it before you exit. Never write into a scratchpad the harness shares between agents, and never write into the project tree outside `DATE_DIR`: explorers running in parallel overwrite each other's same-named files there and wipe each other's console / network buffers.
 
 Use the direct `agent-browser` binary, not `npx agent-browser` (the latter starts far slower). The command contract you rely on in Phases 2–4 is the live-verified one documented in the plugin README `## Tooling` section — use those exact invocations.
 
@@ -100,8 +107,10 @@ For each entry URL in the section, until `pages_per_agent` pages visited:
    - link/button → `click @ref`
    - text input → `fill @ref "<benign token>"` (skip entirely if `READ_ONLY` is `true`; NEVER submit unless the form's accessible name matches `SUBMIT_ALLOWLIST`)
    - occasionally `press Escape` or `press Tab` to exercise focus/close paths
+   - a link that opens a new tab (`target="_blank"`) → do NOT click it; `open` its same-origin href in the current tab instead. The scoped header of Phase 0 step 4 does not reach a new tab (live-verified: the new tab's document went out without Authorization and got 401). If a second tab appears anyway (`tab list`), close it with `tab close` and record the skip
 5. `wait --load networkidle`.
 6. Run detectors (Phase 3) and record findings.
+   - **Auth-context check** (only when Phase 0 step 4 set credentials): if the projected network list holds a `Document` request of `BASE_URL`'s origin with status `401`, the session lost the scoped header (for example the browser was recreated). Do not record that 401 as a finding. Stop the section: write the fragment with the findings recorded so far (they were observed while authenticated), print `STOPPED: auth context lost for section <SECTION>`, and go to Phase 4.
 7. Append the step to the action log: `{url, action, target_name, result}` — this log IS the repro_steps.
 8. Before leaving the page: `console --clear` and `network requests --clear`; for uncaught
    exceptions advance `errors_cursor = .data.errors.length` (do NOT `errors --clear` — it is a no-op).
@@ -113,12 +122,18 @@ Repeat steps 2–9 up to `actions_per_page` times per page (the per-action budge
 
 Run all after each load/action. Each hit becomes a finding. Every command below is the live-verified form from the README `## Tooling` contract; keep `--session monkey-<SECTION>` on each.
 
+Read the network buffer ONLY through this projection, never raw. The raw `network requests --json` carries every request's and response's headers — Authorization, Cookie, Set-Cookie, the app's own bearer tokens — and its URLs keep query strings, where presigned URLs hold their signatures. Do not print, save, or pass on the raw output, not even into `SCRATCH_DIR`:
+
+```bash
+agent-browser --session monkey-<SECTION> network requests --json | jq -c '.data.requests[] | {status, method, url: (.url | split("?")[0]), resourceType}'
+```
+
 | category | how to detect (agent-browser) | severity |
 |---|---|---|
 | console-error | `console --json` → messages[type==error] | Medium |
 | console-error (unhandled rejection) | `errors --json` → errors[] at index >= `errors_cursor` (uncaught / rejection; `errors --clear` is a no-op so use the cursor) | Medium |
-| http-5xx | `network requests --json` → status>=500, origin==BASE_URL only | High |
-| http-4xx | `network requests --json` → 400<=status<500, origin only, exclude favicon | Low |
+| http-5xx | projected network list → status>=500, origin==BASE_URL only | High |
+| http-4xx | projected network list → 400<=status<500, origin only, exclude favicon | Low |
 | render-error | `eval` scan for error-boundary text / `[object Object]` / raw `undefined` / `NaN` in visible DOM | High if error boundary/blank, else Medium |
 | layout-overflow | `eval` scrollWidth > innerWidth | Medium |
 | broken-image | `eval` images with complete && naturalWidth===0 | Low |
@@ -126,7 +141,7 @@ Run all after each load/action. Each hit becomes a finding. Every command below 
 
 severity rubric (fixed): High = 5xx / error boundary reached / blank page / inoperable. Medium = console error / unhandled rejection / `[object Object]` etc. exposure / layout overflow. Low = dead-end nav / broken image / 4xx.
 
-For each finding: compute `fingerprint = first 16 hex of sha1("<category>|<normalized_url>|<signal>")` where normalized_url lowercases, drops the query string, and replaces UUID / numeric id path segments with `:id`; signal is the error text or `"<status> <method> <path>"`. Capture a screenshot to `screenshots/<id>.png` (create `<DATE_DIR>/screenshots/` lazily here on the first capture if absent — see Phase 0 step 5). Record `repro_steps` from the action log up to and including the triggering step.
+For each finding: compute `fingerprint = first 16 hex of sha1("<category>|<normalized_url>|<signal>")` where normalized_url lowercases, drops the query string, and replaces UUID / numeric id path segments with `:id`; signal is the error text, `"<status> <method> <path>"` for an HTTP finding, or the image URL with its query string dropped for `broken-image`. Capture a screenshot to `<DATE_DIR>/screenshots/<id>.png` (create `<DATE_DIR>/screenshots/` lazily here on the first capture if absent — see Phase 0 step 6). Record `repro_steps` from the action log up to and including the triggering step.
 
 Concrete fingerprint computation (deterministic, matches findings.schema.json's `^[a-f0-9]{16}$` pattern):
 
@@ -143,7 +158,7 @@ Field mapping for each finding object (see findings.schema.json `findings[]`):
 - `category`: one of the seven enum values in the table (`console-error`, `http-5xx`, `http-4xx`, `render-error`, `layout-overflow`, `broken-image`, `dead-end`).
 - `url`: the page URL where the defect was observed (raw, not normalized).
 - `viewport`: `VIEWPORT` (`desktop` | `mobile`).
-- `signal`: the error text or `"<status> <method> <path>"` used in the fingerprint.
+- `signal`: the value used in the fingerprint (error text, `"<status> <method> <path>"`, or the image URL without its query).
 - `repro_steps`: the action-log lines up to and including the triggering step.
 - `issue_number`: `null` (the wrap layer fills it after filing).
 
@@ -165,7 +180,9 @@ These apply to every action. The profile and the dispatcher cannot loosen them.
 - **Never confirm a dialog that asks you to confirm an irreversible action** (its confirm button is destructive by definition). Dismiss it with `Esc` and record a `denylist skip`.
 - **When you cannot tell whether a control is destructive, skip it** and record the skip. Uncertainty resolves to "do not touch". A missed finding is cheap; a destroyed fixture is not.
 - `READ_ONLY` and `SUBMIT_ALLOWLIST` only govern `fill` and `submit`. A plain `click` on a destructive button passes both — the three rules above are what stop it.
-- Never embed credentials in a URL (`https://user:pass@host` is forbidden). Send HTTP Basic auth only via `set credentials`.
+- Never embed credentials in a URL (`https://user:pass@host` is forbidden). Send HTTP Basic auth only via the origin-scoped `open --headers` of Phase 0 step 4, never via `set credentials` (it sends them to every origin). If this agent-browser has no origin-scoped `--headers` on `open`, refuse the section (record `HTTP auth unsupported`) rather than fall back.
+- Read the network buffer only through the Phase 3 projection.
+- Write scratch files only under `SCRATCH_DIR` (Phase 0 step 7).
 - Never write a URL containing userinfo (`user:pass@`) into `findings[].url`, `repro_steps`, or logs. If the page navigates to such a URL, strip the userinfo before recording it.
 - Respect `BUDGET`: bounded pages and actions. The `visited` set prevents loops.
 
@@ -178,4 +195,4 @@ These apply to every action. The profile and the dispatcher cannot loosen them.
 
 ## Completion handoff
 
-Print the absolute path of the findings fragment and screenshots dir, plus a one-line count by severity. Then exit. Aggregation and issue filing are the dispatcher / wrap layer's responsibility.
+Print the absolute path of the findings fragment and screenshots dir, plus a one-line count by severity. If the section stopped on the auth-context check, repeat the `STOPPED:` line so the dispatcher can tell a cut-short section from a finished one. Then exit. Aggregation and issue filing are the dispatcher / wrap layer's responsibility.
