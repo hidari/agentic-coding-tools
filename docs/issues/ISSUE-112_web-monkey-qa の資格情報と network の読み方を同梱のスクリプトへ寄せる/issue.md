@@ -24,6 +24,7 @@ ISSUE-109 のマージ前のレビュー (Altitude の観点) から出た提案
 - agent の本文で `${CLAUDE_PLUGIN_ROOT}` が展開されるかは確かめていない (dispatcher の command では使っている)。展開されないなら dispatcher が絶対パスを入力として渡し、agent を直接 dispatch する経路には fallback が要る
 - 強制にはならない。agent は Bash を持つので `agent-browser` を直接呼べる。「`set credentials` を使わない」「network は射影でだけ読む」の 1 行ずつは手順書に残る。強制するなら PreToolUse の hook だが、plugin が hook を持たない立場とぶつかる
 - 偽の `agent-browser` を使うテストの基盤を新しく作る
+- 今の形でもスクリプトにしても、`--headers` に渡す値は `agent-browser` の argv に載るので、同じマシンの `ps` からは見える。ローカルに限った露出で、スクリプトにしても消えない
 
 ## タスク
 

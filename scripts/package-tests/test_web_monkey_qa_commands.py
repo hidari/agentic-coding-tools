@@ -2,7 +2,7 @@
 """web-monkey-qa の手順書が explorer に打たせる agent-browser のコマンドの、資格情報まわりの性質。
 
 explorer は手順書のコマンドを literal に流用するので、コマンドの形だけで決まる性質を pin する。
-実測の記録は ISSUE-109 にある (agent-browser 0.39.1)。
+どれも agent-browser 0.39.1 で実測した漏れに対応する。
 
 - `set credentials` は全 origin へ Authorization を付けるので、この形のコマンドを持たない
 - network の生の出力は全ヘッダを持つので、出力を読むコマンドは agent の Phase 3 の射影と完全一致する
