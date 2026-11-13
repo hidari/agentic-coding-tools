@@ -2,7 +2,7 @@ product: example-product
 environment:
   kind: local            # local | staging | production (production は匿名 read-only を強制)
   base_url_env: BASE_URL  # 値は op run 経由 env で注入 (YAML に URL/secret を書かない)
-  # http_auth:            # origin 全体が Basic 認証背後のとき (staging 等) のみ。値ではなく env 変数名を書く。Basic 認証が無い環境ではこのブロックごと省略する
+  # http_auth:            # 対象の origin が Basic 認証背後のとき (staging 等) のみ。値ではなく env 変数名を書く。Basic 認証が無い環境ではこのブロックごと省略する
   #   username_env: BASIC_AUTH_USERNAME
   #   password_env: BASIC_AUTH_PASSWORD
 auth:

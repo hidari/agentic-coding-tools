@@ -32,15 +32,17 @@ product-agnostic な AI 探索型モンキーテストの dispatcher。実体は
    - `BUDGET`: `{pages_per_agent, actions_per_page}` (`budget` から)
    - `VIEWPORT`: section の `viewport` (既定は agent 側の Inputs が持つ)
    - `AUTH_RECIPE`: section の `auth` が `seed_login` の場合のみ profile 直下の `auth.recipe` を渡す。`auth: none` の section には渡さない (空)
-   - `HTTP_AUTH_USERNAME_ENV` / `HTTP_AUTH_PASSWORD_ENV`: `environment.http_auth` があればその `username_env` / `password_env` の**変数名をそのまま**渡す。**値は解決しない** (profile / dispatcher / agent prompt に secret を載せないため)。`http_auth` が無ければ両方とも空。origin 全体の transport なので `auth: none` の section にも渡す (section の auth mode と無関係)
+   - `HTTP_AUTH_USERNAME_ENV` / `HTTP_AUTH_PASSWORD_ENV`: `environment.http_auth` があればその `username_env` / `password_env` の**変数名をそのまま**渡す。**値は解決しない** (profile / dispatcher / agent prompt に secret を載せないため)。`http_auth` が無ければ両方とも空。対象の origin (`BASE_URL`) への transport なので `auth: none` の section にも渡す (section の auth mode と無関係)。資格情報を対象の origin にだけ付ける手順は agent の Phase 0 が持つ
+   - `SCRATCH_DIR`: explorer ごと・起動ごとに一意な作業用ディレクトリの絶対パス。dispatch の直前に `mktemp -d` で作り、`OUTPUT_DIR` の外に置く (abort 時に OUTPUT_DIR へ何も残さないという agent の約束を崩さないため)。section 名から組み立てない (同じ section を別の起動が同時に回すと衝突する)。harness が agent に共有させる scratchpad も渡さない (理由は agent の Phase 0 step 7)
    - `READ_ONLY`: `environment.kind == production` なら `true`、それ以外は `false`
 4. **Fan-out**: 実行対象の section ごとに `Agent(subagent_type="web-monkey-qa:monkey-explorer-agent")` を dispatch する。1 section = 1 explorer instance。**並行数の上限は `budget.agents`** — 実行対象 section 数が `budget.agents` を超える場合は `budget.agents` 個ずつ wave に分けて dispatch し、各 wave の完了を待ってから次の wave に進む (section 数が `budget.agents` 以下なら 1 wave で全 section 並行)。1 体が失敗 (abort/エラー終了) しても他の explorer には波及させない (partial salvage) — 失敗した section は「探索失敗」として集約時に記録し、その他の section の findings は正常に集約する。
-5. **集約**: 完走した各 section が書いた `<DATE_DIR>/section-<SECTION>.findings.json` (JSON 配列、agent Phase 4 の出力契約) を全て読む。
+5. **集約**: fragment を書いた各 section (認証が途中で失われて打ち切った section を含む) が書いた `<DATE_DIR>/section-<SECTION>.findings.json` (JSON 配列、agent Phase 4 の出力契約) を全て読む。全 explorer が終わったら、step 3 で作った `SCRATCH_DIR` を消す。
+   - explorer が `STOPPED: auth context lost` を報告した section は「認証が途中で失われたため打ち切り」として記録する。fragment にはそれまでの finding だけが入っており、探索は予算の途中で止まっている
    - 全 finding を1つの配列に concat し、`fingerprint` が同一の finding は 1 件に merge する (dedup、最初に出現したものを代表として残す)。
    - dedup 後の配列から `severity` 別に `high` / `medium` / `low` の件数を集計する。
    - `metadata.date` (`YYYY-MM-DD`、DATE_DIR と同じく **UTC** `date -u +%Y-%m-%d`)、`metadata.environment.kind`/`target` (共に profile の `environment.kind` を写す)、`metadata.sections_run` (実行対象になった section 名の配列。production でスキップされた section は含めない) を組み立てる。
    - `findings.schema.json` (`${CLAUDE_PLUGIN_ROOT}/schemas/findings.schema.json`) 準拠の `{metadata, findings, statistics}` オブジェクトとして `<DATE_DIR>/findings.json` に書く。
-6. **レポート**: `<DATE_DIR>/monkey-report.md` を生成する。冒頭に statistics サマリ (High/Medium/Low 件数、production でスキップした section があればその一覧) を置き、以降 severity 順 (High → Medium → Low) に finding を列挙する。各 finding は `category` / `url` / `signal` / `repro_steps` / `screenshot` へのリンクを含める。
+6. **レポート**: `<DATE_DIR>/monkey-report.md` を生成する。冒頭に statistics サマリ (High/Medium/Low 件数、production でスキップした section と認証が途中で失われて打ち切った section があればその一覧) を置き、以降 severity 順 (High → Medium → Low) に finding を列挙する。各 finding は `category` / `url` / `signal` / `repro_steps` / `screenshot` へのリンクを含める。
 7. 出力ファイル (`findings.json` / `monkey-report.md` / `screenshots/`) の絶対パスと statistics を user に報告する。後続 (Issue 起票 / PR 作成) は wrap layer か user の判断に委ねる。
 
 ## 出力契約
