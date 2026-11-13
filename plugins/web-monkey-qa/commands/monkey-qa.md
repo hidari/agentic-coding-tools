@@ -36,7 +36,7 @@ product-agnostic な AI 探索型モンキーテストの dispatcher。実体は
    - `SCRATCH_DIR`: explorer ごと・起動ごとに一意な作業用ディレクトリの絶対パス。dispatch の直前に `mktemp -d` で作り、`OUTPUT_DIR` の外に置く (abort 時に OUTPUT_DIR へ何も残さないという agent の約束を崩さないため)。section 名から組み立てない (同じ section を別の起動が同時に回すと衝突する)。harness が agent に共有させる scratchpad も渡さない (並列の explorer が同名のスクリプトを上書きしあい、互いのバッファを消した)
    - `READ_ONLY`: `environment.kind == production` なら `true`、それ以外は `false`
 4. **Fan-out**: 実行対象の section ごとに `Agent(subagent_type="web-monkey-qa:monkey-explorer-agent")` を dispatch する。1 section = 1 explorer instance。**並行数の上限は `budget.agents`** — 実行対象 section 数が `budget.agents` を超える場合は `budget.agents` 個ずつ wave に分けて dispatch し、各 wave の完了を待ってから次の wave に進む (section 数が `budget.agents` 以下なら 1 wave で全 section 並行)。1 体が失敗 (abort/エラー終了) しても他の explorer には波及させない (partial salvage) — 失敗した section は「探索失敗」として集約時に記録し、その他の section の findings は正常に集約する。
-5. **集約**: 完走した各 section が書いた `<DATE_DIR>/section-<SECTION>.findings.json` (JSON 配列、agent Phase 4 の出力契約) を全て読む。全 explorer が終わったら、step 3 で作った `SCRATCH_DIR` を消す。
+5. **集約**: fragment を書いた各 section (認証が途中で失われて打ち切った section を含む) が書いた `<DATE_DIR>/section-<SECTION>.findings.json` (JSON 配列、agent Phase 4 の出力契約) を全て読む。全 explorer が終わったら、step 3 で作った `SCRATCH_DIR` を消す。
    - explorer が `STOPPED: auth context lost` を報告した section は「認証が途中で失われたため打ち切り」として記録する。fragment にはそれまでの finding だけが入っており、探索は予算の途中で止まっている
    - 全 finding を1つの配列に concat し、`fingerprint` が同一の finding は 1 件に merge する (dedup、最初に出現したものを代表として残す)。
    - dedup 後の配列から `severity` 別に `high` / `medium` / `low` の件数を集計する。

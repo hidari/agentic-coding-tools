@@ -27,7 +27,8 @@ status: closed
 
 - (1) `set credentials` は、B の script と img にも正しい資格情報の Authorization を実際に送った。報告者の推測 (第三者のホストへ送られた可能性) は、送信まで確かめられた。CORS の preflight の要求ヘッダには `authorization` が載って 403 になり、ページの fetch は失敗した (資格情報なしの対照は A が 401 を返すだけで、B へは何も届かない)
 - (1) `open <url> --headers '{"Authorization":"Basic ..."}'` は、scheme・host・port が完全に一致する origin にだけ付いた。B にも、`sub.localhost` にも、ホスト名違いの `127.0.0.1` にも、A から B への 302 の先にも付かなかった。同じタブでのクリックや、`--headers` を付けない後の `open` でも A には付いたままだった。CORS の fetch は preflight 204、PUT 200 で通った
-- (1) `--headers` は新しいタブには届かない。`target="_blank"` で開いたタブの document は Authorization 無しで 401 になった
+- (1) ページが `target="_blank"` で開いたタブには `--headers` が届かなかった。そのタブの document は Authorization 無しで 401 になった。このとき network の射影 (元のセッションのバッファ) にその 401 は入らず、引数なしの `tab close` は active になった新しいタブを閉じた。agent-browser のヘルプは `tab new` と `click --new-tab` で開いたタブがヘッダを引き継ぐと書くが、そちらは確かめていない
+- (1) 間違った資格情報のときも `open` は rc 1 で、射影には `Document` の 401 が出た
 - (1) `--headers` に渡す JSON が壊れていると、`open` は rc 1 で、エラー文に入力 (base64 の値) をそのまま出した。正しい JSON のときは、素の出力にも `--json` の出力にも出なかった
 - (2) `network requests --json` は、各リクエストの `headers` と `responseHeaders` を丸ごと持つ。`set credentials` のときは、B 宛ての 3 件を含む 6 件に Authorization の値がそのまま載った。`{status, method, url, resourceType}` へ射影すると 0 件になり、検知の分類表に要る項目はこの 4 つで足りる
 - (4) 作り直しは再現しなかった。条件の切り分けは ISSUE-110 へ移した
