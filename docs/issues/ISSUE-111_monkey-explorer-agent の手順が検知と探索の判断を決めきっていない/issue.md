@@ -15,6 +15,12 @@ ISSUE-109 の直しの live smoke (2026-11-13、agent-browser 0.39.1、ローカ
 - render-error と dead-end の `eval` に、README の `## Tooling` の確定形が無い。手順書は「確定形を literal に使う」と書くので、指す先が無い
 - 探索の終わり方。frontier が尽きて予算が残ったとき、`entry_urls` から選び直すか。`target="_blank"` のリンクを同じタブの `open` に替えたとき、それを操作の予算とページの予算のどちらで数えるか
 - URL のクエリが記録に残る。ISSUE-109 で network の射影と broken-image の値からはクエリを落としたが、console-error の text (CORS の失敗の文面は対象の URL をクエリごと含むことが多い。未実測) はそのまま signal として findings.json に書かれる。finding の `url` と action log の url も「正規化しない」と決めているのでクエリ付きのまま残る。presigned URL の署名がファイルへ残りうる
+- 2 回目の smoke (ISSUE-109 の手直しの後) で足された件
+  - `snapshot -i` は href と target を出さない。DENYLIST_URLS の照合、別 origin の判定、`target="_blank"` の判定に要る値を取る確定形が無く、2 体とも `eval` を自分で書いた
+  - action log は `{url, action, target_name, result}` のオブジェクトだが、findings.schema.json の `repro_steps` は文字列の配列で、直列化の仕方が決まっていない
+  - 「挙動で破壊的かを判断する」手段が決まっていない。1 体は `onclick` の中身を `eval` で読んで判断したが、ページ由来の未信頼のデータを判断に使ってよいかは書かれていない。もう 1 体はラベルだけで判断した
+  - finding が 0 件の section は screenshots のディレクトリを作らないが、Completion handoff はそのパスを出せと書く。ディレクトリは section の間で共有なので、在ることは自分が書いたことを意味しない
+  - BASE_URL は資格情報の送り先を決める値だが、agent は引数のまま使い、profile の `base_url_env` が指す値と突き合わせない。agent を直接 dispatch する経路では誤った BASE_URL がそのまま送り先になる (ISSUE-34 の allowlist と同じ材料)
 - zsh で `S="agent-browser --session ..."` のように変数へコマンドを入れて回すと、単語分割されずに rc 127 になる (smoke の 1 体が踏んだ)。手順書は Bash ツールが zsh で動きうることを `${!VAR}` の項でしか書いていない
 
 ## タスク

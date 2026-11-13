@@ -59,15 +59,15 @@ You run non-interactively: treat any missing input as unknown and proceed with t
    - Keep `>/dev/null 2>&1` and judge by `rc` only. When the header JSON is malformed, `open` prints its input — the encoded credentials — in the error message. Never `echo "$H"`.
    - Write the plain `"$NAME"` form shown above. Do NOT use shell indirect expansion (`${!VAR}` is bash-only and is a `bad substitution` under zsh, which the Bash tool may run). `tr -d '\n'` is there because GNU `base64` wraps long output.
    - `rc=env-unset`: a name was provided but its env var is unset or empty. ABORT this section fail-fast (record `HTTP auth env not set`). The check comes first so that an empty credential is never sent.
-   - Any other `rc` that is not 0: ABORT this section fail-fast (record `HTTP auth open failed`). A missing or wrong credential makes this `open` fail with `net::ERR_INVALID_AUTH_CREDENTIALS` (live-verified), and so does an agent-browser whose `open` has no `--headers`. Never fall back to `set credentials`.
-   - With `rc` 0, read the projected network list (the command in Phase 3) and look at the first `Document` request of `BASE_URL`'s origin: if its status is `401` or `403`, ABORT this section fail-fast (record `HTTP auth rejected`). Continuing to explore while holding a 401 turns every page into a 4xx finding and buries any real defect in noise.
-   - Every ABORT in this step happens after the browser started: run `close` on the session (and remove your own `mktemp -d` scratch, if you made one) before you exit.
+   - Any other `rc` that is not 0: ABORT this section fail-fast (record `HTTP auth open failed`). A missing or wrong credential makes this `open` fail with `net::ERR_INVALID_AUTH_CREDENTIALS` (live-verified), and so does an agent-browser whose `open` has no `--headers`.
+   - With `rc` 0, read the projected network list (the command in Phase 3). `seen` must be at least 1, since this `open` itself loaded a document; if it is 0 the check saw nothing, so ABORT this section fail-fast (record `HTTP auth check saw nothing`). If `requests` holds a `Document` request of `BASE_URL`'s origin with status `401` or `403`, ABORT this section fail-fast (record `HTTP auth rejected`). Continuing to explore while holding a 401 turns every page into a 4xx finding and buries any real defect in noise.
+   - Every ABORT in this step happens after the browser started: run `close` on the session before you exit (step 7 covers the scratch).
    - If the names are not provided, do nothing (an environment without Basic auth).
 5. If `VIEWPORT == mobile`, set the device once at start (note: `agent-browser set device` is cleared on navigation — re-assert after each open if mobile).
 6. Do NOT create `<DATE_DIR>/screenshots/` yet. Defer its creation until just before you write the first screenshot (Phase 3), so that a Phase 1 login abort leaves nothing under OUTPUT_DIR.
 7. **Scratch space.** Write helper scripts and intermediate files only under `SCRATCH_DIR`. If it was not passed (you were dispatched directly as an agent type), make your own with `mktemp -d` and remove it before you exit. Never write into a scratchpad the harness shares between agents, and never write into the project tree outside `DATE_DIR`: explorers running in parallel overwrite each other's same-named files there and wipe each other's console / network buffers.
 
-Use the direct `agent-browser` binary, not `npx agent-browser` (the latter starts far slower). The command contract you rely on in Phases 2–4 is the live-verified one documented in the plugin README `## Tooling` section — use those exact invocations, except the network list, whose only form is the projection in Phase 3.
+Use the direct `agent-browser` binary, not `npx agent-browser` (the latter starts far slower). The command contract you rely on in Phases 2–4 is the live-verified one documented in the plugin README `## Tooling` section — use those exact invocations.
 
 ## Phase 1 — Login (only when AUTH_RECIPE is provided)
 
@@ -97,7 +97,7 @@ and `network` buffers use `--clear` normally.
 For each entry URL in the section, until `pages_per_agent` pages visited:
 
 1. `open` the URL, `wait --load networkidle`. (The buffers were cleared by the baseline step or at the END of the previous page; the `errors` buffer is cursor-tracked, not cleared.)
-   Run the detectors for the freshly loaded page first (Phase 3). If `open` returned a non-zero rc, still run Phase 3: its auth-context check decides whether the section stops; otherwise mark the URL visited and go on to the next page.
+   Run the detectors for the freshly loaded page first (Phase 3), even when `open` returned a non-zero rc. If Phase 3 did not stop the section and `open` had failed, mark the URL visited and go on to the next page.
 2. `snapshot -i` to enumerate interactive elements with refs. The snapshot prints refs as
    `[ref=e1]`; you reference that element as `@e1` in the next `click` / `fill` argument. A ref is
    valid for only the one snapshot that produced it — re-run `snapshot -i` before every action
@@ -109,7 +109,7 @@ For each entry URL in the section, until `pages_per_agent` pages visited:
    - link/button → `click @ref`
    - text input → `fill @ref "<benign token>"` (skip entirely if `READ_ONLY` is `true`; NEVER submit unless the form's accessible name matches `SUBMIT_ALLOWLIST`)
    - occasionally `press Escape` or `press Tab` to exercise focus/close paths
-   - a link that opens a new tab (`target="_blank"`) → do NOT click it; `open` its same-origin href in the current tab instead. The scoped header of Phase 0 step 4 did not reach a tab the page opened this way (live-verified: that tab's document went out without Authorization and got 401). Work only in tab `t1`, the session's first tab: if `tab list` shows any other tab, close it by its id (`tab close t2`), run `tab t1`, and record the skip. A bare `tab close` closes the current tab, which may be `t1` itself
+   - a link that opens a new tab (`target="_blank"`) → do NOT click it; `open` its same-origin href in the current tab instead. The scoped header of Phase 0 step 4 did not reach a tab the page opened this way (live-verified: that tab's document went out without Authorization and got 401). Work only in tab `t1`, the session's first tab. When a click leaves the URL unchanged, run `tab list`: if it shows any other tab, close it by its id (`tab close t2`), run `tab t1`, and record the skip. A bare `tab close` closes the current tab, which may be `t1` itself
 5. `wait --load networkidle`.
 6. Run detectors (Phase 3) and record findings.
 7. Append the step to the action log: `{url, action, target_name, result}` — this log IS the repro_steps.
@@ -123,13 +123,13 @@ Repeat steps 2–9 up to `actions_per_page` times per page (the per-action budge
 
 Run all after each load/action. Each hit becomes a finding. Every command below is the live-verified form from the README `## Tooling` contract, except the network list, whose only form is the projection below; keep `--session monkey-<SECTION>` on each.
 
-Read the network buffer ONLY through this projection, never raw. The raw list carries every request's and response's headers — Authorization, Cookie, Set-Cookie, the app's own bearer tokens — and its URLs keep query strings, where presigned URLs hold their signatures. Do not print, save, or pass on the raw output, not even into `SCRATCH_DIR`, and do not use the other views that show headers (the per-request detail, the HAR export):
+Read the network buffer ONLY through this projection, never raw. The raw list carries every request's and response's headers — Authorization, Cookie, Set-Cookie, the app's own bearer tokens — and its URLs keep query strings, where presigned URLs hold their signatures. Do not print, save, or pass on the raw output, not even into `SCRATCH_DIR`, and do not use the other views that show headers (the per-request detail, the HAR export). The projection prints one line: `seen` counts every request the buffer holds, and `requests` keeps only those with status 400 or above, which is all that the checks below look at. `seen` is the control: an empty `requests` means "no error" only when `seen` is not 0. If `seen` is 0 right after a load, the buffer captured nothing; record `network buffer empty` in the action log for that page and do not count it as clean:
 
 ```bash
-agent-browser --session monkey-<SECTION> network requests --json | jq -c '.data.requests[] | {status, method, url: (.url | split("?")[0]), resourceType}'
+agent-browser --session monkey-<SECTION> network requests --json | jq -c '{seen: (.data.requests | length), requests: [.data.requests[] | select(.status >= 400) | {status, method, url: (.url | split("?")[0]), resourceType}]}'
 ```
 
-**Auth-context check — before the detectors** (only when `HTTP_AUTH_USERNAME_ENV` and `HTTP_AUTH_PASSWORD_ENV` were provided, Phase 0 step 4): if the projected list holds a `Document` request of `BASE_URL`'s origin with status `401`, the session lost the scoped header (for example the browser was recreated). Discard every detector result of this round — the console errors of a 401 page share the same cause — print `STOPPED: auth context lost for section <SECTION>`, and go to Phase 4, which writes the findings recorded before this round. Only 401 counts here: a missing Basic header produces 401, while an app may answer a page with 403 on its own. Phase 0 step 4's check is a different one: it runs before any finding exists and aborts with no fragment.
+**Auth-context check — before the detectors** (only when `HTTP_AUTH_USERNAME_ENV` and `HTTP_AUTH_PASSWORD_ENV` were provided, Phase 0 step 4): if the projected `requests` holds a `Document` request of `BASE_URL`'s origin with status `401`, the session lost the scoped header (for example the browser was recreated). Discard every detector result of this round — the console errors of a 401 page share the same cause — print `STOPPED: auth context lost for section <SECTION>`, and go to Phase 4, which writes the findings recorded before this round. Only 401 counts here: a missing Basic header produces 401, while an app may answer a page with 403 on its own. Phase 0 step 4's check is a different one: it runs before any finding exists and aborts with no fragment.
 
 | category | how to detect (agent-browser) | severity |
 |---|---|---|
@@ -183,7 +183,7 @@ These apply to every action. The profile and the dispatcher cannot loosen them.
 - **Never confirm a dialog that asks you to confirm an irreversible action** (its confirm button is destructive by definition). Dismiss it with `Esc` and record a `denylist skip`.
 - **When you cannot tell whether a control is destructive, skip it** and record the skip. Uncertainty resolves to "do not touch". A missed finding is cheap; a destroyed fixture is not.
 - `READ_ONLY` and `SUBMIT_ALLOWLIST` only govern `fill` and `submit`. A plain `click` on a destructive button passes both — the three rules above are what stop it.
-- Never embed credentials in a URL (`https://user:pass@host` is forbidden). Send HTTP Basic auth only via the origin-scoped `open --headers` of Phase 0 step 4, never via `set credentials` (it sends them to every origin). If the scoped `open` fails, abort (Phase 0 step 4); never fall back.
+- Never embed credentials in a URL (`https://user:pass@host` is forbidden). Send HTTP Basic auth only via the origin-scoped `open --headers` of Phase 0 step 4, never via `set credentials`; if the scoped `open` fails, abort (Phase 0 step 4).
 - Read the network buffer only through the Phase 3 projection.
 - Write scratch files only under `SCRATCH_DIR` (Phase 0 step 7).
 - Never write a URL containing userinfo (`user:pass@`) into `findings[].url`, `repro_steps`, or logs. If the page navigates to such a URL, strip the userinfo before recording it.
