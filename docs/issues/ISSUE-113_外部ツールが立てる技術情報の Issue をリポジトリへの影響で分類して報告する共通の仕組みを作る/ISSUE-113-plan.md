@@ -14,6 +14,8 @@ Spec: `docs/issues/ISSUE-113_外部ツールが立てる技術情報の Issue �
 
 - 本体 (`tech-briefing/tech_briefing/`) とテストは標準ライブラリだけ。`adapters/` と `bin/` をテストから import しない
 - 構文は Python 3.11 で動く形 (runner の版が image で変わるため)。`type` 文や 3.12 以降の機能を使わない
+- `tech-briefing/` の下のファイルの名前 (拡張子を除いた stem) は標準ライブラリのモジュール名と衝突させない (`bin/` のスクリプトを直に起動すると `sys.path[0]` が `bin/` になり、`select` のような名前が標準ライブラリを隠すため。`select` が衝突することは 2026-11-24 に `sys.stdlib_module_names` で確かめた)。パッケージの中のファイルを直に起動しない
+- subagent の implementer はコミットしない、manifest に触らない。manifest の再生成とコミットは各 Task の境界でコントローラが行う
 - テストは unittest。テストのファイルは `tech-briefing/tests/test_*.py`。各テストは `sys.path` に `tech-briefing/` を足してから `tech_briefing` を import する (runner はファイルごとにその置き場を cwd にして起動する)
 - コード内のコメントは日本語で WHY を書く。外部の挙動に由来する実装は確かめた版と日付を添える
 - 定数 (`constants.py`): 印 `<!-- tech-briefing-triage -->`、書き込みの名義 `github-actions[bot]`、タイトルの接頭辞 `[tech-briefing] `、時刻帯 `Asia/Tokyo`、URL の置き換え `[link: <host>]`、モデル `claude-opus-5-5`、effort `high`、beta `server-side-fallback-2026-07-01`、`fallbacks` は `"default"`、web fetch `web_fetch_20260318`、web search `web_search_20260209`
@@ -36,13 +38,13 @@ Spec: `docs/issues/ISSUE-113_外部ツールが立てる技術情報の Issue �
 - `tech-briefing/tech_briefing/textproc.py`: advisory の ID の取り出しと URL の置き換え
 - `tech-briefing/tech_briefing/config.py`: 設定の検証
 - `tech-briefing/tech_briefing/caller_check.py`: 呼び出し側の workflow の検査
-- `tech-briefing/tech_briefing/select.py`: 判定表と input.json の組み立て
+- `tech-briefing/tech_briefing/selection.py`: 判定表と input.json の組み立て
 - `tech-briefing/tech_briefing/tools.py`: 決まった処理の道具と、Messages API へ渡す道具の定義
 - `tech-briefing/tech_briefing/triage.py`: 要求の組み立てとループ
 - `tech-briefing/tech_briefing/render.py`: 無害化と本文の整形、post の判定
-- `tech-briefing/tech_briefing/workflow_def.py`: reusable workflow の dict と YAML の生成、`--check` / `--write`
+- `tech-briefing/tech_briefing/workflow_def.py`: reusable workflow の dict と、その書き出し
 - `tech-briefing/adapters/`: `anthropic_client.py` `github_api.py` `fetcher.py` `yaml_loader.py`
-- `tech-briefing/bin/`: `select.py` `triage.py` `post.py` (PEP 723)
+- `tech-briefing/bin/`: `run_select.py` `run_triage.py` `run_post.py` (PEP 723) と `gen_workflow.py` (標準ライブラリだけ。生成物の `--check` / `--write` の入口)
 - `tech-briefing/tests/`: `fakes.py` と `test_*.py`
 - `.github/workflows/tech-briefing-triage.yml`: 生成物
 - `.github/workflows/ci.yml` と `.pre-commit-config.yaml`: 生成物の drift の検査を足す
@@ -83,7 +85,7 @@ def test_ids_are_taken_before_replacement(self):
 - [ ] Step 2: `cd tech-briefing/tests && python3 -m unittest test_textproc -v` が ImportError で落ちることを確かめる
 - [ ] Step 3: `textproc.py` を実装する。GHSA は `GHSA-xxxx-xxxx-xxxx` (英小文字と数字の4文字×3)、CVE は `CVE-\d{4}-\d{4,}`、RUSTSEC は `RUSTSEC-\d{4}-\d{4}`。URL の終わりは空白・`)`・`>`・`]`・全角の句読点と、末尾の ASCII の句読点 (`.,;:!?`) を URL に含めない
 - [ ] Step 4: 同じコマンドで PASS を確かめる
-- [ ] Step 5: manifest を再生成してコミットする (`feat(tech-briefing): advisory の ID の取り出しと URL の置き換えを足す (ISSUE-113)`)
+- [ ] Step 5: コントローラが fmt とテストの緑を確かめ、manifest を再生成してコミットする
 
 ### Task 2: 設定の検証
 
@@ -112,7 +114,7 @@ def test_domain_table(self):
 - [ ] Step 2: `python3 -m unittest test_config -v` が落ちることを確かめる
 - [ ] Step 3: `load_config` を実装する。拒否は「項目が DENY_HOSTS のどれかと一致する」「DENY_HOSTS のどれかが `.` + 項目で終わる (項目が親にあたる)」「項目が DENY_SUFFIXES のどれかと一致するか `.` + その接尾辞で終わる」のどれか。DENY_HOSTS は少なくとも `github.com` `gist.github.com` `raw.githubusercontent.com` `gitlab.com` `bitbucket.org`、DENY_SUFFIXES は少なくとも `github.io` `githubusercontent.com` `gitlab.io` `pages.dev` `netlify.app` `vercel.app`。ASCII 以外・スキーム・`*`・`/`・空・連続する `.` を拒否する
 - [ ] Step 4: PASS を確かめる
-- [ ] Step 5: manifest を再生成してコミットする
+- [ ] Step 5: コントローラが fmt とテストの緑を確かめ、manifest を再生成してコミットする
 
 ### Task 3: 呼び出し側の workflow の検査
 
@@ -127,12 +129,12 @@ Interfaces:
 - [ ] Step 2: 落ちることを確かめる
 - [ ] Step 3: `check_caller` を実装する
 - [ ] Step 4: PASS を確かめる
-- [ ] Step 5: manifest を再生成してコミットする
+- [ ] Step 5: コントローラが fmt とテストの緑を確かめ、manifest を再生成してコミットする
 
 ### Task 4: select の判定と入力の組み立て
 
 Files:
-- Create: `tech-briefing/tech_briefing/protocols.py` (`IssueRef(number: int, title: str, author: str, created_at: str, body: str | None)`、`CommentRef(id: int, author: str, body: str, created_at: str)` と `GitHubApi` Protocol: `open_issues() -> list[IssueRef]`、`comments(number: int) -> list[CommentRef]`、`post_comment(number: int, body: str) -> None`)、`tech-briefing/tech_briefing/select.py`
+- Create: `tech-briefing/tech_briefing/protocols.py` (`IssueRef(number: int, title: str, author: str, created_at: str, body: str | None)`、`CommentRef(id: int, author: str, body: str, created_at: str)` と `GitHubApi` Protocol: `open_issues() -> list[IssueRef]`、`comments(number: int) -> list[CommentRef]`、`post_comment(number: int, body: str) -> None`)、`tech-briefing/tech_briefing/selection.py`
 - Test: `tech-briefing/tests/test_select.py`、`tech-briefing/tests/fakes.py` (`FakeGitHub`)
 
 Interfaces:
@@ -152,7 +154,8 @@ Interfaces:
 - [ ] Step 2: 落ちることを確かめる
 - [ ] Step 3: `decide` を実装する。2件以上のときの「新しい方」は `created_at` の新しい方。`summary` は step summary に出す1行で、結果の値を必ず含む
 - [ ] Step 4: PASS を確かめる
-- [ ] Step 5: manifest を再生成してコミットする
+- [ ] Step 4b: 変異注入。下の変異を1つずつ入れ、狙ったテストだけが赤くなることを確かめ、変異と赤くなったテストの ID の対応を `.cache/mutations-task4.json` に残す (コントローラが同じ変異を再生する)。変異: 判定表の `already-processed` の条件を外す、`wrong-author` を緑にする、印のコメントの除外を外す、日付を UTC で決める
+- [ ] Step 5: コントローラが fmt とテストの緑を確かめ、manifest を再生成してコミットする
 
 ### Task 5: 決まった処理の道具
 
@@ -171,12 +174,16 @@ Interfaces:
   - `registry_metadata` は `registries` の外の ecosystem を拒否し、パッケージ名の形 (npm のスコープ付き、crates、pypi) の外を拒否する。返すのは repository の欄と最新の版だけ
   - `release_notes` が叩く URL のリポジトリは registry の metadata から決まり、引数でリポジトリを渡せない (FakeFetcher の記録で見る)
   - `advisory` は ID の形の外を拒否し、行き先は固定の advisory のデータベースだけ
+  - registry の metadata の `repository` の欄は作者が書けるので、GitHub 以外のホスト、`..` や `?` や `#` を含むパス、owner と repo の2つより多い segment を拒否する (`.git` の接尾辞と `git+` の接頭辞だけは外して読む)
+  - どの道具を呼んでも、FakeFetcher が記録した URL のホストが固定の集合 (OSV、3つの registry、api.github.com) に収まる
+  - `search_files` も symlink を辿らない
   - 結果が `result_limit` を超えたら切り、切ったことを末尾の1行で示す
   - `server_tools()` の web fetch が `type == "web_fetch_20260318"`、`url_sources == {"client_tool_results": {"type": "none"}}`、`allowed_domains == list(config.official_sources)`、`max_uses` と `max_content_tokens` を持つ。web search が `type == "web_search_20260209"` で同じ `allowed_domains` と `max_uses` を持つ
 - [ ] Step 2: 落ちることを確かめる
 - [ ] Step 3: `ToolBox` を実装する。advisory のデータベースは OSV (`https://api.osv.dev/v1/vulns/<ID>`)、registry は npm `https://registry.npmjs.org/<name>`、crates `https://crates.io/api/v1/crates/<name>`、pypi `https://pypi.org/pypi/<name>/json`、リリースノートは `https://api.github.com/repos/<owner>/<repo>/releases/tags/<tag>` (どれも作り手の判断。実物での確かめは Issue のタスク)
 - [ ] Step 4: PASS を確かめる
-- [ ] Step 5: manifest を再生成してコミットする
+- [ ] Step 4b: 変異注入。下の変異を1つずつ入れ、狙ったテストだけが赤くなることを確かめ、変異と赤くなったテストの ID の対応を `.cache/mutations-task5.json` に残す (コントローラが同じ変異を再生する)。変異: `read_file` の symlink の拒否を外す、`registries` の照合を外す、`repository` の欄のホストの検査を外す、`url_sources` を外す
+- [ ] Step 5: コントローラが fmt とテストの緑を確かめ、manifest を再生成してコミットする
 
 ### Task 6: triage の要求とループ
 
@@ -199,7 +206,7 @@ Interfaces:
 - [ ] Step 2: 落ちることを確かめる
 - [ ] Step 3: `build_params` と `run_triage` を実装する。system prompt の文面は spec の「共通の基準」を写した定数にし、基準の文書は別のブロックで差し込む
 - [ ] Step 4: PASS を確かめる
-- [ ] Step 5: manifest を再生成してコミットする
+- [ ] Step 5: コントローラが fmt とテストの緑を確かめ、manifest を再生成してコミットする
 
 ### Task 7: 無害化と本文の整形と post の判定
 
@@ -221,17 +228,18 @@ Interfaces:
 - [ ] Step 2: 落ちることを確かめる
 - [ ] Step 3: 実装する
 - [ ] Step 4: PASS を確かめる
-- [ ] Step 5: manifest を再生成してコミットする
+- [ ] Step 4b: 変異注入。下の変異を1つずつ入れ、狙ったテストだけが赤くなることを確かめ、変異と赤くなったテストの ID の対応を `.cache/mutations-task7.json` に残す (コントローラが同じ変異を再生する)。変異: `sanitize` のメンションの無害化を外す、表の区切りのエスケープを外す、`should_post` の名義の照合を外す
+- [ ] Step 5: コントローラが fmt とテストの緑を確かめ、manifest を再生成してコミットする
 
 ### Task 8: reusable workflow の生成と配線のテスト
 
 Files:
 - Create: `tech-briefing/tech_briefing/workflow_def.py`、`.github/workflows/tech-briefing-triage.yml` (生成物)
-- Modify: `.github/workflows/ci.yml` (readme-drift の job に `python3 tech-briefing/tech_briefing/workflow_def.py --check` の step を足す)、`.pre-commit-config.yaml` (同じ検査の hook を足す)
+- Modify: `.github/workflows/ci.yml` (readme-drift の job に `python3 tech-briefing/bin/gen_workflow.py --check` の step を足す)、`.pre-commit-config.yaml` (同じ検査の hook を足す)
 - Test: `tech-briefing/tests/test_workflow_def.py`
 
 Interfaces:
-- Produces: `workflow() -> dict`、`to_yaml(doc: dict) -> str`、`main(argv: list[str]) -> int` (`--check` は生成物と一致で0、不一致で1、`--write` は書き出す)
+- Produces: `workflow() -> dict`、`render(doc: dict) -> str` (`json.dumps(doc, indent=2, ensure_ascii=False)` に末尾の改行)、`bin/gen_workflow.py` の `main(argv: list[str]) -> int` (`--check` は生成物と一致で0、不一致で1、`--write` は書き出す)
 
 - [ ] Step 1: 失敗するテストを書く
   - job は `select` `triage` `post` の3つで、権限の表が `select: {contents: read, issues: read}`、`triage: {contents: read}`、`post: {contents: read, issues: write}`、top-level が `{}`
@@ -240,17 +248,19 @@ Interfaces:
   - `uses:` は全部 `@` の後が40桁の16進
   - `post` は `if:` に `always()` と、select の結果が `triage` `unexpected` `input-too-large` のどれかの条件を持つ
   - `concurrency` を持つ
-  - `to_yaml` の出力を行単位で、鍵の順と引用の規則が決まった形で出す (`on` は引用する)
-  - リポジトリの生成物が `to_yaml(workflow())` と一致する (`--check` と同じ判定)
+  - 共通の仕組みのコードを checkout する各 job で、`job.workflow_repository` と `job.workflow_sha` が空なら非0で止まる step が checkout より前にある
+  - 生成物は JSON の文書として書く (YAML 1.2 は JSON を含むので GitHub の YAML として読める。鍵 `on` も文字列のまま残る)。`json.loads(生成物) == workflow()` で読み戻して一致を見る
+  - `bin/gen_workflow.py --check` が一致で0、1文字変えた生成物で1を返す
 - [ ] Step 2: 落ちることを確かめる
-- [ ] Step 3: 実装し、`--write` で生成物を書く。job 間の受け渡しは actions/upload-artifact と download-artifact (SHA で固定)。共通の仕組みのコードの checkout の方法は spec の「実装のときに確かめること」なので、`job.workflow_sha` と `job.workflow_repository` を使う形で書き、確かめる対象として Issue のタスクに残す
-- [ ] Step 4: PASS を確かめ、`python3 tech-briefing/tech_briefing/workflow_def.py --check` が rc 0、生成物を1行変えると rc 1 になることを確かめる
-- [ ] Step 5: manifest を再生成してコミットする
+- [ ] Step 3: 実装し、`--write` で生成物を書く。job 間の受け渡しは actions/upload-artifact と download-artifact (SHA で固定)。共通の仕組みのコードの checkout は `repository: ${{ job.workflow_repository }}` と `ref: ${{ job.workflow_sha }}` で行う (docs.github.com の contexts に、reusable workflow が自分のソースを checkout する用途の例がある。GitHub Enterprise Server では使えない。2026-11-24 に原文で確かめた)。どちらかが空なら止まる step を checkout の前に置く。実物で届くかは Issue のタスクに残す
+- [ ] Step 4: PASS を確かめ、`python3 tech-briefing/bin/gen_workflow.py --check` が rc 0、生成物を1文字変えると rc 1 になることを確かめる。コントローラが境界で1回だけ、実物の YAML のパーサ (`uv run --with pyyaml`) で生成物を読み、`json.loads` の結果と一致すること (鍵 `on` が真偽値に化けないこと) を確かめる
+- [ ] Step 4b: 変異注入。下の変異を1つずつ入れ、狙ったテストだけが赤くなることを確かめ、変異と赤くなったテストの ID の対応を `.cache/mutations-task8.json` に残す (コントローラが同じ変異を再生する)。変異: `triage` の権限に `issues: write` を足す、鍵を `post` でも参照する、`run:` に式を直に書く、空の SHA で止まる step を外す
+- [ ] Step 5: コントローラが fmt とテストの緑を確かめ、manifest を再生成してコミットする
 
 ### Task 9: アダプタと入口のスクリプトと境界のテスト
 
 Files:
-- Create: `tech-briefing/adapters/anthropic_client.py`、`github_api.py` (urllib と GITHUB_TOKEN。ページを全部読む)、`fetcher.py` (urllib)、`yaml_loader.py`、`tech-briefing/bin/select.py`、`triage.py`、`post.py` (PEP 723 の `# /// script` で依存と版を固定。anthropic と PyYAML は公開から2週間以上の版)
+- Create: `tech-briefing/adapters/anthropic_client.py`、`github_api.py` (urllib と GITHUB_TOKEN。ページを全部読む)、`fetcher.py` (urllib)、`yaml_loader.py`、`tech-briefing/bin/run_select.py`、`run_triage.py`、`run_post.py` (PEP 723 の `# /// script` で依存と版を固定。anthropic と PyYAML は公開から2週間以上の版)
 - Test: `tech-briefing/tests/test_boundaries.py`、`tech-briefing/tests/test_fakes_contract.py`
 
 Interfaces:
@@ -260,17 +270,19 @@ Interfaces:
 - [ ] Step 1: 失敗するテストを書く
   - `tech_briefing/` のどのモジュールも、ast で読んだ import に `adapters`・`anthropic`・`yaml` を持たない
   - テストのファイルのどれも `adapters` と `bin` を import しない
+  - `tech-briefing/` の下のどの `.py` の stem も `sys.stdlib_module_names` に入らない
   - `bin/` の各スクリプトが PEP 723 の block を持ち、依存の版が `==` で固定されている
   - Fake の側の契約: `FakeGitHub` が100件を超えるコメントをページに分けて返す設定でも、`decide` が全件を見る (アダプタの `comments` が全ページを返す約束を Fake に持たせる)。`FakeMessages` の応答の形が Task 6 のループの前提 (content の block の type、stop_reason、usage の鍵) と一致する
 - [ ] Step 2: 落ちることを確かめる
 - [ ] Step 3: アダプタと入口のスクリプトを書く。入口は Protocol の実物を組み立てて本体を呼ぶだけで、判定を持たない
 - [ ] Step 4: PASS を確かめ、`python3 scripts/run-python-tests.py` と `pre-commit run --all-files` が緑であることを確かめる
-- [ ] Step 5: manifest を再生成してコミットする
+- [ ] Step 5: コントローラが fmt とテストの緑を確かめ、manifest を再生成してコミットする
 
 ### Task 10: Issue に残りを書く
 
 Files:
 - Modify: `docs/issues/ISSUE-113_*/issue.md`
 
-- [ ] Step 1: タスクの「実装プランを書く」と「実装し、テストで固定する」に印を付け、人の手が要る残りをタスクとして足す: 鍵と environment と variable とワークスペースの用意、契約テストの実物の側、入口のスクリプトとアダプタの実物での走行 (select だけの dry-run から)、有効にする前のテスト、導入の手順の skill、spec の「実装のときに確かめること」の各項目
+- [ ] Step 0: spec の「テスト」の節の各項目と、それを固定するテスト ID の対応表を作り、PR の本文に載せる
+- [ ] Step 1: タスクの「実装し、テストで固定する」に印を付け、人の手が要る残りをタスクとして足す: 鍵と environment と variable とワークスペースの用意、契約テストの実物の側、入口のスクリプトとアダプタの実物での走行 (select だけの dry-run から)、有効にする前のテスト、導入の手順の skill、spec の「実装のときに確かめること」の各項目
 - [ ] Step 2: コミットする
