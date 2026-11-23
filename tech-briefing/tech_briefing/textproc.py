@@ -6,7 +6,7 @@ ID は URL の置き換えより先に取る。GHSA の ID は URL のパスに�
 import re
 from urllib.parse import urlsplit
 
-from .constants import URL_REPLACEMENT
+from .constants import URL_REPLACEMENT, URL_UNKNOWN_HOST
 
 _ID_PATTERN = re.compile(
     r"GHSA(?:-[a-z0-9]{4}){3}(?![a-z0-9])"
@@ -17,7 +17,7 @@ _ID_PATTERN = re.compile(
 
 # URL の終端: 空白・閉じ括弧類・全角の句読点と全角空白。
 # 国際化ドメインを通すため、終端以外は ASCII に限らず URL に含める
-_URL_BODY = r"https?://[^\s)>\]、。，．）」　]+"
+_URL_BODY = r"https?://(?:\[[^\]\s]*\])?[^\s)>\]、。，．）」　]+"
 _URL_PATTERN = re.compile(
     # [text](url) と <url> は囲み記号ごと 1 つの置き換えにする
     r"\[[^\]]*\]\(\s*(?P<md>" + _URL_BODY + r")[^)]*\)"
@@ -45,7 +45,14 @@ def extract_advisory_ids(text: str) -> list[str]:
 
 def _link(url: str) -> str:
     # 国際化ドメインは書かれたまま残す (punycode へ変換しない)
-    host = urlsplit(url).hostname or ""
+    # 信頼できない入力なので urlsplit の ValueError (不正な IPv6 括弧、NFKC で
+    # 区切りに化けるホストなど) で落とさない。ホストが取れなければ固定の表現にする
+    try:
+        host = urlsplit(url).hostname or ""
+    except ValueError:
+        host = ""
+    if not host.strip("."):
+        host = URL_UNKNOWN_HOST
     return URL_REPLACEMENT.format(host=host)
 
 

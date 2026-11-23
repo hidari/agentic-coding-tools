@@ -1212,10 +1212,12 @@ tech-briefing/tests/test_textproc.py::test_textproc.AdvisoryIds.test_ids_of_thre
 tech-briefing/tests/test_textproc.py::test_textproc.AdvisoryIds.test_long_cve_sequence
 tech-briefing/tests/test_textproc.py::test_textproc.AdvisoryIds.test_no_ids
 tech-briefing/tests/test_textproc.py::test_textproc.AdvisoryIds.test_short_cve_sequence_is_not_an_id
+tech-briefing/tests/test_textproc.py::test_textproc.ReplaceUrls.test_dots_only_host_is_unknown
 tech-briefing/tests/test_textproc.py::test_textproc.ReplaceUrls.test_fullwidth_terminators
 tech-briefing/tests/test_textproc.py::test_textproc.ReplaceUrls.test_ids_are_taken_before_replacement
 tech-briefing/tests/test_textproc.py::test_textproc.ReplaceUrls.test_multiple_urls
 tech-briefing/tests/test_textproc.py::test_textproc.ReplaceUrls.test_no_url_unchanged
 tech-briefing/tests/test_textproc.py::test_textproc.ReplaceUrls.test_port_and_userinfo_are_dropped
 tech-briefing/tests/test_textproc.py::test_textproc.ReplaceUrls.test_trailing_ascii_punctuation_stays_in_text
+tech-briefing/tests/test_textproc.py::test_textproc.ReplaceUrls.test_unparsable_host_never_raises_and_leaves_no_url
 tech-briefing/tests/test_textproc.py::test_textproc.ReplaceUrls.test_url_forms_become_host_only

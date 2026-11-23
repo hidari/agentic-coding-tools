@@ -51,6 +51,28 @@ class ReplaceUrls(unittest.TestCase):
     def test_port_and_userinfo_are_dropped(self):
         self.assertEqual(replace_urls("https://u:p@a.example:8443/x"), "[link: a.example]")
 
+    def test_unparsable_host_never_raises_and_leaves_no_url(self):
+        cases = {
+            "https://[::1]/x": "[link: ::1]",
+            "https://[::1/x": "[link: unknown]",
+            "https://[bad/x y": "[link: unknown] y",
+            "https://a\ufe56b/x": "[link: unknown]",
+            "[t](https://[bad/x)": "[link: unknown]",
+            "<https://a\ufe56b/x>": "[link: unknown]",
+        }
+        for src, want in cases.items():
+            self.assertEqual(replace_urls(src), want, src)
+
+    def test_dots_only_host_is_unknown(self):
+        cases = {
+            "https://.": "[link: unknown].",
+            "https://...": "[link: unknown]...",
+            "https://./x": "[link: unknown]",
+            "https:///x": "[link: unknown]",
+        }
+        for src, want in cases.items():
+            self.assertEqual(replace_urls(src), want, src)
+
     def test_no_url_unchanged(self):
         self.assertEqual(replace_urls("plain text"), "plain text")
 

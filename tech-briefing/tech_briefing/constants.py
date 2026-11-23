@@ -10,6 +10,8 @@ TITLE_PREFIX = "[tech-briefing] "
 TIMEZONE = "Asia/Tokyo"
 # URL を本文から落とすときの置き換え。ホスト名だけを残す
 URL_REPLACEMENT = "[link: {host}]"
+# ホストを取り出せない URL の host 部。原文の一部を残さないための固定表現
+URL_UNKNOWN_HOST = "unknown"
 
 MODEL = "claude-opus-5-5"
 EFFORT = "high"
