@@ -1207,3 +1207,15 @@ scripts/test_run_python_tests.py::test_run_python_tests.VersionBranchBan.test_sy
 scripts/test_run_python_tests.py::test_run_python_tests.VersionBranchBan.test_synthetic_by_name_version_check_is_detected
 scripts/test_run_python_tests.py::test_run_python_tests.VersionBranchBan.test_synthetic_version_check_is_detected
 scripts/test_run_python_tests.py::test_run_python_tests.VersionBranchBan.test_unaliased_import_alone_is_detected
+tech-briefing/tests/test_textproc.py::test_textproc.AdvisoryIds.test_ghsa_is_lowercase_body_as_written
+tech-briefing/tests/test_textproc.py::test_textproc.AdvisoryIds.test_ids_of_three_kinds_in_order
+tech-briefing/tests/test_textproc.py::test_textproc.AdvisoryIds.test_long_cve_sequence
+tech-briefing/tests/test_textproc.py::test_textproc.AdvisoryIds.test_no_ids
+tech-briefing/tests/test_textproc.py::test_textproc.AdvisoryIds.test_short_cve_sequence_is_not_an_id
+tech-briefing/tests/test_textproc.py::test_textproc.ReplaceUrls.test_fullwidth_terminators
+tech-briefing/tests/test_textproc.py::test_textproc.ReplaceUrls.test_ids_are_taken_before_replacement
+tech-briefing/tests/test_textproc.py::test_textproc.ReplaceUrls.test_multiple_urls
+tech-briefing/tests/test_textproc.py::test_textproc.ReplaceUrls.test_no_url_unchanged
+tech-briefing/tests/test_textproc.py::test_textproc.ReplaceUrls.test_port_and_userinfo_are_dropped
+tech-briefing/tests/test_textproc.py::test_textproc.ReplaceUrls.test_trailing_ascii_punctuation_stays_in_text
+tech-briefing/tests/test_textproc.py::test_textproc.ReplaceUrls.test_url_forms_become_host_only
