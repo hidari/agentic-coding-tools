@@ -42,6 +42,15 @@ _CHAR_MAP = {
     "`": "\\`",
 }
 
+# GitHub のコメントの上限は 65536 文字。固定の文面の分の余裕を残す
+MAX_COMMENT_CHARS = 60000
+# 無害化の前の文字数。無害化で最大 5 倍 (& -> &amp;) に伸びても、行を切れば収まる大きさにする
+_TITLE_LIMIT = 300
+_FINDINGS_LIMIT = 1500
+_SOURCE_LIMIT = 300
+_SOURCES_PER_ITEM = 10
+_UNREACHABLE_MAX = 20
+_NOTES_LIMIT = 2000
 _CLASSIFICATIONS = ("A", "B", "C", "D")
 
 _REPORT_HEADER = "## 技術情報のトリアージ結果"
@@ -64,33 +73,52 @@ def _as_list(value: object) -> list:
     return value if isinstance(value, list) else []
 
 
+def _clip(value: object, limit: int) -> str:
+    # 無害化の前に切る。後で切ると \\ や &amp; の途中で割れる
+    return sanitize(value[:limit]) if isinstance(value, str) else ""
+
+
 def _row(entry: object) -> str:
     entry = entry if isinstance(entry, dict) else {}
     classification = entry.get("classification")
     # 許可した 4 値だけを通す。それ以外を sanitize して載せず "?" に固定する
     shown = classification if classification in _CLASSIFICATIONS else "?"
-    sources = ", ".join(sanitize(s) for s in _as_list(entry.get("sources")) if isinstance(s, str))
-    title = sanitize(entry.get("title") or "")
-    findings = sanitize(entry.get("findings") or "")
-    return f"| {title} | {shown} | {findings} | {sources} |"
+    sources = ", ".join(_clip(s, _SOURCE_LIMIT) for s in _as_list(entry.get("sources"))[:_SOURCES_PER_ITEM])
+    return f"| {_clip(entry.get('title'), _TITLE_LIMIT)} | {shown} | {_clip(entry.get('findings'), _FINDINGS_LIMIT)} | {sources} |"
+
+
+def _assemble(rows: list[str], omitted: int, unreachable: list[str], notes: str) -> str:
+    lines = [MARKER, _REPORT_HEADER, "", "| 項目 | 分類 | 所見 | 取得元 |", "| --- | --- | --- | --- |", *rows]
+    if omitted:
+        lines += ["", f"省略した項目: {omitted} 件 (コメントの文字数の上限のため)"]
+    lines += ["", "### 取得できなかった取得元", ""]
+    lines += [f"- {s}" for s in unreachable] or ["なし"]
+    # LLM の文字列は行頭に置かない。固定のラベルの後ろに置けば、sanitize が改行を潰しているので
+    # ~~~ や --- や箇条書きが行頭の構文として効かない
+    lines += ["", f"補足: {notes or 'なし'}"]
+    return "\n".join(lines) + "\n"
 
 
 def render_report(report: dict) -> str:
     report = report if isinstance(report, dict) else {}
-    lines = [
-        MARKER,
-        _REPORT_HEADER,
-        "",
-        "| 項目 | 分類 | 所見 | 取得元 |",
-        "| --- | --- | --- | --- |",
+    items = _as_list(report.get("items"))
+    rows = [_row(e) for e in items]
+    unreachable = [
+        _clip(s, _SOURCE_LIMIT) for s in _as_list(report.get("unreachable_sources"))[:_UNREACHABLE_MAX] if isinstance(s, str)
     ]
-    lines += [_row(e) for e in _as_list(report.get("items"))]
-    lines += ["", "### 取得できなかった取得元", ""]
-    unreachable = [sanitize(s) for s in _as_list(report.get("unreachable_sources")) if isinstance(s, str)]
-    lines += [f"- {s}" for s in unreachable] or ["なし"]
-    notes = report.get("notes")
-    lines += ["", "### 補足", "", sanitize(notes) if isinstance(notes, str) and notes else "なし"]
-    return "\n".join(lines) + "\n"
+    notes = _clip(report.get("notes"), _NOTES_LIMIT)
+
+    # 上限に収まる最大の行数を二分探索する (行を増やすと本文は単調に長くなる)
+    lo, hi = 0, len(rows)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if len(_assemble(rows[:mid], len(rows) - mid, unreachable, notes)) <= MAX_COMMENT_CHARS:
+            lo = mid
+        else:
+            hi = mid - 1
+    body = _assemble(rows[:lo], len(rows) - lo, unreachable, notes)
+    # 各欄の上限で収まるはずだが、投稿が 422 で落ちて失敗の本文も出せなくなるのを防ぐ最後の砦
+    return body if len(body) <= MAX_COMMENT_CHARS else body[:MAX_COMMENT_CHARS]
 
 
 def render_failure(kind: str) -> str:

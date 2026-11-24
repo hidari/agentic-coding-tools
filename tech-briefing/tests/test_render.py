@@ -16,6 +16,7 @@ from tech_briefing.constants import (  # noqa: E402
 )
 from tech_briefing.protocols import CommentRef  # noqa: E402
 from tech_briefing.render import (  # noqa: E402
+    MAX_COMMENT_CHARS,
     plan_post,
     render_failure,
     render_report,
@@ -144,6 +145,41 @@ class RenderReportTest(unittest.TestCase):
         self.assertIn("- u2", body)
         self.assertIn("メモ", body)
 
+    def test_notes_never_start_a_line_with_markdown_syntax(self):
+        for notes in ("~~~", "- x", "1. x", "---", "    x", "> q", "## h"):
+            with self.subTest(notes=notes):
+                body = render_report(report([item()], unreachable=[notes], notes=notes))
+                lines = body.split("\n")
+                self.assertIn("補足: " + sanitize(notes), lines)
+                for ln in lines:
+                    self.assertFalse(ln.startswith(notes) and ln != "- " + sanitize(notes), ln)
+                    self.assertFalse(ln.strip() in ("~~~", "---"), ln)
+
+    def test_long_title_stays_within_limit_and_marker(self):
+        body = render_report(report([item(title="a" * 70000)]))
+        self.assertLessEqual(len(body), MAX_COMMENT_CHARS)
+        self.assertTrue(body.startswith(MARKER + "\n"))
+
+    def test_every_long_field_stays_within_limit(self):
+        long = "&" * 70000
+        body = render_report(report([item(title=long, findings=long, sources=[long] * 5)], [long] * 5, long))
+        self.assertLessEqual(len(body), MAX_COMMENT_CHARS)
+        self.assertTrue(body.startswith(MARKER + "\n"))
+
+    def test_many_items_are_cut_from_the_end_with_omitted_count(self):
+        items = [item(title=f"t{i:05d}", findings="x" * 200) for i in range(5000)]
+        body = render_report(report(items))
+        self.assertLessEqual(len(body), MAX_COMMENT_CHARS)
+        self.assertTrue(body.startswith(MARKER + "\n"))
+        kept = len(self.rows(body))
+        self.assertTrue(0 < kept < 5000)
+        self.assertIn(f"t{kept - 1:05d}", body)
+        self.assertNotIn(f"t{kept:05d}", body)
+        self.assertIn(f"省略した項目: {5000 - kept} 件", body)
+
+    def test_small_report_has_no_omitted_line(self):
+        self.assertNotIn("省略した項目", render_report(report([item()])))
+
     def test_malformed_report_does_not_raise(self):
         for bad in ({}, {"items": None}, {"items": [None, "x", {}]}, {"items": [{"sources": "abc"}]}, {"notes": None}):
             with self.subTest(bad=bad):
@@ -190,6 +226,9 @@ class ShouldPostTest(unittest.TestCase):
 
     def test_marker_after_leading_whitespace_counts(self):
         self.assertFalse(should_post(FakeGitHub(comments={1: [comment(body="\n  " + MARKER)]}), 1))
+
+    def test_true_when_bot_comment_quotes_marker_mid_body(self):
+        self.assertTrue(should_post(FakeGitHub(comments={1: [comment(body="前置き\n" + MARKER)]}), 1))
 
     def test_true_when_no_comments(self):
         self.assertTrue(should_post(FakeGitHub(), 1))

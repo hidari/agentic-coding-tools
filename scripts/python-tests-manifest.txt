@@ -1241,11 +1241,16 @@ tech-briefing/tests/test_render.py::test_render.RenderFailureTest.test_fixed_tem
 tech-briefing/tests/test_render.py::test_render.RenderFailureTest.test_unknown_kind_is_internal_error
 tech-briefing/tests/test_render.py::test_render.RenderReportTest.test_all_llm_strings_are_sanitized
 tech-briefing/tests/test_render.py::test_render.RenderReportTest.test_classification_outside_a_to_d_is_question_mark
+tech-briefing/tests/test_render.py::test_render.RenderReportTest.test_every_long_field_stays_within_limit
+tech-briefing/tests/test_render.py::test_render.RenderReportTest.test_long_title_stays_within_limit_and_marker
 tech-briefing/tests/test_render.py::test_render.RenderReportTest.test_malformed_report_does_not_raise
+tech-briefing/tests/test_render.py::test_render.RenderReportTest.test_many_items_are_cut_from_the_end_with_omitted_count
 tech-briefing/tests/test_render.py::test_render.RenderReportTest.test_multiline_finding_stays_in_one_row
 tech-briefing/tests/test_render.py::test_render.RenderReportTest.test_non_dict_report_does_not_raise
+tech-briefing/tests/test_render.py::test_render.RenderReportTest.test_notes_never_start_a_line_with_markdown_syntax
 tech-briefing/tests/test_render.py::test_render.RenderReportTest.test_pipe_in_item_does_not_add_columns
 tech-briefing/tests/test_render.py::test_render.RenderReportTest.test_row_count_matches_item_count
+tech-briefing/tests/test_render.py::test_render.RenderReportTest.test_small_report_has_no_omitted_line
 tech-briefing/tests/test_render.py::test_render.RenderReportTest.test_sources_are_joined_with_comma_and_sanitized
 tech-briefing/tests/test_render.py::test_render.RenderReportTest.test_starts_with_marker_and_has_header_columns
 tech-briefing/tests/test_render.py::test_render.RenderReportTest.test_unreachable_sources_and_notes_are_listed
@@ -1266,6 +1271,7 @@ tech-briefing/tests/test_render.py::test_render.ShouldPostTest.test_false_when_m
 tech-briefing/tests/test_render.py::test_render.ShouldPostTest.test_marker_after_leading_whitespace_counts
 tech-briefing/tests/test_render.py::test_render.ShouldPostTest.test_reads_the_given_issue_number
 tech-briefing/tests/test_render.py::test_render.ShouldPostTest.test_true_when_bot_comment_has_no_marker
+tech-briefing/tests/test_render.py::test_render.ShouldPostTest.test_true_when_bot_comment_quotes_marker_mid_body
 tech-briefing/tests/test_render.py::test_render.ShouldPostTest.test_true_when_marked_comment_by_other_account
 tech-briefing/tests/test_render.py::test_render.ShouldPostTest.test_true_when_no_comments
 tech-briefing/tests/test_select.py::test_select.DecisionTable.test_author_config_errors
