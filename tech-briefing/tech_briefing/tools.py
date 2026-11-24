@@ -17,6 +17,8 @@ from .constants import WEB_FETCH_TOOL, WEB_SEARCH_TOOL
 from .protocols import Fetcher, FetchError
 from .textproc import _ID_PATTERN, _normalize_id
 
+# 報告を受ける道具の名前。ループはこの名前の呼び出しを実行せずに受け取る
+SUBMIT_REPORT = "submit_report"
 # 誤りの結果の先頭。ループの側はこの接頭辞で誤りを見分け、is_error を立てる
 ERROR_PREFIX = "道具の誤り: "
 REPO_UNKNOWN = "配布元のリポジトリを判定できませんでした"
@@ -197,7 +199,7 @@ class ToolBox:
                 _schema(id=_string("advisory の ID")),
             )
         )
-        defs.append(_tool("submit_report", "分類の報告を提出する。作業の最後に1回だけ呼ぶ。", REPORT_SCHEMA))
+        defs.append(_tool(SUBMIT_REPORT, "分類の報告を提出する。作業の最後に1回だけ呼ぶ。", REPORT_SCHEMA))
         return defs
 
     def server_tools(self) -> list[dict]:

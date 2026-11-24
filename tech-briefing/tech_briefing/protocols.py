@@ -58,3 +58,13 @@ class Fetcher(Protocol):
     """
 
     def get_json(self, url: str) -> object: ...
+
+
+class MessagesClient(Protocol):
+    """Messages API の口。params と応答は API の JSON の形の dict で、SDK との変換はアダプタが持つ。
+
+    - create(params) は1回の要求を送り、応答の dict (content / stop_reason / usage) を返す
+    - 再試行はアダプタが持つ。再試行のあとも失敗したら例外を上げる (ループは種類を問わず api-error にする)
+    """
+
+    def create(self, params: dict) -> dict: ...
