@@ -63,3 +63,22 @@ FAILURE_KINDS = (
     FAIL_INVALID_REPORT,
     FAIL_INTERNAL_ERROR,
 )
+
+# official_sources に入れてはならないホスト。誰でも書き込める場所なので、許可すると
+# 検索と取得の対象が攻撃者の投稿まで広がる。親ドメインも同じ理由で拒否する
+DENY_HOSTS = (
+    "github.com",
+    "gist.github.com",
+    "raw.githubusercontent.com",
+    "gitlab.com",
+    "bitbucket.org",
+)
+# 配下のサブドメインを第三者が取得できるホスティングの接尾辞。接尾辞自身と配下をすべて拒否する
+DENY_SUFFIXES = (
+    "github.io",
+    "githubusercontent.com",
+    "gitlab.io",
+    "pages.dev",
+    "netlify.app",
+    "vercel.app",
+)
