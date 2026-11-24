@@ -45,6 +45,7 @@ class DecisionTable(unittest.TestCase):
             ("2件 新しい方に印", [issue(1), issue(2, created_at="2026-11-24T02:00:00Z")], {2: [marked()]}, "already-processed", 2),
             ("2件 新しい方に印なし", [issue(1), issue(2, created_at="2026-11-24T02:00:00Z")], {1: [marked()]}, "unexpected", 2),
             ("他者の同題が混ざっても止まらない", [issue(1, author="someone"), issue(2)], {}, "triage", 2),
+            ("ログインの大文字小文字は区別しない", [issue(author=AUTHOR.upper())], {}, "triage", 1),
             ("title-mismatch", [near], {}, "title-mismatch", 5),
             ("末尾改行は不一致", [issue(6, TITLE + "\n")], {}, "title-mismatch", 6),
             ("完全一致があれば mismatch にならない", [issue(1), near], {}, "triage", 1),
@@ -138,6 +139,24 @@ class InputAssembly(unittest.TestCase):
                     yield from strings(x)
 
         self.assertFalse([s for s in strings(d.input) if "https://" in s])
+
+    def test_ids_inside_urls_come_from_original(self):
+        body = "https://example.com/advisories/CVE-2026-9999"
+        c = comment(body="https://evil.example.org/GHSA-abcd-1234-wxyz")
+        d = run([issue(body=body)], {1: [c]})
+        self.assertEqual(sorted(d.input["advisory_ids"]), ["CVE-2026-9999", "GHSA-abcd-1234-wxyz"])
+        self.assertNotIn("CVE-2026-9999", d.input["body"])
+
+    def test_size_measured_on_original_text(self):
+        url = "https://example.com/" + "a" * 60
+        for body, comments in (
+            (url, {}),
+            ("x", {1: [comment(body=url)]}),
+        ):
+            with self.subTest(body[:5]):
+                # 置換後は 19 文字前後に縮むが、上限は原文の長さで測る
+                d = run([issue(body=body)], comments, limit=50)
+                self.assertEqual((d.result, d.input), ("input-too-large", None))
 
     def test_size_limit(self):
         c = comment(body="y" * 5)

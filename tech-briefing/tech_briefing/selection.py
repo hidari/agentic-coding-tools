@@ -55,6 +55,7 @@ def _same_login(a: str, b: str) -> bool:
 
 
 def _newest(issues: list[IssueRef]) -> IssueRef:
+    # GitHubApi の契約 (全ページ・PR 除外・created_at は ISO 8601 UTC Z) に依存する。
     # created_at は ISO 8601 (UTC, Z) なので文字列順が時刻順。同時刻は番号の大きい方を新しいとする
     return max(issues, key=lambda i: (i.created_at, i.number))
 

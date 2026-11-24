@@ -1235,9 +1235,11 @@ tech-briefing/tests/test_select.py::test_select.DecisionTable.test_table
 tech-briefing/tests/test_select.py::test_select.DecisionTable.test_unexpected_has_no_input
 tech-briefing/tests/test_select.py::test_select.InputAssembly.test_filters_comments
 tech-briefing/tests/test_select.py::test_select.InputAssembly.test_ids_from_original_and_urls_replaced
+tech-briefing/tests/test_select.py::test_select.InputAssembly.test_ids_inside_urls_come_from_original
 tech-briefing/tests/test_select.py::test_select.InputAssembly.test_none_body_and_no_comments
 tech-briefing/tests/test_select.py::test_select.InputAssembly.test_size_ignores_excluded_comments
 tech-briefing/tests/test_select.py::test_select.InputAssembly.test_size_limit
+tech-briefing/tests/test_select.py::test_select.InputAssembly.test_size_measured_on_original_text
 tech-briefing/tests/test_select.py::test_select.Red.test_is_red
 tech-briefing/tests/test_select.py::test_select.RunSelect.test_bad_author_returns_no_config
 tech-briefing/tests/test_select.py::test_select.RunSelect.test_bad_config_does_not_touch_api
