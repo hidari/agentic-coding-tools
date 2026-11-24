@@ -20,6 +20,8 @@ def valid():
             "triage": {
                 "uses": f"{REUSABLE}@{SHA}",
                 "permissions": {"contents": "read", "issues": "write"},
+                "secrets": {"ANTHROPIC_API_KEY": "${{ secrets.ANTHROPIC_API_KEY }}"},
+                "with": {"config-path": ".github/tech-briefing.yml"},
             }
         },
     }
@@ -98,6 +100,11 @@ BROKEN = {
     "two calling jobs": mutated(add_second_caller),
     "other job write": mutated(other_job_with({"contents": "write"})),
     "other job write-all": mutated(other_job_with("write-all")),
+    "secrets inherit": mutated(lambda wf: wf["jobs"]["triage"].update(secrets="inherit")),
+    "extra secret": mutated(lambda wf: wf["jobs"]["triage"]["secrets"].update(OTHER="x")),
+    "unknown with key": mutated(lambda wf: wf["jobs"]["triage"]["with"].update(evil="x")),
+    "with not a mapping": mutated(lambda wf: wf["jobs"]["triage"].update({"with": "x"})),
+    "unknown job key": mutated(lambda wf: wf["jobs"]["triage"].update(environment="prod")),
     "not a mapping": [],
 }
 

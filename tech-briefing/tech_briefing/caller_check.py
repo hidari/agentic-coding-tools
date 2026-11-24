@@ -7,6 +7,10 @@ import re
 
 ALLOWED_TRIGGERS = frozenset({"workflow_dispatch", "schedule"})
 CALLER_PERMISSIONS = {"contents": "read", "issues": "write"}
+# 呼び出し job に許す鍵。ここに無い鍵 (environment など) は検査の外で挙動を変えうるので拒否する
+CALLER_JOB_KEYS = frozenset({"uses", "permissions", "secrets", "with", "name", "if"})
+CALLER_SECRETS = frozenset({"ANTHROPIC_API_KEY"})
+CALLER_WITH_KEYS = frozenset({"config-path", "dry-run", "runner"})
 # fullmatch で使う。末尾の改行を許す `$` を避けるため
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 
@@ -73,6 +77,18 @@ def check_caller(workflow, reusable):
         if job.get("permissions") != CALLER_PERMISSIONS:
             violations.append(
                 f"job {name}: permissions は contents: read と issues: write だけでなければなりません")
+        # secret は名前で 1 つだけ渡す。`inherit` や他の鍵は、共有 workflow の SHA が
+        # 侵害されたときに読まれる範囲を広げるため許さない
+        unknown = sorted(str(k) for k in job if k not in CALLER_JOB_KEYS)
+        if unknown:
+            violations.append(f"job {name}: 許可されない鍵があります: {', '.join(unknown)}")
+        secrets = job.get("secrets")
+        if "secrets" in job and not (isinstance(secrets, dict) and set(secrets) == CALLER_SECRETS):
+            violations.append(f"job {name}: secrets は ANTHROPIC_API_KEY だけを名指しで渡す mapping でなければなりません")
+        with_ = job.get("with")
+        if "with" in job and not (isinstance(with_, dict) and set(with_) <= CALLER_WITH_KEYS):
+            violations.append(
+                f"job {name}: with は {', '.join(sorted(CALLER_WITH_KEYS))} の鍵だけの mapping でなければなりません")
     for name in sorted(n for n in jobs if n not in callers):
         if _has_write(jobs[name].get("permissions") if isinstance(jobs[name], dict) else None):
             violations.append(f"job {name}: 呼び出し以外の job に write 権限は付けられません")
