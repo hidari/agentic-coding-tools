@@ -124,6 +124,32 @@ class ReadFile(RepoCase):
         self.assertNotIn("token", out)
 
 
+    def test_rejects_git_names_case_insensitively(self):
+        # 大小を区別しない FS (macOS の既定) では .GIT も同じ実体を指すので、名前は casefold して比べる。
+        # 実体を大文字の名前で作るので、大小を区別する FS (Linux) でも名前の規則を通る経路が赤になる
+        planted = {
+            "a/.GIT/config": "extraheader = AUTHORIZATION: token\n",
+            "b/.Git/HEAD": "AUTHORIZATION: token\n",
+            # worktree や submodule の gitdir の指し先を書いた .git という名前のファイル
+            "c/.git": "gitdir: AUTHORIZATION token\n",
+            ".git/config": "extraheader = AUTHORIZATION: token\n",
+        }
+        for rel, text in planted.items():
+            self.write(rel, text)
+        b = self.box(config(files=(FileRule("*", True),)))
+        # .GIT/config は大小を区別する FS では存在しないパスなので、そこでは名前の規則だけを確かめることになる
+        for path in ("a/.GIT/config", "b/.Git/HEAD", "c/.git", ".GIT/config"):
+            with self.subTest(read=path):
+                out = b.call("read_file", {"path": path})
+                self.assertTrue(out.startswith(ERROR_PREFIX), out)
+                self.assertNotIn("token", out)
+        out = b.call("search_files", {"term": "AUTHORIZATION"})
+        for path in ("a/.GIT/config", "b/.Git/HEAD", "c/.git", ".git/config"):
+            with self.subTest(search=path):
+                self.assertNotIn(path, out)
+        self.assertNotIn("token", out)
+
+
 class SearchFiles(RepoCase):
     def test_only_searchable_rules(self):
         out = self.box().call("search_files", {"term": "lodash"})

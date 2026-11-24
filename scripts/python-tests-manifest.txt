@@ -1274,6 +1274,7 @@ tech-briefing/tests/test_tools.py::test_tools.ReadFile.test_reads_allowed_file
 tech-briefing/tests/test_tools.py::test_tools.ReadFile.test_reads_non_searchable_allowed_file
 tech-briefing/tests/test_tools.py::test_tools.ReadFile.test_rejects_dotdot_and_absolute
 tech-briefing/tests/test_tools.py::test_tools.ReadFile.test_rejects_git_dir_even_under_broad_glob
+tech-briefing/tests/test_tools.py::test_tools.ReadFile.test_rejects_git_names_case_insensitively
 tech-briefing/tests/test_tools.py::test_tools.ReadFile.test_rejects_non_regular_and_missing
 tech-briefing/tests/test_tools.py::test_tools.ReadFile.test_rejects_outside_files
 tech-briefing/tests/test_tools.py::test_tools.ReadFile.test_rejects_symlink_file_inside_repo

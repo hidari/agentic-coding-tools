@@ -110,6 +110,11 @@ def _github_repo(raw: object) -> tuple[str, str] | None:
     return None
 
 
+def _is_git(name: str) -> bool:
+    # 大小を区別しない FS (macOS の既定) では .GIT も .git と同じ実体を指すので、casefold して比べる
+    return name.casefold() == ".git"
+
+
 def _version(value: object) -> str | None:
     return value if isinstance(value, str) and _VERSION.fullmatch(value) else None
 
@@ -258,7 +263,7 @@ class ToolBox:
         if any(p in ("", ".", "..") for p in parts):
             raise _ToolError("パスに .. や . や空の segment は使えません")
         # .git/config には checkout の認証情報が残りうる (未確認) ので、glob が広くても読ませない
-        if ".git" in parts:
+        if any(_is_git(p) for p in parts):
             raise _ToolError(".git の中は読めません")
         return PurePosixPath(*parts)
 
@@ -291,8 +296,11 @@ class ToolBox:
         """globs に当たる通常のファイルを、symlink を辿らずにパスの順で返す。"""
         found = []
         for dirpath, dirnames, filenames in os.walk(self._root, followlinks=False):
-            dirnames[:] = sorted(d for d in dirnames if d != ".git")
+            dirnames[:] = sorted(d for d in dirnames if not _is_git(d))
             for name in filenames:
+                # .git という名前のファイルは worktree や submodule の gitdir の指し先なので、検索にも出さない
+                if _is_git(name):
+                    continue
                 full = Path(dirpath, name)
                 rel = full.relative_to(self._root).as_posix()
                 if not any(fnmatch.fnmatchcase(rel, g) for g in globs):
