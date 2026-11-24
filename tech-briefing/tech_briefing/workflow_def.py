@@ -5,6 +5,11 @@
 文書にする。YAML 1.2 は JSON を含むので GitHub はそのまま読め、YAML 1.1 のパーサが `on` を
 真偽値に化かす形も JSON の文字列の鍵なら起きない。JSON は注釈を持てないので、action の版と
 選んだ理由はこのファイルの定数の横に置く。
+
+post は select の artifact と triage の artifact を別のディレクトリ (TB_SELECT_DIR と
+TB_TRIAGE_DIR) に受ける。run_post は対象の Issue を select の側の input.json からだけ取り、
+triage の側のディレクトリの input.json を読まない (LLM の job が post の入力を差し替えられないため。
+Task 9 の run_post との約束)。
 """
 
 import json
@@ -38,6 +43,9 @@ SELECT_ARTIFACT = "tech-briefing-select"
 TRIAGE_ARTIFACT = "tech-briefing-triage"
 OUT_DIR = "${{ runner.temp }}/tech-briefing"
 INPUT_FILE = "input.json"
+# post では2つの artifact を同じ場所に展開しない。同じ名前のファイルがあると後の側が上書きする
+POST_SELECT_DIR = f"{OUT_DIR}/select"
+POST_TRIAGE_DIR = f"{OUT_DIR}/triage"
 TRIAGE_FILES = ("report.json", "failure.json", "tool-log.json")
 # 中身は Issue の本文と報告で、Issue そのものより長く残す理由が無い
 RETENTION_DAYS = 7
@@ -199,6 +207,8 @@ def _triage_job() -> dict:
 def _post_job() -> dict:
     env = _common_env() | {
         "GITHUB_TOKEN": "${{ github.token }}",
+        "TB_SELECT_DIR": POST_SELECT_DIR,
+        "TB_TRIAGE_DIR": POST_TRIAGE_DIR,
         "TB_DRY_RUN": "${{ inputs.dry-run }}",
         "TB_AUTHOR": "${{ vars.TECH_BRIEFING_AUTHOR }}",
         "TB_SELECT_RESULT": "${{ needs.select.outputs.result }}",
@@ -207,9 +217,10 @@ def _post_job() -> dict:
     posted = " || ".join(f"needs.select.outputs.result == '{r}'" for r in POSTED_RESULTS)
     return {
         "needs": ["select", "triage"],
-        # triage が赤でも post は走り、failure.json か internal-error の定型を投稿する
+        # triage が赤でも post は走り、failure.json か internal-error の定型を投稿する。
+        # always() は run の取り消しも無視して書き込みの job を走らせるので、!cancelled() にする
         "if": (
-            f"always() && needs.select.result == 'success' && ({posted}) "
+            f"!cancelled() && needs.select.result == 'success' && ({posted}) "
             "&& needs.triage.result != 'cancelled'"
         ),
         "runs-on": "${{ inputs.runner }}",
@@ -222,7 +233,7 @@ def _post_job() -> dict:
             {
                 "name": "入力を受け取る",
                 "uses": DOWNLOAD_ARTIFACT,
-                "with": {"name": SELECT_ARTIFACT, "path": OUT_DIR},
+                "with": {"name": SELECT_ARTIFACT, "path": POST_SELECT_DIR},
             },
             {
                 # triage を飛ばした結果では artifact が無く、triage が落ちた日も無いことがある。
@@ -231,7 +242,7 @@ def _post_job() -> dict:
                 "if": "needs.triage.result != 'skipped'",
                 "continue-on-error": True,
                 "uses": DOWNLOAD_ARTIFACT,
-                "with": {"name": TRIAGE_ARTIFACT, "path": OUT_DIR},
+                "with": {"name": TRIAGE_ARTIFACT, "path": POST_TRIAGE_DIR},
             },
             _run("post", env),
         ],

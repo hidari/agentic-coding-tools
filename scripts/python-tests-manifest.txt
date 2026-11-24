@@ -1382,8 +1382,12 @@ tech-briefing/tests/test_triage.py::test_triage.Loop.test_toolbox_exception_is_n
 tech-briefing/tests/test_triage.py::test_triage.MatchesSchema.test_report_schema_accepts_report
 tech-briefing/tests/test_triage.py::test_triage.MatchesSchema.test_unsupported_schema_is_an_error_not_a_pass
 tech-briefing/tests/test_triage.py::test_triage.MatchesSchema.test_unsupported_sub_schema_is_an_error_even_when_no_value_reaches_it
+tech-briefing/tests/test_workflow_def.py::test_workflow_def.Artifacts.test_post_extracts_artifacts_into_separate_dirs
+tech-briefing/tests/test_workflow_def.py::test_workflow_def.Artifacts.test_select_uploads_only_input
+tech-briefing/tests/test_workflow_def.py::test_workflow_def.Artifacts.test_triage_uploads_exactly_its_three_files
 tech-briefing/tests/test_workflow_def.py::test_workflow_def.BodyDoesNotImportAdapters.test_no_adapter_or_bin_import
 tech-briefing/tests/test_workflow_def.py::test_workflow_def.Flow.test_concurrency_is_per_caller_and_not_cancelling
+tech-briefing/tests/test_workflow_def.py::test_workflow_def.Flow.test_every_job_has_positive_timeout
 tech-briefing/tests/test_workflow_def.py::test_workflow_def.Flow.test_post_condition
 tech-briefing/tests/test_workflow_def.py::test_workflow_def.Flow.test_select_exposes_result_from_a_step
 tech-briefing/tests/test_workflow_def.py::test_workflow_def.Flow.test_triage_runs_only_on_triage_result
@@ -1412,3 +1416,4 @@ tech-briefing/tests/test_workflow_def.py::test_workflow_def.Secrets.test_triage_
 tech-briefing/tests/test_workflow_def.py::test_workflow_def.Uses.test_checkout_sha_matches_ci
 tech-briefing/tests/test_workflow_def.py::test_workflow_def.Uses.test_every_checkout_drops_credentials
 tech-briefing/tests/test_workflow_def.py::test_workflow_def.Uses.test_every_uses_is_pinned_by_full_sha
+tech-briefing/tests/test_workflow_def.py::test_workflow_def.Uses.test_setup_uv_pins_version_and_disables_cache

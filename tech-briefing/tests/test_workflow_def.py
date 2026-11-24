@@ -24,7 +24,7 @@ from tech_briefing.constants import (  # noqa: E402
     SELECT_TRIAGE,
     SELECT_UNEXPECTED,
 )
-from tech_briefing.workflow_def import render, workflow  # noqa: E402
+from tech_briefing.workflow_def import UV_VERSION, render, workflow  # noqa: E402
 
 REPO_ROOT = os.path.abspath(os.path.join(PKG_ROOT, ".."))
 GENERATED = os.path.join(REPO_ROOT, ".github", "workflows", "tech-briefing-triage.yml")
@@ -34,6 +34,10 @@ EXPR = "${{"
 MECH_REPO = "${{ job.workflow_repository }}"
 MECH_SHA = "${{ job.workflow_sha }}"
 CHECKOUT = "actions/checkout"
+UPLOAD = "actions/upload-artifact"
+DOWNLOAD = "actions/download-artifact"
+SETUP_UV = "astral-sh/setup-uv"
+OUT = "${{ runner.temp }}/tech-briefing"
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 
 
@@ -116,8 +120,9 @@ class Secrets(unittest.TestCase):
 
     def test_triage_does_not_see_github_token(self):
         # triage は読み取りだけの job で、GitHub の API を呼ばない。token を env に渡すと
-        # LLM の道具の実装から使える経路が増える
-        self.assertNotIn("github.token", json.dumps(jobs()["triage"]))
+        # LLM の道具の実装から使える経路が増える。`github['token']` の形でも引けるので、
+        # 式の形ではなく語そのものを大小を区別せずに探す
+        self.assertNotIn("token", json.dumps(jobs()["triage"]).lower())
 
     def test_no_secrets_inherit(self):
         self.assertNotIn("inherit", json.dumps(workflow()))
@@ -170,11 +175,45 @@ class Uses(unittest.TestCase):
                 if uses_name(s) == CHECKOUT:
                     self.assertEqual(s["uses"].partition("@")[2], next(iter(ci_refs)))
 
+    def test_setup_uv_pins_version_and_disables_cache(self):
+        # cache は鍵を持つ job でもほかの run の中身を復元するので切る
+        for name in ("select", "triage", "post"):
+            uv = [s for s in steps(name) if uses_name(s) == SETUP_UV]
+            self.assertEqual(len(uv), 1, name)
+            self.assertEqual(uv[0]["with"], {"version": UV_VERSION, "enable-cache": False}, name)
+
     def test_every_checkout_drops_credentials(self):
         checkouts = [s for job in jobs().values() for s in job["steps"] if uses_name(s) == CHECKOUT]
         self.assertGreater(len(checkouts), 0)
         for s in checkouts:
             self.assertIs(s["with"]["persist-credentials"], False)
+
+
+class Artifacts(unittest.TestCase):
+    def upload_path(self, job):
+        ups = [s for s in steps(job) if uses_name(s) == UPLOAD]
+        self.assertEqual(len(ups), 1, job)
+        return ups[0]["with"]["path"]
+
+    def test_select_uploads_only_input(self):
+        self.assertEqual(self.upload_path("select"), f"{OUT}/input.json")
+
+    def test_triage_uploads_exactly_its_three_files(self):
+        # LLM の job が post の入力 (input.json) を上書きできないよう、渡すファイルを閉じる
+        self.assertEqual(
+            self.upload_path("triage"),
+            "\n".join(f"{OUT}/{f}" for f in ("report.json", "failure.json", "tool-log.json")),
+        )
+
+    def test_post_extracts_artifacts_into_separate_dirs(self):
+        downloads = {s["with"]["name"]: s["with"]["path"] for s in steps("post") if uses_name(s) == DOWNLOAD}
+        self.assertEqual(
+            downloads,
+            {"tech-briefing-select": f"{OUT}/select", "tech-briefing-triage": f"{OUT}/triage"},
+        )
+        env = next(s for s in steps("post") if "run" in s and "uv run" in s["run"])["env"]
+        self.assertEqual(env["TB_SELECT_DIR"], f"{OUT}/select")
+        self.assertEqual(env["TB_TRIAGE_DIR"], f"{OUT}/triage")
 
 
 class MechanismCheckout(unittest.TestCase):
@@ -220,17 +259,31 @@ class Flow(unittest.TestCase):
     def test_post_condition(self):
         post = jobs()["post"]
         self.assertEqual(post["needs"], ["select", "triage"])
-        cond = post["if"]
-        self.assertTrue(cond.startswith("always()"))
-        for result in (SELECT_TRIAGE, SELECT_UNEXPECTED, SELECT_INPUT_TOO_LARGE):
-            self.assertIn(f"needs.select.outputs.result == '{result}'", cond)
-        self.assertIn("needs.select.result == 'success'", cond)
-        self.assertIn("needs.triage.result != 'cancelled'", cond)
+        # 部分文字列の有無では && と || の取り違えや括弧の欠けが見えないので、全体を比べる。
+        # always() は run の取り消しも無視して書き込みの job を走らせるので、!cancelled() で
+        # 前の job の失敗だけを越える
+        posted = " || ".join(
+            f"needs.select.outputs.result == '{r}'"
+            for r in (SELECT_TRIAGE, SELECT_UNEXPECTED, SELECT_INPUT_TOO_LARGE)
+        )
+        self.assertEqual(
+            post["if"],
+            f"!cancelled() && needs.select.result == 'success' && ({posted}) "
+            "&& needs.triage.result != 'cancelled'",
+        )
 
     def test_concurrency_is_per_caller_and_not_cancelling(self):
-        c = workflow()["concurrency"]
-        self.assertIn("github.repository", c["group"])
-        self.assertIs(c["cancel-in-progress"], False)
+        # run ごとに変わる値が混ざると run が並ぶので、group 全体を比べる
+        self.assertEqual(
+            workflow()["concurrency"],
+            {"group": "${{ github.repository }}-tech-briefing-triage", "cancel-in-progress": False},
+        )
+
+    def test_every_job_has_positive_timeout(self):
+        for name, job in jobs().items():
+            t = job.get("timeout-minutes")
+            self.assertIs(type(t), int, name)
+            self.assertGreater(t, 0, name)
 
     def test_workflow_call_is_the_only_trigger(self):
         on = workflow()["on"]

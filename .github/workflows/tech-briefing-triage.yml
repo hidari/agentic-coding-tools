@@ -192,7 +192,7 @@
         "select",
         "triage"
       ],
-      "if": "always() && needs.select.result == 'success' && (needs.select.outputs.result == 'triage' || needs.select.outputs.result == 'unexpected' || needs.select.outputs.result == 'input-too-large') && needs.triage.result != 'cancelled'",
+      "if": "!cancelled() && needs.select.result == 'success' && (needs.select.outputs.result == 'triage' || needs.select.outputs.result == 'unexpected' || needs.select.outputs.result == 'input-too-large') && needs.triage.result != 'cancelled'",
       "runs-on": "${{ inputs.runner }}",
       "timeout-minutes": 10,
       "permissions": {
@@ -231,7 +231,7 @@
           "uses": "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
           "with": {
             "name": "tech-briefing-select",
-            "path": "${{ runner.temp }}/tech-briefing"
+            "path": "${{ runner.temp }}/tech-briefing/select"
           }
         },
         {
@@ -241,7 +241,7 @@
           "uses": "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
           "with": {
             "name": "tech-briefing-triage",
-            "path": "${{ runner.temp }}/tech-briefing"
+            "path": "${{ runner.temp }}/tech-briefing/triage"
           }
         },
         {
@@ -252,6 +252,8 @@
             "TB_REPOSITORY": "${{ github.repository }}",
             "TB_OUT_DIR": "${{ runner.temp }}/tech-briefing",
             "GITHUB_TOKEN": "${{ github.token }}",
+            "TB_SELECT_DIR": "${{ runner.temp }}/tech-briefing/select",
+            "TB_TRIAGE_DIR": "${{ runner.temp }}/tech-briefing/triage",
             "TB_DRY_RUN": "${{ inputs.dry-run }}",
             "TB_AUTHOR": "${{ vars.TECH_BRIEFING_AUTHOR }}",
             "TB_SELECT_RESULT": "${{ needs.select.outputs.result }}",
