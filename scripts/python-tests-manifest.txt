@@ -1207,6 +1207,13 @@ scripts/test_run_python_tests.py::test_run_python_tests.VersionBranchBan.test_sy
 scripts/test_run_python_tests.py::test_run_python_tests.VersionBranchBan.test_synthetic_by_name_version_check_is_detected
 scripts/test_run_python_tests.py::test_run_python_tests.VersionBranchBan.test_synthetic_version_check_is_detected
 scripts/test_run_python_tests.py::test_run_python_tests.VersionBranchBan.test_unaliased_import_alone_is_detected
+tech-briefing/tests/test_caller_check.py::test_caller_check.CheckCaller.test_deterministic_order
+tech-briefing/tests/test_caller_check.py::test_caller_check.CheckCaller.test_each_break_gives_exactly_one_violation
+tech-briefing/tests/test_caller_check.py::test_caller_check.CheckCaller.test_other_job_without_write_passes
+tech-briefing/tests/test_caller_check.py::test_caller_check.CheckCaller.test_trigger_shapes_pass
+tech-briefing/tests/test_caller_check.py::test_caller_check.CheckCaller.test_true_key_for_on_passes
+tech-briefing/tests/test_caller_check.py::test_caller_check.CheckCaller.test_true_key_is_still_checked
+tech-briefing/tests/test_caller_check.py::test_caller_check.CheckCaller.test_valid_passes
 tech-briefing/tests/test_config.py::test_config.Domains.test_case_is_lowered
 tech-briefing/tests/test_config.py::test_config.Domains.test_domain_table
 tech-briefing/tests/test_config.py::test_config.Domains.test_empty_or_non_list_sources
