@@ -26,3 +26,28 @@ class FakeGitHub:
     def post_comment(self, number: int, body: str) -> None:
         self.calls.append(("post_comment", number))
         self.posted.append((number, body))
+
+
+class UnexpectedUrl(KeyError):
+    """FakeFetcher に登録していない URL へ要求した。想定外の行き先を黙って通さないための失敗。
+
+    FetchError とは別の型にし、道具が誤りの文字列へ変えずに上まで落ちるようにする。
+    """
+
+
+class FakeFetcher:
+    """URL ごとに用意した JSON を返す。値が例外のインスタンスなら、それを投げる (FetchError の再現用)。"""
+
+    def __init__(self, responses=None):
+        self._responses: dict[str, object] = dict(responses or {})
+        self.requested: list[str] = []
+
+    def get_json(self, url: str) -> object:
+        # 失敗する要求も行き先の証拠なので、投げる前に記録する
+        self.requested.append(url)
+        if url not in self._responses:
+            raise UnexpectedUrl(url)
+        value = self._responses[url]
+        if isinstance(value, BaseException):
+            raise value
+        return value

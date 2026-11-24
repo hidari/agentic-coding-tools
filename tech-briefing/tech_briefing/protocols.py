@@ -36,3 +36,25 @@ class GitHubApi(Protocol):
     def comments(self, number: int) -> list[CommentRef]: ...
 
     def post_comment(self, number: int, body: str) -> None: ...
+
+
+class FetchError(Exception):
+    """Fetcher の宣言された失敗。HTTP の失敗・JSON でない応答・通信の失敗をこの型に揃える。
+
+    status は HTTP の状態コード (応答が無い失敗では None)。道具はこの型だけを捕まえて
+    LLM 向けの誤りの文字列に変える。これ以外の例外は想定外として呼び出し側まで上げる。
+    """
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
+
+class Fetcher(Protocol):
+    """外部の JSON の API を読む口。行き先の URL は常に tools が組み立て、LLM は URL を渡せない。
+
+    - get_json(url) は応答の JSON を復号した値を返す
+    - 失敗は FetchError で知らせる (実装の Task のアダプタがこの契約を守る)
+    """
+
+    def get_json(self, url: str) -> object: ...
