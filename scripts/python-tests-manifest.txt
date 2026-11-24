@@ -1309,7 +1309,9 @@ tech-briefing/tests/test_triage.py::test_triage.BuildParams.test_model_and_optio
 tech-briefing/tests/test_triage.py::test_triage.BuildParams.test_system_has_no_input
 tech-briefing/tests/test_triage.py::test_triage.BuildParams.test_system_holds_prompt_and_criteria_with_breakpoint_on_last
 tech-briefing/tests/test_triage.py::test_triage.BuildParams.test_system_prompt_names_every_client_tool
+tech-briefing/tests/test_triage.py::test_triage.BuildParams.test_system_prompt_names_the_markers_and_the_rule
 tech-briefing/tests/test_triage.py::test_triage.BuildParams.test_user_message_wraps_input_in_untrusted_markers
+tech-briefing/tests/test_triage.py::test_triage.BuildParams.test_user_preamble_sits_before_the_marker_and_carries_the_rule
 tech-briefing/tests/test_triage.py::test_triage.Loop.test_client_exception_is_api_error
 tech-briefing/tests/test_triage.py::test_triage.Loop.test_end_turn_without_submit_is_no_report
 tech-briefing/tests/test_triage.py::test_triage.Loop.test_invalid_submit_is_invalid_report

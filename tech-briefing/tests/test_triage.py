@@ -12,6 +12,7 @@ from tech_briefing.config import Config, FileRule  # noqa: E402
 from tech_briefing.constants import BETA, EFFORT, FALLBACKS, MODEL  # noqa: E402
 from tech_briefing.tools import ERROR_PREFIX, REPORT_SCHEMA, ToolBox  # noqa: E402
 from tech_briefing.triage import (  # noqa: E402
+    DO_NOT_FOLLOW,
     SYSTEM_PROMPT,
     UNTRUSTED_BEGIN,
     UNTRUSTED_END,
@@ -88,6 +89,16 @@ class BuildParams(unittest.TestCase):
         for d in full.definitions():
             with self.subTest(tool=d["name"]):
                 self.assertIn(d["name"], SYSTEM_PROMPT)
+
+    def test_system_prompt_names_the_markers_and_the_rule(self):
+        for value in (UNTRUSTED_BEGIN, UNTRUSTED_END, DO_NOT_FOLLOW):
+            with self.subTest(value=value):
+                self.assertIn(value, SYSTEM_PROMPT)
+
+    def test_user_preamble_sits_before_the_marker_and_carries_the_rule(self):
+        (block,) = self.params["messages"][0]["content"]
+        preamble = block["text"][: block["text"].index(UNTRUSTED_BEGIN)]
+        self.assertIn(DO_NOT_FOLLOW, preamble)
 
     def test_user_message_wraps_input_in_untrusted_markers(self):
         messages = self.params["messages"]
