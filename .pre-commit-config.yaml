@@ -126,6 +126,14 @@ repos:
         pass_filenames: false
         always_run: true
 
+      # 生成物を手で直しても生成元を直し忘れても、ここで止まる
+      - id: tech-briefing-workflow-drift
+        name: 共通の reusable workflow が生成元と一致しているか検査する
+        language: system
+        entry: python3 tech-briefing/bin/gen_workflow.py --check
+        pass_filenames: false
+        always_run: true
+
       # 記法違反はどのファイルにも書けるので、走査対象を hook の側で絞らない
       # (対象集合の canonical は issue-id.py の --check)。ファイル名で絞る指定を
       # 置かないのはその宣言で、実際に走ることを保証しているのは always_run: true の方。
