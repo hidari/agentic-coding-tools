@@ -32,6 +32,9 @@ SETUP_UV = "astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2"  # v10.
 # その日の最新が入るので明示する。0.13.4 は開発機の Homebrew の版 (2026-10-20 のビルド)
 UV_VERSION = "0.13.4"
 
+# 生成物の置き場 (リポジトリの root から)。呼び出し側は `<この repository>/<この path>@<SHA>` で呼ぶ
+WORKFLOW_FILE = ".github/workflows/tech-briefing-triage.yml"
+
 # 共通の仕組みと呼び出し側のリポジトリを別の場所へ checkout する。入口のスクリプトは
 # 共通の仕組みの側を cwd にして起動するので、呼び出し側の uv.toml や pyproject.toml を
 # uv が拾わない

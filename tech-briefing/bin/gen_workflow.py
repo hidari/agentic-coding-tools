@@ -12,11 +12,12 @@ import sys
 
 TB_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ROOT = os.path.dirname(TB_ROOT)
-TARGET = os.path.join(REPO_ROOT, ".github", "workflows", "tech-briefing-triage.yml")
 
 sys.path.insert(0, TB_ROOT)
 
-from tech_briefing.workflow_def import render, workflow  # noqa: E402
+from tech_briefing.workflow_def import WORKFLOW_FILE, render, workflow  # noqa: E402
+
+TARGET = os.path.join(REPO_ROOT, *WORKFLOW_FILE.split("/"))
 
 
 def main(argv: list[str]) -> int:

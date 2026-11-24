@@ -28,6 +28,8 @@ _TRUNCATED = "[結果を切り詰めました: {dropped}文字を省略]"
 WEB_FETCH_MAX_USES = 5
 WEB_SEARCH_MAX_USES = 5
 WEB_FETCH_MAX_CONTENT_TOKENS = 20000
+# 決まった処理の道具の結果1件の文字数の上限 (仮の値。lock ファイルの検索結果が入る大きさ)
+RESULT_LIMIT = 20_000
 
 # 形の規則はすべて fullmatch で使う (`$` は末尾の改行の手前にも一致するため)
 _NAME_SHAPES = {

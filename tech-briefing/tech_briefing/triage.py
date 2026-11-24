@@ -118,6 +118,11 @@ class Limits:
     max_input_tokens: int
 
 
+# 仮の値。往復の回数は道具を数回ずつ使って提出するまでの見込みで、入力トークンは往復ごとに会話の全体を
+# 送り直す (キャッシュから読んだ分も数える) ことを見込んだ費用の天井。実際の run の usage を見て決め直す
+LIMITS = Limits(max_rounds=25, max_input_tokens=2_000_000)
+
+
 @dataclass
 class Outcome:
     report: dict | None

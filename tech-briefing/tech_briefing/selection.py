@@ -28,6 +28,11 @@ from tech_briefing.protocols import CommentRef, GitHubApi, IssueRef
 from tech_briefing.textproc import extract_advisory_ids, replace_urls
 
 
+# 本文とコメントの文字数の合計の上限 (仮の値)。Issue の本文の上限 65536 文字に数件のコメントが乗る大きさで、
+# 実際のブリーフィングの大きさを測ってから決め直す (ISSUE-113 のタスク)
+MAX_INPUT_CHARS = 100_000
+
+
 @dataclass(frozen=True)
 class Decision:
     result: str
