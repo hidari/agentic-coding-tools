@@ -10,6 +10,7 @@ REJECT = [
     "github.com", "com", "gist.github.com", "user.github.io", "github.io",
     "https://docs.python.org", "*.example.com", "docs.example.com/blog",
     "аmazon.com", "", "example..com", "1.2.3.4", "xn--80ak6aa92e.com",
+    "github.com\n", "user.github.io\n", "docs.python.org\n", "github.com\t", " github.com",
 ]
 ACCEPT = ["docs.github.com", "docs.python.org", "nvd.nist.gov", "osv.dev"]
 

@@ -10,7 +10,7 @@ REGISTRIES = ("npm", "crates", "pypi")
 _REQUIRED = ("criteria", "official_sources", "files")
 _OPTIONAL = ("issues_glob", "registries")
 # ラベルは英数字とハイフンのみ。国際化ドメインは punycode (xn--) で書かせる
-_LABEL = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
+_LABEL = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?")
 
 
 class ConfigError(Exception):
@@ -38,11 +38,15 @@ def _domain(value: object) -> str:
     if not value.isascii():
         # 見た目が同じ別文字のドメイン (ホモグリフ) を許可名簿へ入れないため
         raise ConfigError(f"official_sources に ASCII 以外の文字は使えません: {value!r}")
+    # 改行・空白付きの項目は拒否リストの完全一致をすり抜けるので、正規化せず拒否する
+    # (Python の `$` は末尾の改行の手前にも一致するため、照合は fullmatch で行う)
+    if value != value.strip():
+        raise ConfigError(f"official_sources の項目の前後に空白・改行は置けません: {value!r}")
     host = value.lower()
     # Claude docs (2026-11-24 確認): allowed_domains はスキームを含めない。
     # web_fetch はドメインだけで照合するのでパス付きの項目は取得 URL に一致せず、ワイルドカードはパスにしか使えない。
     labels = host.split(".")
-    if len(labels) < 2 or not all(_LABEL.match(label) for label in labels):
+    if len(labels) < 2 or not all(_LABEL.fullmatch(label) for label in labels):
         raise ConfigError(
             f"official_sources はスキーム・パス・ワイルドカード・ポート・空ラベルを含まない"
             f"2ラベル以上のホスト名にしてください: {value!r}"
