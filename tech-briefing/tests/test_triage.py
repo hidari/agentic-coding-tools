@@ -33,15 +33,24 @@ INPUT = {
 }
 
 
-def toolbox():
+def toolbox(test: unittest.TestCase) -> ToolBox:
+    # ToolBox は root を読むたびに開くので、一時ディレクトリはテストの終わりまで残し、終わったら片付ける
+    # (片付けを GC の finalizer に任せると ResourceWarning がテストの出力に出る)
     tmp = tempfile.TemporaryDirectory()
+    test.addCleanup(tmp.cleanup)
     root = Path(tmp.name)
     (root / "package.json").write_text('{"dependencies": {"lodash": "4.17.21"}}\n')
     cfg = Config("基準", ("docs.example.org",), (FileRule("package.json", True),), None, ("npm",))
-    box = ToolBox(root, cfg, FakeFetcher(), 100_000)
-    # ToolBox は root を読むたびに開くので、テストの間は一時ディレクトリを残す
-    box._tmp = tmp
-    return box
+    return ToolBox(root, cfg, FakeFetcher(), 100_000)
+
+
+class ToolboxFixture(unittest.TestCase):
+    def test_toolbox_removes_its_directory_at_cleanup(self):
+        case = unittest.TestCase()
+        root = toolbox(case)._root
+        self.assertTrue((root / "package.json").exists())
+        case.doCleanups()
+        self.assertFalse(root.exists())
 
 
 def untrusted_json(text: str) -> object:
@@ -52,7 +61,7 @@ def untrusted_json(text: str) -> object:
 
 class BuildParams(unittest.TestCase):
     def setUp(self):
-        self.box = toolbox()
+        self.box = toolbox(self)
         self.params = build_params(SYSTEM_PROMPT, CRITERIA, INPUT, self.box)
 
     def test_model_and_options(self):
@@ -85,7 +94,7 @@ class BuildParams(unittest.TestCase):
 
     def test_system_prompt_names_every_client_tool(self):
         cfg = Config("基準", ("docs.example.org",), (FileRule("package.json", True),), "docs/issues/*/issue.md", ("npm",))
-        full = ToolBox(self.box._tmp.name, cfg, FakeFetcher(), 100_000)
+        full = ToolBox(self.box._root, cfg, FakeFetcher(), 100_000)
         for d in full.definitions():
             with self.subTest(tool=d["name"]):
                 self.assertIn(d["name"], SYSTEM_PROMPT)
@@ -162,7 +171,7 @@ def submit(report=REPORT, id_="t_submit"):
 
 class Loop(unittest.TestCase):
     def setUp(self):
-        self.box = toolbox()
+        self.box = toolbox(self)
         self.params = build_params(SYSTEM_PROMPT, CRITERIA, INPUT, self.box)
 
     def run_loop(self, *responses, max_rounds=10, max_input_tokens=1_000_000, box=None):

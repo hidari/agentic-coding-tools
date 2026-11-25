@@ -1216,6 +1216,7 @@ tech-briefing/tests/test_boundaries.py::test_boundaries.Imports.test_tests_do_no
 tech-briefing/tests/test_boundaries.py::test_boundaries.Names.test_no_stem_shadows_stdlib_or_runtime_deps
 tech-briefing/tests/test_boundaries.py::test_boundaries.Pep723.test_each_script_pins_exact_versions
 tech-briefing/tests/test_boundaries.py::test_boundaries.Pep723.test_parser_rejects_unpinned
+tech-briefing/tests/test_boundaries.py::test_boundaries.Pep723.test_pinned_versions_are_the_checked_ones
 tech-briefing/tests/test_boundaries.py::test_boundaries.Pep723.test_workflow_runs_exactly_the_bin_run_scripts
 tech-briefing/tests/test_caller_check.py::test_caller_check.CheckCaller.test_deterministic_order
 tech-briefing/tests/test_caller_check.py::test_caller_check.CheckCaller.test_each_break_gives_exactly_one_violation
@@ -1224,6 +1225,9 @@ tech-briefing/tests/test_caller_check.py::test_caller_check.CheckCaller.test_tri
 tech-briefing/tests/test_caller_check.py::test_caller_check.CheckCaller.test_true_key_for_on_passes
 tech-briefing/tests/test_caller_check.py::test_caller_check.CheckCaller.test_true_key_is_still_checked
 tech-briefing/tests/test_caller_check.py::test_caller_check.CheckCaller.test_valid_passes
+tech-briefing/tests/test_caller_check.py::test_caller_check.WorkflowSha.test_caller_pinned_to_other_sha_is_rejected
+tech-briefing/tests/test_caller_check.py::test_caller_check.WorkflowSha.test_mismatch_names_the_job
+tech-briefing/tests/test_caller_check.py::test_caller_check.WorkflowSha.test_ref_must_equal_the_running_sha
 tech-briefing/tests/test_config.py::test_config.Domains.test_case_is_lowered
 tech-briefing/tests/test_config.py::test_config.Domains.test_domain_table
 tech-briefing/tests/test_config.py::test_config.Domains.test_empty_or_non_list_sources
@@ -1237,8 +1241,14 @@ tech-briefing/tests/test_config.py::test_config.Shape.test_missing_required
 tech-briefing/tests/test_config.py::test_config.Shape.test_not_a_mapping
 tech-briefing/tests/test_config.py::test_config.Shape.test_registries
 tech-briefing/tests/test_config.py::test_config.Shape.test_unknown_key
+tech-briefing/tests/test_entrypoints.py::test_entrypoints.ArtifactNames.test_post_reads_only_uploaded_names
+tech-briefing/tests/test_entrypoints.py::test_entrypoints.ArtifactNames.test_triage_writes_only_uploaded_names
+tech-briefing/tests/test_entrypoints.py::test_entrypoints.EnvKeys.test_environ_collector_sees_real_deps_reads
+tech-briefing/tests/test_entrypoints.py::test_entrypoints.EnvKeys.test_every_declared_key_is_read
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.Import.test_loading_scripts_does_not_import_runtime_deps
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.JobIo.test_caller_workflow_path
+tech-briefing/tests/test_entrypoints.py::test_entrypoints.JobIo.test_load_yaml_under_takes_the_yaml_loader_protocol
+tech-briefing/tests/test_entrypoints.py::test_entrypoints.JobIo.test_load_yaml_under_turns_loader_value_error_into_none
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.JobIo.test_read_under_rejects_symlink_out
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.JobIo.test_write_json_keeps_lone_surrogate_as_escape
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.JobIo.test_write_output_rejects_newline
@@ -1344,6 +1354,7 @@ tech-briefing/tests/test_select.py::test_select.RunSelect.test_bad_author_return
 tech-briefing/tests/test_select.py::test_select.RunSelect.test_bad_config_does_not_touch_api
 tech-briefing/tests/test_select.py::test_select.RunSelect.test_caller_violation_does_not_touch_api
 tech-briefing/tests/test_select.py::test_select.RunSelect.test_ok
+tech-briefing/tests/test_select.py::test_select.RunSelect.test_workflow_sha_mismatch_does_not_touch_api
 tech-briefing/tests/test_select.py::test_select.Today.test_boundary
 tech-briefing/tests/test_select.py::test_select.Today.test_decide_uses_jst_date
 tech-briefing/tests/test_textproc.py::test_textproc.AdvisoryIds.test_ghsa_is_lowercase_body_as_written
@@ -1434,6 +1445,7 @@ tech-briefing/tests/test_triage.py::test_triage.Loop.test_toolbox_exception_is_n
 tech-briefing/tests/test_triage.py::test_triage.MatchesSchema.test_report_schema_accepts_report
 tech-briefing/tests/test_triage.py::test_triage.MatchesSchema.test_unsupported_schema_is_an_error_not_a_pass
 tech-briefing/tests/test_triage.py::test_triage.MatchesSchema.test_unsupported_sub_schema_is_an_error_even_when_no_value_reaches_it
+tech-briefing/tests/test_triage.py::test_triage.ToolboxFixture.test_toolbox_removes_its_directory_at_cleanup
 tech-briefing/tests/test_workflow_def.py::test_workflow_def.Artifacts.test_post_extracts_artifacts_into_separate_dirs
 tech-briefing/tests/test_workflow_def.py::test_workflow_def.Artifacts.test_select_uploads_only_input
 tech-briefing/tests/test_workflow_def.py::test_workflow_def.Artifacts.test_triage_uploads_exactly_its_three_files

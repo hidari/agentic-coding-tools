@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from fakes import FakeGitHub  # noqa: E402
-from test_caller_check import REUSABLE, valid as valid_caller  # noqa: E402
+from test_caller_check import REUSABLE, SHA, valid as valid_caller  # noqa: E402
 from tech_briefing.constants import BOT_LOGIN, MARKER, SELECT_RESULTS  # noqa: E402
 from tech_briefing.protocols import CommentRef, IssueRef  # noqa: E402
 from tech_briefing.selection import decide, is_red, run_select, today_jst  # noqa: E402
@@ -182,7 +182,7 @@ class RunSelect(unittest.TestCase):
 
     def go(self, raw, caller, api=None):
         api = api or FakeGitHub([issue()])
-        return api, run_select(raw, caller, REUSABLE, api, AUTHOR, NOW, LIMIT)
+        return api, run_select(raw, caller, REUSABLE, SHA, api, AUTHOR, NOW, LIMIT)
 
     def test_ok(self):
         api, (d, cfg) = self.go(self.RAW, valid_caller())
@@ -201,9 +201,15 @@ class RunSelect(unittest.TestCase):
         self.assertEqual((d.result, cfg), ("config-error", None))
         self.assertEqual(api.calls, [])
 
+    def test_workflow_sha_mismatch_does_not_touch_api(self):
+        api = FakeGitHub([issue()])
+        d, cfg = run_select(self.RAW, valid_caller(), REUSABLE, "f" * 40, api, AUTHOR, NOW, LIMIT)
+        self.assertEqual((d.result, cfg), ("config-error", None))
+        self.assertEqual(api.calls, [])
+
     def test_bad_author_returns_no_config(self):
         api = FakeGitHub([issue()])
-        d, cfg = run_select(self.RAW, valid_caller(), REUSABLE, api, "", NOW, LIMIT)
+        d, cfg = run_select(self.RAW, valid_caller(), REUSABLE, SHA, api, "", NOW, LIMIT)
         self.assertEqual((d.result, cfg), ("config-error", None))
 
 

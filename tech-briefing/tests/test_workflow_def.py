@@ -24,7 +24,15 @@ from tech_briefing.constants import (  # noqa: E402
     SELECT_TRIAGE,
     SELECT_UNEXPECTED,
 )
-from tech_briefing.workflow_def import UV_VERSION, render, workflow  # noqa: E402
+from tech_briefing.workflow_def import (  # noqa: E402
+    FAILURE_FILE,
+    REPORT_FILE,
+    TOOL_LOG_FILE,
+    TRIAGE_FILES,
+    UV_VERSION,
+    render,
+    workflow,
+)
 
 REPO_ROOT = os.path.abspath(os.path.join(PKG_ROOT, ".."))
 GENERATED = os.path.join(REPO_ROOT, ".github", "workflows", "tech-briefing-triage.yml")
@@ -200,10 +208,10 @@ class Artifacts(unittest.TestCase):
 
     def test_triage_uploads_exactly_its_three_files(self):
         # LLM の job が post の入力 (input.json) を上書きできないよう、渡すファイルを閉じる
-        self.assertEqual(
-            self.upload_path("triage"),
-            "\n".join(f"{OUT}/{f}" for f in ("report.json", "failure.json", "tool-log.json")),
-        )
+        # 名前は入口のスクリプトも同じ定数から取る (書く名前・upload する名前・読む名前の一致は test_entrypoints が見る)
+        self.assertEqual(TRIAGE_FILES, (REPORT_FILE, FAILURE_FILE, TOOL_LOG_FILE))
+        self.assertEqual(TRIAGE_FILES, ("report.json", "failure.json", "tool-log.json"))
+        self.assertEqual(self.upload_path("triage"), "\n".join(f"{OUT}/{f}" for f in TRIAGE_FILES))
 
     def test_post_extracts_artifacts_into_separate_dirs(self):
         downloads = {s["with"]["name"]: s["with"]["path"] for s in steps("post") if uses_name(s) == DOWNLOAD}

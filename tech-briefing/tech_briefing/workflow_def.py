@@ -49,7 +49,11 @@ INPUT_FILE = "input.json"
 # post では2つの artifact を同じ場所に展開しない。同じ名前のファイルがあると後の側が上書きする
 POST_SELECT_DIR = f"{OUT_DIR}/select"
 POST_TRIAGE_DIR = f"{OUT_DIR}/triage"
-TRIAGE_FILES = ("report.json", "failure.json", "tool-log.json")
+# triage が書き、upload し、post が読む名前。入口のスクリプトもここから取る (綴りが割れると artifact が黙って空になる)
+REPORT_FILE = "report.json"
+FAILURE_FILE = "failure.json"
+TOOL_LOG_FILE = "tool-log.json"
+TRIAGE_FILES = (REPORT_FILE, FAILURE_FILE, TOOL_LOG_FILE)
 # 中身は Issue の本文と報告で、Issue そのものより長く残す理由が無い
 RETENTION_DAYS = 7
 
@@ -121,20 +125,20 @@ def _run(name: str, env: dict) -> dict:
     }
 
 
-def _common_env() -> dict:
-    return {
-        "TB_REPOSITORY": "${{ github.repository }}",
-        "TB_OUT_DIR": OUT_DIR,
-    }
+# env には入口か SDK が読む鍵だけを置く (読まない鍵は配線の意図を誤読させる。test_entrypoints が一致を見る)
+REPOSITORY_EXPR = "${{ github.repository }}"
 
 
 def _select_job() -> dict:
-    env = _common_env() | {
+    env = {
+        "TB_REPOSITORY": REPOSITORY_EXPR,
+        "TB_OUT_DIR": OUT_DIR,
         "GITHUB_TOKEN": "${{ github.token }}",
         "TB_CONFIG_PATH": "${{ inputs.config-path }}",
         "TB_AUTHOR": "${{ vars.TECH_BRIEFING_AUTHOR }}",
         "TB_CALLER_DIR": "${{ github.workspace }}/" + CALLER_DIR,
-        # 呼び出し側の検査が、呼び出しの workflow のファイルと固定した SHA を突き合わせるため
+        # 呼び出し側の検査が、呼び出しの workflow のファイル (workflow_ref) を読み、その uses の ref を
+        # いま走っている SHA (TB_WORKFLOW_SHA) と突き合わせるため (caller_check.check_caller)
         "TB_CALLER_WORKFLOW_REF": "${{ github.workflow_ref }}",
         "TB_WORKFLOW_REPOSITORY": MECH_REPO_EXPR,
         "TB_WORKFLOW_SHA": MECH_SHA_EXPR,
@@ -167,7 +171,8 @@ def _select_job() -> dict:
 
 
 def _triage_job() -> dict:
-    env = _common_env() | {
+    env = {
+        "TB_OUT_DIR": OUT_DIR,
         "ANTHROPIC_API_KEY": "${{ secrets.ANTHROPIC_API_KEY }}",
         "TB_CONFIG_PATH": "${{ inputs.config-path }}",
         "TB_CALLER_DIR": "${{ github.workspace }}/" + CALLER_DIR,
@@ -208,14 +213,15 @@ def _triage_job() -> dict:
 
 
 def _post_job() -> dict:
-    env = _common_env() | {
+    # 作成者 (TB_AUTHOR) と triage の job の結果は渡さない。再確認は書き込みの名義の印だけを見て、
+    # triage の成否は artifact (report.json / failure.json / どちらも無い) から plan_post が決める
+    env = {
+        "TB_REPOSITORY": REPOSITORY_EXPR,
         "GITHUB_TOKEN": "${{ github.token }}",
         "TB_SELECT_DIR": POST_SELECT_DIR,
         "TB_TRIAGE_DIR": POST_TRIAGE_DIR,
         "TB_DRY_RUN": "${{ inputs.dry-run }}",
-        "TB_AUTHOR": "${{ vars.TECH_BRIEFING_AUTHOR }}",
         "TB_SELECT_RESULT": "${{ needs.select.outputs.result }}",
-        "TB_TRIAGE_RESULT": "${{ needs.triage.result }}",
     }
     posted = " || ".join(f"needs.select.outputs.result == '{r}'" for r in POSTED_RESULTS)
     return {

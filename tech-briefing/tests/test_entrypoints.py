@@ -6,6 +6,7 @@ dict のその step の env の鍵と runner が渡す2つの鍵だけを持た�
 artifact は workflow と同じ置き方 (select の出力 → triage の TB_OUT_DIR、post の2つのディレクトリ) で受け渡す。
 """
 
+import ast
 import builtins
 import contextlib
 import importlib.util
@@ -15,6 +16,7 @@ import os
 import shutil
 import sys
 import tempfile
+import typing
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,10 +28,18 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from fakes import FakeFetcher, FakeGitHub, FakeMessages  # noqa: E402
 from tech_briefing import jobio  # noqa: E402
 from tech_briefing.constants import BOT_LOGIN, MARKER  # noqa: E402
-from tech_briefing.protocols import CommentRef, IssueRef  # noqa: E402
+from tech_briefing.protocols import CommentRef, IssueRef, YamlLoader  # noqa: E402
 from tech_briefing.render import render_failure, render_report, render_too_large, render_unexpected  # noqa: E402
 from tech_briefing.selection import MAX_INPUT_CHARS  # noqa: E402
-from tech_briefing.workflow_def import INPUT_FILE, WORKFLOW_FILE, workflow  # noqa: E402
+from tech_briefing.workflow_def import (  # noqa: E402
+    FAILURE_FILE,
+    INPUT_FILE,
+    REPORT_FILE,
+    TOOL_LOG_FILE,
+    TRIAGE_FILES,
+    WORKFLOW_FILE,
+    workflow,
+)
 
 TB = Path(__file__).resolve().parent.parent
 RUNNER_KEYS = {"GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY"}
@@ -83,10 +93,36 @@ def issue(number=7, author=AUTHOR, title=TITLE, created="2026-11-24T00:00:00Z", 
 
 
 class StrictEnv(dict):
-    """宣言した鍵だけを持つ env。get でも、無い鍵を読めば落とす (黙って既定値に倒れないように)。"""
+    """宣言した鍵だけを持つ env。get でも、無い鍵を読めば落とす (黙って既定値に倒れないように)。
+
+    読んだ鍵を read に記録する。workflow が渡すのに誰も読まない鍵を見つけるため。
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.read = set()
+
+    def __getitem__(self, key):
+        self.read.add(key)
+        return super().__getitem__(key)
 
     def get(self, key, default=None):
         return self[key]
+
+
+def environ_reads(name: str) -> set[str]:
+    """入口の _real_deps が os.environ から直に読む鍵 (Fake を渡すテストでは走らない部分)。"""
+    tree = ast.parse((TB / "bin" / f"run_{name}.py").read_text(encoding="utf-8"))
+    func = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_real_deps")
+    return {
+        n.slice.value
+        for n in ast.walk(func)
+        if isinstance(n, ast.Subscript) and ast.unparse(n.value) == "os.environ" and isinstance(n.slice, ast.Constant)
+    }
+
+
+# 入口の外で読まれる鍵。anthropic 2.7.0 の SDK は鍵を ANTHROPIC_API_KEY から読む (wheel の _client.py:105、2026-11-25 確認)
+READ_BY_SDK = {"triage": {"ANTHROPIC_API_KEY"}}
 
 
 def step_env_keys(job: str) -> set[str]:
@@ -117,6 +153,7 @@ class Harness(unittest.TestCase):
         self.post_triage = self.tmp / "post" / "triage"
         self.summary = self.tmp / "summary.md"
         self.output = self.tmp / "output.txt"
+        self.envs = {}
 
     def write(self, path: Path, text: str):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -132,11 +169,14 @@ class Harness(unittest.TestCase):
         values = {"GITHUB_OUTPUT": str(self.output), "GITHUB_STEP_SUMMARY": str(self.summary), **values}
         # テストの env は workflow が渡す鍵と一致させる。workflow の側が変われば、ここで先に落ちる
         self.assertEqual(set(values), step_env_keys(job))
-        return StrictEnv(values)
+        self.envs[job] = StrictEnv(values)
+        return self.envs[job]
 
     # --- 各 job ---
 
-    def run_select(self, github, config_path="tb.yml", workflow_ref=None, author=AUTHOR, mech_repo=MECH_REPO):
+    def run_select(
+        self, github, config_path="tb.yml", workflow_ref=None, author=AUTHOR, mech_repo=MECH_REPO, mech_sha=SHA
+    ):
         env = self.env(
             "select",
             GITHUB_TOKEN="unused",
@@ -147,7 +187,7 @@ class Harness(unittest.TestCase):
             TB_CALLER_DIR=str(self.caller),
             TB_CALLER_WORKFLOW_REF=workflow_ref or f"{CALLER_REPO}/{CALLER_WORKFLOW}@refs/heads/main",
             TB_WORKFLOW_REPOSITORY=mech_repo,
-            TB_WORKFLOW_SHA=SHA,
+            TB_WORKFLOW_SHA=mech_sha,
         )
         deps = SimpleNamespace(github=github, load_yaml=json.loads, now=lambda: NOW)
         return self.call("select", env, deps)
@@ -159,7 +199,6 @@ class Harness(unittest.TestCase):
         env = self.env(
             "triage",
             ANTHROPIC_API_KEY="unused",
-            TB_REPOSITORY=CALLER_REPO,
             TB_OUT_DIR=str(self.triage_out),
             TB_CONFIG_PATH="tb.yml",
             TB_CALLER_DIR=str(self.caller),
@@ -175,22 +214,19 @@ class Harness(unittest.TestCase):
             shutil.copy(self.select_out / INPUT_FILE, self.post_select / INPUT_FILE)
         if with_triage:
             self.post_triage.mkdir(parents=True, exist_ok=True)
-            for name in ("report.json", "failure.json", "tool-log.json"):
+            for name in TRIAGE_FILES:
                 if (self.triage_out / name).exists():
                     shutil.copy(self.triage_out / name, self.post_triage / name)
 
-    def run_post(self, github, select_result, dry_run="false", triage_result="success"):
+    def run_post(self, github, select_result, dry_run="false"):
         env = self.env(
             "post",
             GITHUB_TOKEN="unused",
             TB_REPOSITORY=CALLER_REPO,
-            TB_OUT_DIR=str(self.tmp / "post"),
             TB_SELECT_DIR=str(self.post_select),
             TB_TRIAGE_DIR=str(self.post_triage),
             TB_DRY_RUN=dry_run,
-            TB_AUTHOR=AUTHOR,
             TB_SELECT_RESULT=select_result,
-            TB_TRIAGE_RESULT=triage_result,
         )
         return self.call("post", env, SimpleNamespace(github=github))
 
@@ -268,6 +304,9 @@ class Select(Harness):
             "workflow ref without ref": {"workflow_ref": f"{CALLER_REPO}/{CALLER_WORKFLOW}"},
             "calls another mechanism": {"mech_repo": "evil/shared"},
             "empty author": {"author": ""},
+            # 呼び出しの ref が、いま走っている共通の仕組みの SHA と違う
+            "workflow sha mismatch": {"mech_sha": "b" * 40},
+            "empty workflow sha": {"mech_sha": ""},
         }
         for label, kwargs in cases.items():
             with self.subTest(label):
@@ -297,9 +336,9 @@ class Triage(Harness):
     def test_report_writes_report_and_tool_log(self):
         self.select_triage()
         self.assertEqual(self.run_triage([submit_response()]), 0)
-        self.assertEqual(self.read_json(self.triage_out / "report.json"), REPORT)
-        self.assertFalse((self.triage_out / "failure.json").exists())
-        log = self.read_json(self.triage_out / "tool-log.json")
+        self.assertEqual(self.read_json(self.triage_out / REPORT_FILE), REPORT)
+        self.assertFalse((self.triage_out / FAILURE_FILE).exists())
+        log = self.read_json(self.triage_out / TOOL_LOG_FILE)
         self.assertEqual(log["tool_log"], [{"kind": "client", "name": "submit_report", "input": REPORT}])
         self.assertEqual(log["usage"]["input_tokens"], 10)
         self.assertIn("input_tokens", self.summary_text())
@@ -311,16 +350,16 @@ class Triage(Harness):
     def test_failure_writes_kind_and_tool_log(self):
         self.select_triage()
         self.assertEqual(self.run_triage([end_turn_response()]), 1)
-        self.assertEqual(self.read_json(self.triage_out / "failure.json"), "no-report")
-        self.assertFalse((self.triage_out / "report.json").exists())
-        self.assertTrue((self.triage_out / "tool-log.json").exists())
+        self.assertEqual(self.read_json(self.triage_out / FAILURE_FILE), "no-report")
+        self.assertFalse((self.triage_out / REPORT_FILE).exists())
+        self.assertTrue((self.triage_out / TOOL_LOG_FILE).exists())
         self.assertIn("input_tokens", self.summary_text())
 
     def test_unexpected_error_is_internal_error(self):
         self.select_triage()
         (self.caller / "docs" / "criteria.md").unlink()
         self.assertEqual(self.run_triage([submit_response()]), 1)
-        self.assertEqual(self.read_json(self.triage_out / "failure.json"), "internal-error")
+        self.assertEqual(self.read_json(self.triage_out / FAILURE_FILE), "internal-error")
         self.assertEqual(self.messages.requests, [])
         self.assertIn("Traceback", self.stderr.getvalue())
 
@@ -329,7 +368,7 @@ class Triage(Harness):
         self.write(self.tmp / "secret.md", "外の文書")
         self.write(self.caller / "tb.yml", json.dumps(dict(CONFIG, criteria="../secret.md")))
         self.assertEqual(self.run_triage([submit_response()]), 1)
-        self.assertEqual(self.read_json(self.triage_out / "failure.json"), "internal-error")
+        self.assertEqual(self.read_json(self.triage_out / FAILURE_FILE), "internal-error")
         self.assertEqual(self.messages.requests, [])
 
 
@@ -348,7 +387,7 @@ class Post(Harness):
 
     def test_chain_posts_failure_and_is_red(self):
         github = self.chain([end_turn_response()])
-        self.assertEqual(self.run_post(github, "triage", triage_result="failure"), 1)
+        self.assertEqual(self.run_post(github, "triage"), 1)
         self.assertEqual(github.posted, [(7, render_failure("no-report"))])
 
     def test_target_comes_only_from_select_dir(self):
@@ -388,14 +427,14 @@ class Post(Harness):
         github = FakeGitHub([issue()], {7: []})
         self.assertEqual(self.run_select(github), 0)
         self.stage_post(with_triage=False)
-        self.assertEqual(self.run_post(github, "triage", triage_result="failure"), 1)
+        self.assertEqual(self.run_post(github, "triage"), 1)
         self.assertEqual(github.posted, [(7, render_failure("internal-error"))])
 
     def test_malformed_triage_artifacts_are_internal_error(self):
         cases = {
-            "report not json": {"report.json": "{"},
-            "report not object": {"report.json": "[]"},
-            "failure not string": {"failure.json": '{"kind": "no-report"}'},
+            "report not json": {REPORT_FILE: "{"},
+            "report not object": {REPORT_FILE: "[]"},
+            "failure not string": {FAILURE_FILE: '{"kind": "no-report"}'},
         }
         for label, files in cases.items():
             with self.subTest(label):
@@ -419,7 +458,7 @@ class Post(Harness):
                 self.setUp()
                 self.assertEqual(self.run_select(github), 0)
                 self.stage_post(with_triage=False)
-                self.assertEqual(self.run_post(github, result, triage_result="skipped"), 1)
+                self.assertEqual(self.run_post(github, result), 1)
                 self.assertEqual(github.posted, [(number, body)])
 
     def test_missing_or_bad_select_input_posts_nothing(self):
@@ -434,6 +473,63 @@ class Post(Harness):
                 self.assertEqual(self.run_post(github, "triage"), 1)
                 self.assertNotEqual(self.stderr.getvalue(), "")
                 self.assertEqual(github.calls, [])
+
+
+class ArtifactNames(Harness):
+    """triage が書く名前・workflow が upload する名前・post が読む名前が一致する。
+
+    どれかが別の綴りを持つと、artifact が黙って空になり、post は毎回 internal-error を投稿する。
+    """
+
+    def written_by_triage(self, responses) -> set[str]:
+        self.setUp()
+        self.assertEqual(self.run_select(FakeGitHub([issue()], {7: []})), 0)
+        self.run_triage(responses)
+        return {p.name for p in self.triage_out.iterdir()} - {INPUT_FILE}
+
+    def test_triage_writes_only_uploaded_names(self):
+        on_report = self.written_by_triage([submit_response()])
+        on_failure = self.written_by_triage([end_turn_response()])
+        self.assertEqual(on_report, {REPORT_FILE, TOOL_LOG_FILE})
+        self.assertEqual(on_failure, {FAILURE_FILE, TOOL_LOG_FILE})
+        self.assertEqual(on_report | on_failure, set(TRIAGE_FILES))
+
+    def test_post_reads_only_uploaded_names(self):
+        self.written_by_triage([submit_response()])
+        self.stage_post()
+        opened = []
+        real_open = builtins.open
+
+        def recording_open(file, *args, **kwargs):
+            opened.append(Path(file).resolve())
+            return real_open(file, *args, **kwargs)
+
+        with mock.patch.object(builtins, "open", recording_open):
+            self.assertEqual(self.run_post(FakeGitHub([issue()], {7: []}), "triage"), 0)
+        base = self.post_triage.resolve()
+        names = {p.name for p in opened if p.parent == base}
+        self.assertEqual(names, {REPORT_FILE, FAILURE_FILE})
+        self.assertLessEqual(names, set(TRIAGE_FILES))
+
+
+class EnvKeys(Harness):
+    """workflow が step に渡す env の鍵は、どれも入口か SDK が読む (読まない鍵を配線に残さない)。"""
+
+    def test_environ_collector_sees_real_deps_reads(self):
+        # 対照: ast の集め方が _real_deps の読み取りを拾えていなければ、下の検査は鍵を見落とす
+        self.assertEqual(environ_reads("post"), {"GITHUB_TOKEN", "TB_REPOSITORY"})
+
+    def test_every_declared_key_is_read(self):
+        github = FakeGitHub([issue()], {7: []})
+        self.assertEqual(self.run_select(github), 0)
+        self.assertEqual(self.run_triage([submit_response()]), 0)
+        self.stage_post()
+        self.assertEqual(self.run_post(github, "triage"), 0)
+        for job in ("select", "triage", "post"):
+            with self.subTest(job):
+                declared = step_env_keys(job) - RUNNER_KEYS
+                read = self.envs[job].read | environ_reads(job) | READ_BY_SDK.get(job, set())
+                self.assertEqual(declared - read, set())
 
 
 class JobIo(unittest.TestCase):
@@ -463,6 +559,23 @@ class JobIo(unittest.TestCase):
         for ref, expected in cases.items():
             with self.subTest(ref):
                 self.assertEqual(jobio.caller_workflow_path(ref, CALLER_REPO), expected)
+
+    def test_load_yaml_under_takes_the_yaml_loader_protocol(self):
+        self.assertIs(typing.get_type_hints(jobio.load_yaml_under)["loader"], YamlLoader)
+        self.assertIn("__call__", vars(YamlLoader))
+
+    def test_load_yaml_under_turns_loader_value_error_into_none(self):
+        root = self.tmp / "root"
+        root.mkdir()
+        (root / "a.yml").write_text("x", encoding="utf-8")
+
+        def broken(text):
+            raise ValueError("読めない")
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertIsNone(jobio.load_yaml_under(root, "a.yml", broken))
+        # 対照: 読める loader なら値が返る
+        self.assertEqual(jobio.load_yaml_under(root, "a.yml", lambda t: {"text": t}), {"text": "x"})
 
     def test_read_under_rejects_symlink_out(self):
         root = self.tmp / "root"

@@ -68,3 +68,13 @@ class MessagesClient(Protocol):
     """
 
     def create(self, params: dict) -> dict: ...
+
+
+class YamlLoader(Protocol):
+    """YAML の文書を読む口 (実装はアダプタの yaml_loader、テストでは json.loads)。
+
+    - 呼ぶと文書を復号した値を返す。任意の Python のオブジェクトは作らない
+    - 読めない文書は ValueError で知らせる (入口と本体はパーサの例外の型を名指しできないため)
+    """
+
+    def __call__(self, text: str) -> object: ...

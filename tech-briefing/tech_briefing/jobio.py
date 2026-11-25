@@ -9,6 +9,8 @@ import json
 import sys
 from pathlib import Path
 
+from tech_briefing.protocols import YamlLoader
+
 _WORKFLOWS_DIR = ".github/workflows/"
 
 
@@ -59,11 +61,10 @@ def read_under(root: Path, rel: str) -> str:
         return f.read()
 
 
-def load_yaml_under(root: Path, rel: str | None, loader) -> object | None:
+def load_yaml_under(root: Path, rel: str | None, loader: YamlLoader) -> object | None:
     """root の下の YAML を loader で読む。読めなければ理由を内部のログに出して None を返す。
 
     None を本体の関数へ渡すと、設定と呼び出し側の検査が誤りとして扱う (config-error)。
-    loader は読めない文書で ValueError を上げる (アダプタの約束)。
     """
     if rel is None:
         print("読むファイルを特定できませんでした", file=sys.stderr)

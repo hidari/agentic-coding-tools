@@ -136,6 +136,19 @@ class Pep723(unittest.TestCase):
         # 対照: 固定の検査が空の dependencies で素通りしていない
         self.assertEqual(names, {"anthropic", "PyYAML"})
 
+    def test_pinned_versions_are_the_checked_ones(self):
+        # 版は triage の kwargs (betas・fallbacks・output_config・thinking) と to_dict を wheel で確かめたもの。
+        # 上げるときは同じ確かめをやり直してからここを変える (確かめていない版へ黙って動かさない)
+        pins = {}
+        for path in workflow_scripts():
+            for dep in pep723(path)["dependencies"]:
+                name, _, version = dep.partition("==")
+                pins.setdefault(name, set()).add(version)
+        self.assertEqual(pins, {"anthropic": {"2.7.0"}, "PyYAML": {"6.0.3"}})
+        # SDK を使うのは triage の入口だけ
+        triage = [d for d in pep723(TB / "bin" / "run_triage.py")["dependencies"] if d.startswith("anthropic")]
+        self.assertEqual(triage, ["anthropic==2.7.0"])
+
     def test_parser_rejects_unpinned(self):
         self.assertIsNone(_PIN.fullmatch("anthropic>=0.79"))
         self.assertIsNone(_PIN.fullmatch("anthropic"))

@@ -48,7 +48,14 @@ def _calls(job, reusable):
     return isinstance(uses, str) and uses.partition("@")[0] == reusable
 
 
-def check_caller(workflow, reusable):
+def check_caller(workflow, reusable, workflow_sha):
+    """workflow_sha はいま走っている共通の仕組みの commit (job.workflow_sha)。
+
+    呼び出しの ref がこれと一致することを見る。一致しなければ、呼び出し側が固定したつもりの SHA と
+    実際に走っているコードが別物 (検査した workflow のファイルと実際の呼び出しが食い違う) なので止める。
+    ref は先に 40 桁の小文字 16 進であることを確かめるので、workflow_sha が空・None・大文字・短いときも
+    一致せずに違反になる (workflow_sha の形を別に検査する分岐は要らない)。
+    """
     if not isinstance(workflow, dict):
         return ["workflow が mapping ではありません"]
     violations = []
@@ -74,6 +81,9 @@ def check_caller(workflow, reusable):
         ref = job["uses"].partition("@")[2]
         if not SHA_RE.fullmatch(ref):
             violations.append(f"job {name}: ref は 40 桁の小文字 16 進の commit SHA でなければなりません")
+        elif ref != workflow_sha:
+            violations.append(
+                f"job {name}: ref {ref} が、いま走っている共通の仕組みの SHA (job.workflow_sha: {workflow_sha!r}) と一致しません")
         if job.get("permissions") != CALLER_PERMISSIONS:
             violations.append(
                 f"job {name}: permissions は contents: read と issues: write だけでなければなりません")

@@ -4,7 +4,8 @@ import yaml
 
 
 def load(text: str) -> object:
-    # 入口は yaml.YAMLError を名指しできない (本体と入口の上の層は yaml を import しない) ので、ValueError に揃える
+    # 入口は yaml.YAMLError を名指しできない (本体と入口の上の層は yaml を import しない) ので、
+    # protocols.YamlLoader の約束どおり ValueError に揃える
     try:
         return yaml.safe_load(text)
     except yaml.YAMLError as e:

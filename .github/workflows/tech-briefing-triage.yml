@@ -166,7 +166,6 @@
           "id": "triage",
           "working-directory": "tech-briefing-shared",
           "env": {
-            "TB_REPOSITORY": "${{ github.repository }}",
             "TB_OUT_DIR": "${{ runner.temp }}/tech-briefing",
             "ANTHROPIC_API_KEY": "${{ secrets.ANTHROPIC_API_KEY }}",
             "TB_CONFIG_PATH": "${{ inputs.config-path }}",
@@ -250,14 +249,11 @@
           "working-directory": "tech-briefing-shared",
           "env": {
             "TB_REPOSITORY": "${{ github.repository }}",
-            "TB_OUT_DIR": "${{ runner.temp }}/tech-briefing",
             "GITHUB_TOKEN": "${{ github.token }}",
             "TB_SELECT_DIR": "${{ runner.temp }}/tech-briefing/select",
             "TB_TRIAGE_DIR": "${{ runner.temp }}/tech-briefing/triage",
             "TB_DRY_RUN": "${{ inputs.dry-run }}",
-            "TB_AUTHOR": "${{ vars.TECH_BRIEFING_AUTHOR }}",
-            "TB_SELECT_RESULT": "${{ needs.select.outputs.result }}",
-            "TB_TRIAGE_RESULT": "${{ needs.triage.result }}"
+            "TB_SELECT_RESULT": "${{ needs.select.outputs.result }}"
           },
           "run": "uv run --script tech-briefing/bin/run_post.py"
         }

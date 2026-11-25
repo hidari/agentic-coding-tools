@@ -20,10 +20,7 @@ sys.path.insert(0, str(TB_ROOT))
 
 from tech_briefing import jobio  # noqa: E402
 from tech_briefing.render import plan_post, should_post  # noqa: E402
-from tech_briefing.workflow_def import INPUT_FILE  # noqa: E402
-
-REPORT_FILE = "report.json"
-FAILURE_FILE = "failure.json"
+from tech_briefing.workflow_def import FAILURE_FILE, INPUT_FILE, REPORT_FILE  # noqa: E402
 
 
 def _target(select_dir: Path) -> int | None:

@@ -2,6 +2,11 @@
 
 beta の側を使うのは、server-side fallback の `betas` と `fallbacks` を渡すため (claude-api skill 2.1.331 の
 Python の例、2026-11-24 確認)。再試行は SDK の既定 (2回、429・5xx・接続の失敗) に任せる。
+
+使う SDK の API は anthropic 2.7.0 の wheel を読んで確かめた (2026-11-25): `anthropic.Anthropic()` が鍵を
+ANTHROPIC_API_KEY から読むこと、`client.beta.messages.create` が betas・fallbacks・output_config・thinking を
+受けて BetaMessage を返すこと、BetaMessage の基底の BaseModel が `to_dict(mode=, use_api_names=,
+exclude_unset=)` を持つこと、状態コードを持つ例外が `status_code` を持つこと。版を上げたら確かめ直す。
 """
 
 import sys

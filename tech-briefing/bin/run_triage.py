@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["anthropic==0.79.0", "PyYAML==6.0.3"]
+# dependencies = ["anthropic==2.7.0", "PyYAML==6.0.3"]
 # ///
 """triage の job の入口。select の input.json と呼び出し側の設定から要求を組み、Messages API とのループを回す。
 
@@ -23,11 +23,7 @@ from tech_briefing.config import load_config  # noqa: E402
 from tech_briefing.constants import FAIL_INTERNAL_ERROR  # noqa: E402
 from tech_briefing.tools import RESULT_LIMIT, ToolBox  # noqa: E402
 from tech_briefing.triage import LIMITS, SYSTEM_PROMPT, Outcome, build_params, run_triage  # noqa: E402
-from tech_briefing.workflow_def import INPUT_FILE  # noqa: E402
-
-REPORT_FILE = "report.json"
-FAILURE_FILE = "failure.json"
-TOOL_LOG_FILE = "tool-log.json"
+from tech_briefing.workflow_def import FAILURE_FILE, INPUT_FILE, REPORT_FILE, TOOL_LOG_FILE  # noqa: E402
 
 
 def _triage(env, deps) -> Outcome:

@@ -109,42 +109,74 @@ BROKEN = {
 }
 
 
+# 呼び出しの ref と照らす相手 (job.workflow_sha)。どの行も違反はちょうど 1 件
+WORKFLOW_SHA_ROWS = {
+    "match": (SHA, 0),
+    "other sha": ("f" * 40, 1),
+    "empty": ("", 1),
+    "absent": (None, 1),
+    "upper": (SHA.upper(), 1),
+    "short": (SHA[:7], 1),
+    "trailing newline": (SHA + "\n", 1),
+}
+
+
+class WorkflowSha(unittest.TestCase):
+    def test_ref_must_equal_the_running_sha(self):
+        for label, (workflow_sha, count) in WORKFLOW_SHA_ROWS.items():
+            with self.subTest(label):
+                result = check_caller(valid(), REUSABLE, workflow_sha)
+                self.assertEqual(len(result), count, result)
+
+    def test_mismatch_names_the_job(self):
+        result = check_caller(valid(), REUSABLE, "f" * 40)
+        self.assertEqual(len(result), 1)
+        self.assertIn("triage", result[0])
+
+    def test_caller_pinned_to_other_sha_is_rejected(self):
+        # 照らす向きを逆にしても同じ: 呼び出し側の ref が違えば、正しい job.workflow_sha でも違反
+        other = "f" * 40
+        wf = mutated(set_uses(f"{REUSABLE}@{other}"))
+        self.assertEqual(len(check_caller(wf, REUSABLE, SHA)), 1)
+        self.assertEqual(check_caller(wf, REUSABLE, other), [])
+
+
 class CheckCaller(unittest.TestCase):
     def test_valid_passes(self):
-        self.assertEqual(check_caller(valid(), REUSABLE), [])
+        self.assertEqual(check_caller(valid(), REUSABLE, SHA), [])
 
     def test_true_key_for_on_passes(self):
-        self.assertEqual(check_caller(mutated(true_key), REUSABLE), [])
+        self.assertEqual(check_caller(mutated(true_key), REUSABLE, SHA), [])
 
     def test_true_key_is_still_checked(self):
         def fn(wf):
             true_key(wf)
             wf[True] = "push"
-        self.assertEqual(len(check_caller(mutated(fn), REUSABLE)), 1)
+        self.assertEqual(len(check_caller(mutated(fn), REUSABLE, SHA)), 1)
 
     def test_trigger_shapes_pass(self):
         for on in ["workflow_dispatch", ["workflow_dispatch", "schedule"], {"schedule": []}]:
             with self.subTest(on=on):
-                self.assertEqual(check_caller(mutated(set_on(on)), REUSABLE), [])
+                self.assertEqual(check_caller(mutated(set_on(on)), REUSABLE, SHA), [])
 
     def test_other_job_without_write_passes(self):
         wf = mutated(other_job_with({"contents": "read"}))
-        self.assertEqual(check_caller(wf, REUSABLE), [])
+        self.assertEqual(check_caller(wf, REUSABLE, SHA), [])
         wf["jobs"]["lint"].pop("permissions")
-        self.assertEqual(check_caller(wf, REUSABLE), [])
+        self.assertEqual(check_caller(wf, REUSABLE, SHA), [])
 
     def test_each_break_gives_exactly_one_violation(self):
         for name, wf in BROKEN.items():
             with self.subTest(name=name):
-                result = check_caller(wf, REUSABLE)
+                result = check_caller(wf, REUSABLE, SHA)
                 self.assertEqual(len(result), 1, result)
                 self.assertTrue(all(isinstance(m, str) and m for m in result))
 
     def test_deterministic_order(self):
         wf = mutated(lambda w: (set_on("push")(w), drop_top_permissions(w), set_uses("x@v1")(w)))
-        first = check_caller(wf, REUSABLE)
+        first = check_caller(wf, REUSABLE, SHA)
         self.assertGreater(len(first), 1)
-        self.assertEqual(first, check_caller(copy.deepcopy(wf), REUSABLE))
+        self.assertEqual(first, check_caller(copy.deepcopy(wf), REUSABLE, SHA))
 
 
 if __name__ == "__main__":

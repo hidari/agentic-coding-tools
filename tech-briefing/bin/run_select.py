@@ -31,7 +31,14 @@ def main(env, deps) -> int:
     reusable = f"{env['TB_WORKFLOW_REPOSITORY']}/{WORKFLOW_FILE}"
 
     decision, _ = run_select(
-        raw_config, caller_workflow, reusable, deps.github, env["TB_AUTHOR"], deps.now(), MAX_INPUT_CHARS
+        raw_config,
+        caller_workflow,
+        reusable,
+        env["TB_WORKFLOW_SHA"],
+        deps.github,
+        env["TB_AUTHOR"],
+        deps.now(),
+        MAX_INPUT_CHARS,
     )
     if decision.result in POSTED_RESULTS:
         data = decision.input if decision.input is not None else {"issue_number": decision.issue.number}

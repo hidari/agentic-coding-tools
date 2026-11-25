@@ -140,6 +140,7 @@ def run_select(
     raw_config: object,
     caller_workflow: object,
     reusable: str,
+    workflow_sha: str,
     api: GitHubApi,
     author: str,
     now_utc: datetime,
@@ -150,7 +151,7 @@ def run_select(
         config = load_config(raw_config)
     except ConfigError as e:
         return _decision(SELECT_CONFIG_ERROR, None, f"設定が不正です: {e}"), None
-    violations = check_caller(caller_workflow, reusable)
+    violations = check_caller(caller_workflow, reusable, workflow_sha)
     if violations:
         return _decision(SELECT_CONFIG_ERROR, None, "呼び出し側の検査に違反があります: " + "; ".join(violations)), None
     decision = decide(api, author, now_utc, max_input_chars)
