@@ -25,7 +25,7 @@ DOWNLOAD_ARTIFACT = "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654
 # v10.4.0 は 2026-11-24 の時点で公開から4日しか経っていないので、あえて1つ前を使う
 SETUP_UV = "astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2"  # v10.3.3
 # action の SHA が固定するのは導入の手順だけで、入る uv の版は別に決まる。版を渡さないと
-# その日の最新が入るので明示する。0.13.4 は開発機の Homebrew の版 (2026-10-20 のビルド)
+# その日の最新が入るので明示する。0.13.4 は 2026-10-20 公開の版 (公開から2週間以上)
 UV_VERSION = "0.13.4"
 
 # 生成物の置き場 (リポジトリの root から)。呼び出し側は `<この repository>/<この path>@<SHA>` で呼ぶ

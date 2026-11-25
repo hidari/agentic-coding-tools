@@ -43,7 +43,7 @@ class Decision:
 
 
 def today_jst(now_utc: datetime) -> str:
-    # 日付はブリーフィングの側の規約に合わせて JST で決める。UTC で切ると 15:00 UTC 以降に前日のままになる
+    # タイトルの日付が JST で書かれる前提に合わせて JST で決める。UTC で切ると 15:00 UTC 以降に前日のままになる
     return now_utc.astimezone(ZoneInfo(TIMEZONE)).strftime("%Y-%m-%d")
 
 
