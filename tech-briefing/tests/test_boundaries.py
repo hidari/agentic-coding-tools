@@ -2,6 +2,11 @@
 
 本体とテストは標準ライブラリだけで回り、実行時の依存 (anthropic の SDK と PyYAML) はアダプタと
 入口のスクリプトだけが持つ。入口は PEP 723 で版を固定し、`uv run --script` で起動される。
+
+テストが import 文で adapters を読むことはここで禁じるが、importlib でファイルのパスから読むことは禁じない
+(この検査は import 文だけを見る)。依存の無いアダプタ (http_common・github_api・fetcher) は token と取得先の
+守りを固定するために test_adapters_stdlib がファイルから読む。依存のあるアダプタ (anthropic_client・
+yaml_loader) は読むと CI のテストに依存が増えるので読まず、守りは下の ast の検査で固定する。
 """
 
 import ast
@@ -39,6 +44,17 @@ def imported(tree: ast.AST) -> set[str]:
             names.update(a.name.split(".")[0] for a in node.names)
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             names.add(node.module.split(".")[0])
+    return names
+
+
+def imported_modules(tree: ast.AST) -> set[str]:
+    """import された module の完全な名前。imported() は先頭の名前に丸めるので、パッケージの中の向きを見るときに使う。"""
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names.add(node.module)
     return names
 
 
@@ -98,12 +114,57 @@ class Imports(unittest.TestCase):
                 # 対照: 実物のアダプタはどこかで読んでいる (読まないなら __main__ の配線が抜けている)
                 self.assertIn("adapters", imported(tree))
 
+    def test_selection_does_not_depend_on_render(self):
+        # 印の判定は marker が持つ。select の判定が投稿の整形のモジュールに依存すると、整形の都合の変更が
+        # 処理済みの判定と入力の絞り込みを動かす
+        core = TB / "tech_briefing"
+        self.assertNotIn("tech_briefing.render", imported_modules(parse(core / "selection.py")))
+        # 対照: 集め方は完全な名前を拾えていて、両方が同じ述語を marker から取る
+        for name in ("selection.py", "render.py"):
+            with self.subTest(name):
+                self.assertIn("tech_briefing.marker", imported_modules(parse(core / name)))
+
     def test_every_file_parses_as_python_3_11(self):
         files = py_files(TB)
         self.assertGreaterEqual(len(files), 25)
         for path in files:
             with self.subTest(str(path.relative_to(TB))):
                 parse(path)
+
+
+def yaml_uses(tree: ast.AST) -> tuple[set[str], set[str]]:
+    """(yaml の属性として呼んだ名前, yaml を読んだ import の形)。from yaml import や別名は形として記録する。"""
+    called, forms = set(), set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if isinstance(node.func.value, ast.Name) and node.func.value.id == "yaml":
+                called.add(node.func.attr)
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name.split(".")[0] == "yaml":
+                    forms.add(f"import {a.name} as {a.asname}" if a.asname else f"import {a.name}")
+        elif isinstance(node, ast.ImportFrom) and node.module and node.module.split(".")[0] == "yaml":
+            forms.add(f"from {node.module} import")
+    return called, forms
+
+
+class YamlSafeLoad(unittest.TestCase):
+    def test_adapters_call_only_safe_load(self):
+        # yaml.load や unsafe_load は任意の Python のオブジェクトを作れる。呼び出し側のリポジトリの YAML は信頼できない
+        called, forms = set(), set()
+        for path in py_files(TB / "adapters"):
+            c, f = yaml_uses(parse(path))
+            called |= c
+            forms |= f
+        # 部分集合ではなく一致で見る。呼び出しを1つも拾えない集め方でも素通りしないため
+        self.assertEqual(called, {"safe_load"})
+        # from yaml import load や別名で読むと、上の属性の呼び出しの検査を通らずに load を呼べる
+        self.assertEqual(forms, {"import yaml"})
+
+    def test_collector_sees_other_forms(self):
+        # 対照: 集め方は safe_load 以外の呼び出しと、別の import の形を拾える
+        tree = ast.parse("import yaml as y\nfrom yaml import load\nyaml.load(t)\nyaml.unsafe_load(t)\n")
+        self.assertEqual(yaml_uses(tree), ({"load", "unsafe_load"}, {"import yaml as y", "from yaml import"}))
 
 
 class Names(unittest.TestCase):
@@ -133,7 +194,6 @@ class Pep723(unittest.TestCase):
                 deps = meta.get("dependencies")
                 self.assertIsInstance(deps, list)
                 for dep in deps:
-                    self.assertRegex(dep, _PIN)
                     self.assertIsNotNone(_PIN.fullmatch(dep), dep)
                     names.add(dep.split("==")[0])
         # 対照: 固定の検査が空の dependencies で素通りしていない

@@ -2,15 +2,19 @@
 
 判定は持たない。読めないファイルをどう扱うかは呼び出し側 (本体の関数) が決められるよう、読めなければ
 None を返すか ValueError / OSError を上げる。ファイルは組み込みの open で開く (どのパスを開いたかを
-テストが open の差し替えで記録するため)。
+テストが open の差し替えで記録するため)。中身を LLM へ送る criteria だけは、道具と同じく repo_paths の
+symlink を辿らない読み手で読む。
 """
 
 import json
 import sys
 from pathlib import Path
+from typing import Callable, TypeVar
 
-from tech_briefing.config import is_git_name
+from tech_briefing import repo_paths
 from tech_briefing.protocols import YamlLoader
+
+_T = TypeVar("_T")
 
 _WORKFLOWS_DIR = ".github/workflows/"
 
@@ -50,65 +54,55 @@ def append_summary(env, text: str) -> None:
         f.write(text.rstrip("\n") + "\n")
 
 
-def _resolve_under(root: Path, rel: str) -> tuple[Path, Path]:
-    """(解決した root, 解決した実体のパス)。絶対パス・root の外へ出る .. や symlink は ValueError。"""
+def read_under(root: Path, rel: str) -> str:
+    """root の下のファイルを読む。絶対パス・root の外へ出る .. や symlink は ValueError。
+
+    root の中を指す symlink は辿る。読むのは設定と呼び出しの workflow の YAML で、中身は LLM へ送らない。
+    """
     if not isinstance(rel, str) or not rel or Path(rel).is_absolute():
         raise ValueError(f"root からの相対パスではありません: {rel!r}")
     base = Path(root).resolve()
     target = (base / rel).resolve()
     if target != base and base not in target.parents:
         raise ValueError(f"root の外を指しています: {rel!r}")
-    return base, target
-
-
-def _read(target: Path) -> str:
     with open(target, encoding="utf-8") as f:
         return f.read()
 
 
-def read_under(root: Path, rel: str) -> str:
-    """root の下のファイルを読む。絶対パス・root の外へ出る .. や symlink は ValueError。"""
-    return _read(_resolve_under(root, rel)[1])
-
-
 def read_criteria(root: Path, rel: str) -> str:
-    """基準の文書を読む。read_under の制限に加え、実体が .git の中なら ValueError。
+    """基準の文書を読む。正規形でないパスと、経路のどこかが symlink のものは ValueError。
 
-    中身は LLM へ送られる。設定の検査はパスの文字列しか見ないので、リポジトリの中の symlink が
-    .git/config (checkout の認証情報が残りうる) を指す形は、symlink を解決した後の実体の位置で拒否する。
+    中身は LLM へ送られる。設定の検査はパスの文字列しか見ないので、symlink は指す先を問わず辿らない
+    (指す先で .git/config を拒否する形は、指す先の判定を誤ると認証情報を送る)。UTF-8 として読めない
+    ファイルは置き換えずに UnicodeDecodeError (ValueError) にする。
     """
-    base, target = _resolve_under(root, rel)
-    if any(is_git_name(p) for p in target.relative_to(base).parts):
-        raise ValueError(f".git の中を指しています: {rel!r}")
-    return _read(target)
+    return repo_paths.read_regular(root, repo_paths.canonical_parts(rel))
+
+
+def _none_on_error(rel: str, read: Callable[[], _T]) -> _T | None:
+    """read() の OSError と ValueError を、理由を内部のログに出して None にする。
+
+    None を本体の関数へ渡すと、設定の誤りとして扱う (config-error)。UTF-8 として読めないファイルの
+    UnicodeDecodeError と、repo_paths の拒否はどちらも ValueError。
+    """
+    try:
+        return read()
+    except (OSError, ValueError) as e:
+        print(f"{rel} を読めませんでした: {type(e).__name__}: {e}", file=sys.stderr)
+        return None
 
 
 def read_criteria_or_none(root: Path, rel: str) -> str | None:
-    """read_criteria と同じ。読めなければ理由を内部のログに出して None を返す。
-
-    None を本体の関数へ渡すと、設定の誤りとして扱う (config-error)。
-    """
-    try:
-        return read_criteria(root, rel)
-    except (OSError, ValueError) as e:
-        # UTF-8 として読めないファイルの UnicodeDecodeError も ValueError
-        print(f"{rel} を読めませんでした: {type(e).__name__}: {e}", file=sys.stderr)
-        return None
+    """read_criteria と同じ。読めなければ理由を内部のログに出して None を返す。"""
+    return _none_on_error(rel, lambda: read_criteria(root, rel))
 
 
 def load_yaml_under(root: Path, rel: str | None, loader: YamlLoader) -> object | None:
-    """root の下の YAML を loader で読む。読めなければ理由を内部のログに出して None を返す。
-
-    None を本体の関数へ渡すと、設定と呼び出し側の検査が誤りとして扱う (config-error)。
-    """
+    """root の下の YAML を loader で読む。読めなければ理由を内部のログに出して None を返す。"""
     if rel is None:
         print("読むファイルを特定できませんでした", file=sys.stderr)
         return None
-    try:
-        return loader(read_under(root, rel))
-    except (OSError, ValueError) as e:
-        print(f"{rel} を読めませんでした: {type(e).__name__}: {e}", file=sys.stderr)
-        return None
+    return _none_on_error(rel, lambda: loader(read_under(root, rel)))
 
 
 def caller_workflow_path(workflow_ref: str, repository: str) -> str | None:

@@ -14,6 +14,7 @@ from tech_briefing.constants import (  # noqa: E402
     SELECT_TRIAGE,
     SELECT_UNEXPECTED,
 )
+from tech_briefing.marker import is_bot_report, is_marked  # noqa: E402
 from tech_briefing.protocols import CommentRef  # noqa: E402
 from tech_briefing.render import (  # noqa: E402
     MAX_COMMENT_CHARS,
@@ -21,7 +22,6 @@ from tech_briefing.render import (  # noqa: E402
     render_failure,
     render_report,
     render_too_large,
-    is_bot_report,
     render_unexpected,
     sanitize,
     should_post,
@@ -323,17 +323,19 @@ class RenderFailureTest(unittest.TestCase):
 
 class IsBotReportTest(unittest.TestCase):
     def test_table(self):
+        # 各行は (印で始まるか, 書き込みの名義の報告か)。is_marked は名義を見ず、is_bot_report は両方を見る
         rows = [
-            ("名義と印", comment(), True),
-            ("先頭の空白の後の印", comment(body="\n  " + MARKER), True),
-            ("他のアカウントの印", comment(author="someone"), False),
-            ("名義は完全一致で比べる", comment(author=BOT_LOGIN.upper()), False),
-            ("印の無い名義のコメント", comment(body="ふつうのコメント"), False),
-            ("本文の途中の印", comment(body="前置き\n" + MARKER), False),
+            ("名義と印", comment(), True, True),
+            ("先頭の空白の後の印", comment(body="\n  " + MARKER), True, True),
+            ("他のアカウントの印", comment(author="someone"), True, False),
+            ("名義は完全一致で比べる", comment(author=BOT_LOGIN.upper()), True, False),
+            ("印の無い名義のコメント", comment(body="ふつうのコメント"), False, False),
+            ("本文の途中の印", comment(body="前置き\n" + MARKER), False, False),
         ]
-        for label, c, expected in rows:
+        for label, c, marked, report in rows:
             with self.subTest(label):
-                self.assertIs(is_bot_report(c), expected)
+                self.assertIs(is_marked(c), marked)
+                self.assertIs(is_bot_report(c), report)
 
 
 class ShouldPostTest(unittest.TestCase):

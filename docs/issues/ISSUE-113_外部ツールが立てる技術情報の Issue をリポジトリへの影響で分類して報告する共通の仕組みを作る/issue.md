@@ -31,8 +31,11 @@ LLM にトリアージを任せたいが、Issue の本文とコメントは外�
   - registry の repository の欄の実際の形。`git+ssh` や `git://`、`github:` の短縮形、末尾の `/` は配布元のリポジトリを判定できず、release notes を引けない
   - PyPI で正規化していない名前を引いたときと、改名したリポジトリの releases を引いたときの redirect。fetcher は redirect を拒否するので、どちらも取得の失敗になる
   - api.github.com を認証なしで引くときの rate limit に、1回の triage の道具の呼び出しが収まるか
+  - npm の registry を packument の全体で取っている (tech-briefing/tech_briefing/tools.py の `ToolBox._fetch_registry`)。`/latest` の経路 (scoped package の `%2F` を含む) を実物で確かめてから、`dist-tags.latest` と `repository` だけを取る形へ替える
+  - anthropic のアダプタの「stderr に例外の型と状態コードだけを出し、本文を出さない」守り (tech-briefing/adapters/anthropic_client.py の `SdkMessages.create`) を固定するテストが無い。依存のあるアダプタなので CI のテストからは読まない。実物の契約テストで、失敗の応答のときに本文が stderr に出ないことを見る
 - [ ] 入口のスクリプトとアダプタを実物で走らせる。select だけの dry-run から始め、続けて triage と post に進む。`gh` と GitHub の API を呼ぶ経路は live smoke で通す。次を実物の run で確かめる
   - `job.workflow_repository` と `job.workflow_sha` が step の `env:` と `with:` で効くか、`inputs.config-path` のようなハイフン付きの名前をドットで読めるか
+  - select は開いている Issue の全ページを本文ごと取る (tech-briefing/adapters/github_api.py の `GitHubRest.open_issues`)。開いたままの Issue の件数の実績を見てから、絞り込み (タイトルの検索や作者の指定) を設計で決める
   - triage の upload が複数ファイルのとき、artifact の中の相対パスがどうなるか
   - anthropic のアダプタは一度も実行していない。2.7.0 の credentials の自動探索と、鍵を env に置いたときの `warn_env_static_shadows_auto_discovery` を実物の走行で確かめる
   - 無害化した本文が GitHub 上でリンク・メンション・参照にならないこと。特に `www.` と `GH-` の直後に ZWSP を入れた形と、スキームのコロンの後に ZWSP を入れた形を、実物のコメントで確かめる
@@ -52,8 +55,13 @@ LLM にトリアージを任せたいが、Issue の本文とコメントは外�
   - max_tokens などで止まって no-report になったときに、最後の stop_reason を内部ログに出す
   - `pause_turn` の応答に client の tool_use が混ざる形のテストを足す
   - select の upload の step の `if:` を固定するテストを足す。済み (tech-briefing/tests/test_workflow_def.py の `Flow.test_select_uploads_input_only_for_posted_results` が、暗黙の `success()` を含む判定表で固定する)
+  - テストの builder の複製 (`issue()`・`comment()`・ToolBox の組み立て) を tech-briefing/tests/fakes.py に寄せる。いまは test_select・test_entrypoints・test_render・test_tools・test_triage がそれぞれ持つ
+  - tech-briefing/tests/test_render.py の `ShouldPostTest` と `IsBotReportTest` の表が重なっている。表の各行で `is_marked`・`is_bot_report`・`should_post` を見る形にまとめる
+  - tech-briefing/tests/test_entrypoints.py の `recording_open` の複製 (`Post.test_target_comes_only_from_select_dir` と `ArtifactNames.test_post_reads_only_uploaded_names`) を Harness の contextmanager にする
 - [ ] spec の post の job の節を直す。`always()` と書いているところを `!cancelled()` にする。意図は「失敗を越えて走るが、取り消しは尊重する」で、`always()` は run の取り消しの後も投稿しうる。実装は `!cancelled()` になっている。spec は今回は直さず、スナップショットとして残してこのタスクで追う。plan の Task 8 の Step 1 も `always()` と書いているが、実装が正で、plan はスナップショットとして追わない
 - [ ] spec の select の job の節を、select が criteria のファイルを読んで確かめる実装に合わせて直す。呼び出し側のリポジトリの checkout を select が使う範囲 (「設定のファイルと呼び出しの workflow のファイルだけ」) に criteria のファイルを足し、設定の誤りの列挙 (`config-error` で終わるもの) に、criteria のパスの形の誤り (絶対パス・`..`・`.`・空の segment・`.git`) と、criteria のファイルが読めないか中身が空のときを足す。glob の形の誤りに `.`・空の segment・`.git` を足す
+  - 設定の誤りの列挙に、パスに NUL や UTF-8 で表せない文字を含むときと、criteria の経路のどこかが symlink のとき (指す先がリポジトリの中のふつうのファイルでも) を足す。criteria は道具の読み取りと同じ読み手 (tech-briefing/tech_briefing/repo_paths.py の `read_regular`) で読み、symlink を辿らない
+  - spec の「置き場とモジュールの分け方」の「アダプタと入口のスクリプトはこのリポジトリの CI のテストから import しない」を、「依存のあるアダプタ (anthropic_client・yaml_loader) は CI のテストから読まない。依存の無いアダプタは importlib でファイルから読んでよい」に直す (tech-briefing/tests/test_adapters_stdlib.py が依存の無いアダプタを読む)
 - [ ] spec の「実装のときに確かめること」を片付ける。解消した項目は解消として spec に書き、残る項目は実物の run で確かめる
   - 解消: `job.workflow_repository` と `job.workflow_sha` は実在する (docs.github.com の原文で確認。GitHub Enterprise Server では使えない)。ただし step の `env:` と `with:` で効くかは上の実物の run で確かめる。docs の原文だけが根拠で、実物の run では確かめていない
   - 解消: environment の鍵は、呼び出し側が名前で渡せば呼ばれた側の job に届く (docs.github.com の reuse-workflows に "You can pass a secret by name even if it only exists in the environment" と "the environment secret takes precedence" とある)。docs の原文だけが根拠で、実物の run では確かめていない

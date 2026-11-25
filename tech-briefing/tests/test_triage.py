@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from fakes import FakeFetcher, FakeMessages  # noqa: E402
 from tech_briefing.config import Config, FileRule  # noqa: E402
 from tech_briefing.constants import BETA, EFFORT, FALLBACKS, MODEL  # noqa: E402
+from tech_briefing.shapes import as_int  # noqa: E402
 from tech_briefing.tools import ERROR_PREFIX, REPORT_SCHEMA, ToolBox  # noqa: E402
 from tech_briefing.triage import (  # noqa: E402
     DO_NOT_FOLLOW,
@@ -440,6 +441,16 @@ class MatchesSchema(unittest.TestCase):
             with self.subTest(schema=schema):
                 with self.assertRaises(ValueError):
                     matches_schema(value, schema)
+
+
+class AsInt(unittest.TestCase):
+    def test_table(self):
+        # usage の合計と post の投稿先の番号の両方がこの読み方を使う
+        rows = [(3, 3), (0, 0), (-1, -1), (True, None), (False, None), (None, None), ("3", None), (3.0, None)]
+        for value, expected in rows:
+            with self.subTest(value=value):
+                self.assertEqual(as_int(value), expected)
+                self.assertIs(type(as_int(value)), type(expected))
 
 
 if __name__ == "__main__":

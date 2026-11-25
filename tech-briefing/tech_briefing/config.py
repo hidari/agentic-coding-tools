@@ -4,6 +4,7 @@
 import re
 from dataclasses import dataclass
 
+from tech_briefing import repo_paths
 from tech_briefing.constants import DENY_HOSTS, DENY_SUFFIXES
 
 REGISTRIES = ("npm", "crates", "pypi")
@@ -66,26 +67,22 @@ def _domain(value: object) -> str:
     return host
 
 
-def is_git_name(name: str) -> bool:
-    """パスの1つの component が .git か。"""
-    # 大小を区別しない FS (macOS の既定) では .GIT も .git と同じ実体を指すので、casefold して比べる
-    return name.casefold() == ".git"
+_PATH_MESSAGES = {
+    repo_paths.UNREPRESENTABLE: "{name} に NUL や UTF-8 で表せない文字は使えません: {value!r}",
+    repo_paths.OUTSIDE: "{name} はリポジトリの外を指せません (絶対パスと .. は不可): {value!r}",
+    repo_paths.NON_CANONICAL: "{name} に . や空の segment は使えません: {value!r}",
+    repo_paths.GIT: "{name} に .git は使えません: {value!r}",
+}
 
 
 def _rel_path(value: object, name: str) -> str:
-    """リポジトリの root からの正規形の相対パス (glob を含んでよい) だけを受ける。"""
+    """リポジトリの root からの正規形の相対パス (glob を含んでよい) だけを受ける。規則は repo_paths が持つ。"""
     if not isinstance(value, str) or not value:
         raise ConfigError(f"{name} は空でない文字列にしてください: {value!r}")
-    parts = value.split("/")
-    if value.startswith("/") or ".." in parts:
-        raise ConfigError(f"{name} はリポジトリの外を指せません (絶対パスと .. は不可): {value!r}")
-    # ToolBox は正規形の相対パスに glob を当てるので、. や空の segment を含む glob はどのファイルにも当たらず、
-    # 検索が黙って0件になる
-    if any(p in ("", ".") for p in parts):
-        raise ConfigError(f"{name} に . や空の segment は使えません: {value!r}")
-    # .git/config には checkout の認証情報が残りうる (未確認) ので、criteria の中身として LLM へ送らせない
-    if any(is_git_name(p) for p in parts):
-        raise ConfigError(f"{name} に .git は使えません: {value!r}")
+    try:
+        repo_paths.canonical_parts(value)
+    except repo_paths.PathShapeError as e:
+        raise ConfigError(_PATH_MESSAGES[e.reason].format(name=name, value=value)) from None
     return value
 
 

@@ -229,7 +229,8 @@ class RunSelect(unittest.TestCase):
                 self.assertIn(CRITERIA_PATH, d.summary)
 
     def test_criteria_shape_is_config_error_before_reading(self):
-        for v in ("../secret.md", ".git/config", "a/.GIT/config", "./criteria.md", "a//b.md"):
+        nul, surrogate = chr(0x00), chr(0xD800)
+        for v in ("../secret.md", ".git/config", "a/.GIT/config", "./criteria.md", "a//b.md", f"a{nul}.md", f"a{surrogate}.md"):
             with self.subTest(v):
                 d = self.go(raw=dict(self.RAW, criteria=v))
                 self.assert_config_error_without_api(d)

@@ -10,3 +10,8 @@ def as_dict(value: object) -> dict:
 
 def as_list(value: object) -> list:
     return value if isinstance(value, list) else []
+
+
+def as_int(value: object) -> int | None:
+    # bool は int の subclass だが、JSON の true / false を数や番号として読まない
+    return value if isinstance(value, int) and not isinstance(value, bool) else None

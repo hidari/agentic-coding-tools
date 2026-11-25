@@ -22,6 +22,7 @@ from tech_briefing.constants import (
     MODEL,
 )
 from tech_briefing.protocols import MessagesClient
+from tech_briefing.shapes import as_dict, as_int
 from tech_briefing.tools import ERROR_PREFIX, REPORT_SCHEMA, SUBMIT_REPORT, ToolBox
 
 # streaming を使わない要求の値として 16000 (仮の値)。実際の run の usage を見て決め直す
@@ -181,19 +182,13 @@ def matches_schema(value: object, schema: dict) -> bool:
     return _matches(value, schema)
 
 
-def _int(value: object) -> int:
-    # 欠けた欄や null の欄 (API が返すかは未確認) で合計が落ちないよう、守りとして 0 に数える。bool は数に数えない
-    return value if isinstance(value, int) and not isinstance(value, bool) else 0
-
-
 def _add_usage(total: dict, usage: object) -> None:
-    usage = usage if isinstance(usage, dict) else {}
+    # 欠けた欄や null の欄 (API が返すかは未確認) で合計が落ちないよう、数でない値は守りとして 0 に数える
+    usage = as_dict(usage)
     for key in _TOKEN_KEYS:
-        total[key] += _int(usage.get(key))
-    server = usage.get("server_tool_use")
-    if isinstance(server, dict):
-        for key, value in server.items():
-            total["server_tool_use"][key] = total["server_tool_use"].get(key, 0) + _int(value)
+        total[key] += as_int(usage.get(key)) or 0
+    for key, value in as_dict(usage.get("server_tool_use")).items():
+        total["server_tool_use"][key] = total["server_tool_use"].get(key, 0) + (as_int(value) or 0)
 
 
 def run_triage(client: MessagesClient, params: dict, toolbox: ToolBox, limits: Limits) -> Outcome:

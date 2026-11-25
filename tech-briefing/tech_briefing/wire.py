@@ -2,7 +2,7 @@
 
 GitHubApi の契約 (全ページを読む・pull request を除く・created_at は Z の形) と、Fetcher の契約
 (応答の大きさの上限・JSON でない応答は FetchError) の判定をここに置き、アダプタは urllib で
-読み書きするだけにする。アダプタはテストから import しないので、判定をここに置けばテストが届く。
+読み書きするだけにする。判定をここに置けば、アダプタと Fake の両方の側のテストが同じ判定に届く。
 """
 
 import json
@@ -33,6 +33,11 @@ def _repo(repo: str) -> str:
     if len(parts) != 2 or not all(is_repo_segment(p) for p in parts):
         raise ValueError(f"リポジトリの名前が owner/repo の形ではありません: {repo!r}")
     return repo
+
+
+def is_api_url(url: object) -> bool:
+    """token を付けて送ってよい URL か (API の root の下の https)。ホスト名の前方一致で別のホストを通さないよう / まで見る。"""
+    return isinstance(url, str) and url.startswith(API_ROOT + "/")
 
 
 def issues_url(repo: str) -> str:
@@ -71,7 +76,7 @@ def paginate(get_page: Callable[[str], tuple[object, str | None]], url: str, max
         if url is None:
             return items
         # token を付けて送るので、次のページも同じ API の root の下に限る
-        if not url.startswith(API_ROOT + "/"):
+        if not is_api_url(url):
             raise ValueError("次のページの URL が API の root の外を指しています")
     raise ValueError(f"ページが {max_pages} を超えました")
 

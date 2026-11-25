@@ -19,12 +19,6 @@ MAX_PAGE_BYTES = 20 * 1024 * 1024
 API_VERSION = "2022-11-28"
 
 
-class GitHubError(Exception):
-    def __init__(self, message: str, status: int | None):
-        super().__init__(message)
-        self.status = status
-
-
 class GitHubRest:
     def __init__(self, token: str, repo: str):
         if not token:
@@ -34,8 +28,8 @@ class GitHubRest:
         self._opener = opener()
 
     def _request(self, method: str, url: str, body: dict | None = None) -> tuple[object, str | None]:
-        if not url.startswith(wire.API_ROOT + "/"):
-            raise GitHubError("API の root の外へは token を送りません", None)
+        if not wire.is_api_url(url):
+            raise FetchError("API の root の外へは token を送りません")
         data = None if body is None else json.dumps(body).encode("utf-8")
         req = urllib.request.Request(url, data=data, method=method)
         req.add_header("Accept", "application/vnd.github+json")
@@ -44,14 +38,12 @@ class GitHubRest:
         req.add_header("Authorization", f"Bearer {self._token}")
         if data is not None:
             req.add_header("Content-Type", "application/json")
+        # redirect の拒否と、大きさ・JSON の誤りは FetchError のまま上がる
         try:
             with self._opener.open(req, timeout=GITHUB_TIMEOUT_SECONDS) as resp:
                 return wire.read_json_limited(resp, MAX_PAGE_BYTES), resp.headers.get("Link")
         except urllib.error.HTTPError as e:
-            raise GitHubError(f"GitHub の API が HTTP {e.code} を返しました: {method} {url}", e.code) from None
-        except FetchError as e:
-            # redirect の拒否と、大きさ・JSON の誤り
-            raise GitHubError(f"GitHub の API の応答を受けられません: {e}", e.status) from None
+            raise FetchError(f"GitHub の API が HTTP {e.code} を返しました: {method} {url}", e.code) from None
 
     def _get_page(self, url: str) -> tuple[object, str | None]:
         return self._request("GET", url)

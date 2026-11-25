@@ -13,10 +13,11 @@ REJECT = [
     "github.com\n", "user.github.io\n", "docs.python.org\n", "github.com\t", " github.com",
 ]
 ACCEPT = ["docs.github.com", "docs.python.org", "nvd.nist.gov", "osv.dev"]
-# criteria と glob に共通のパスの形の規則
+# criteria と glob と道具の path に共通のパスの形の規則 (test_tools の SharedPathRule も同じ表を使う)。
+# NUL と孤立したサロゲートは OS のパスへ変換できない。見えない文字なので code point で組む
 REJECT_PATHS = [
     "/abs", "../x", "a/../b", "./package.json", "a/./b", "a//package.json", "a/", ".git/config",
-    ".git/**", "a/.GIT/config", "b/.Git/*", ".git",
+    ".git/**", "a/.GIT/config", "b/.Git/*", ".git", "a" + chr(0x00) + "b", "a/" + chr(0xD800) + ".md",
 ]
 ACCEPT_PATHS = ["docs/criteria.md", ".github/criteria.md", ".gitignore", "a/.gitx/b"]
 

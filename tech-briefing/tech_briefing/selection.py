@@ -4,15 +4,14 @@
 """
 
 from dataclasses import dataclass
-from typing import Callable
 from datetime import datetime
+from typing import Callable
 from zoneinfo import ZoneInfo
 
 from tech_briefing.caller_check import check_caller
 from tech_briefing.config import ConfigError, load_config
 from tech_briefing.constants import (
     BOT_LOGIN,
-    MARKER,
     SELECT_ALREADY_PROCESSED,
     SELECT_CONFIG_ERROR,
     SELECT_INPUT_TOO_LARGE,
@@ -25,8 +24,8 @@ from tech_briefing.constants import (
     TIMEZONE,
     TITLE_PREFIX,
 )
+from tech_briefing.marker import is_bot_report, is_marked
 from tech_briefing.protocols import CommentRef, GitHubApi, IssueRef
-from tech_briefing.render import is_bot_report
 from tech_briefing.textproc import extract_advisory_ids, replace_urls
 
 
@@ -52,10 +51,6 @@ def is_red(result: str) -> bool:
     return result in SELECT_RED_RESULTS
 
 
-def _is_marked(comment: CommentRef) -> bool:
-    return comment.body.lstrip().startswith(MARKER)
-
-
 def _same_login(a: str, b: str) -> bool:
     # GitHub のログインは大文字小文字を区別しない
     return a.casefold() == b.casefold()
@@ -72,10 +67,15 @@ def _decision(result: str, issue: IssueRef | None, summary: str, input_: dict | 
 
 
 def _build_input(issue: IssueRef, comments: list[CommentRef], author: str):
-    """入力の dict と原文の文字数を返す。印で始まるコメントはどのアカウントのものも外す。"""
+    """入力の dict と原文の文字数を返す。
+
+    入力に載せるのは指定アカウントのコメントだけ。そのうち印で始まるもの (書き込みの名義を装ったもの) を外し、
+    外した件数を数える。ほかのアカウントのコメントは印の有無を問わず最初から載せない。
+    名義を問わない is_marked で外す。is_bot_report で外すと、指定アカウントの印付きのコメントが入力に残る
+    """
     by_author = [c for c in comments if _same_login(c.author, author)]
-    removed = sum(1 for c in by_author if _is_marked(c))
-    kept = sorted((c for c in by_author if not _is_marked(c)), key=lambda c: c.created_at)
+    removed = sum(1 for c in by_author if is_marked(c))
+    kept = sorted((c for c in by_author if not is_marked(c)), key=lambda c: c.created_at)
     body = issue.body or ""
     size = len(body) + sum(len(c.body) for c in kept)
     # ID の取り出しは URL の置き換えより先。置き換えで URL 内の ID が消えるため

@@ -22,15 +22,13 @@ sys.path.insert(0, str(TB_ROOT))
 
 from tech_briefing import jobio  # noqa: E402
 from tech_briefing.render import plan_post, should_post  # noqa: E402
+from tech_briefing.shapes import as_dict, as_int  # noqa: E402
 from tech_briefing.workflow_def import FAILURE_FILE, INPUT_FILE, REPORT_FILE  # noqa: E402
 
 
 def _target(select_dir: Path) -> int | None:
-    data = jobio.read_json_or_none(select_dir / INPUT_FILE)
-    number = data.get("issue_number") if isinstance(data, dict) else None
-    if isinstance(number, int) and not isinstance(number, bool) and number > 0:
-        return number
-    return None
+    number = as_int(as_dict(jobio.read_json_or_none(select_dir / INPUT_FILE)).get("issue_number"))
+    return number if number is not None and number > 0 else None
 
 
 def main(env, deps) -> int:

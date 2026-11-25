@@ -9,10 +9,12 @@ from urllib.parse import urlsplit
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from fakes import FakeFetcher, UnexpectedUrl  # noqa: E402
-from tech_briefing.config import Config, FileRule  # noqa: E402
+from test_config import ACCEPT_PATHS, REJECT_PATHS, valid  # noqa: E402
+from tech_briefing.config import Config, ConfigError, FileRule, load_config  # noqa: E402
 from tech_briefing.constants import WEB_FETCH_TOOL, WEB_SEARCH_TOOL  # noqa: E402
 from tech_briefing.protocols import FetchError  # noqa: E402
 from tech_briefing.tools import (  # noqa: E402
+    _PATH_MESSAGES,
     ERROR_PREFIX,
     REPO_UNKNOWN,
     REPORT_SCHEMA,
@@ -147,6 +149,41 @@ class ReadFile(RepoCase):
             with self.subTest(search=path):
                 self.assertNotIn(path, out)
         self.assertNotIn("token", out)
+
+
+class SharedPathRule(RepoCase):
+    """設定の criteria・files・issues_glob と read_file の path が、同じ正規形の規則で受け、同じ規則で拒む。"""
+
+    def config_positions(self, v):
+        return {
+            "criteria": valid(criteria=v),
+            "files": valid(files=[v]),
+            "files mapping": valid(files=[{"glob": v, "search": True}]),
+            "issues_glob": valid(issues_glob=v),
+        }
+
+    def test_rejected_everywhere(self):
+        b = self.box(config(files=(FileRule("*", True),)))
+        for v in REJECT_PATHS:
+            for position, raw in self.config_positions(v).items():
+                with self.subTest(v=v, position=position):
+                    with self.assertRaises(ConfigError):
+                        load_config(raw)
+            with self.subTest(v=v, position="read_file"):
+                out = b.call("read_file", {"path": v})
+                # 形の規則の文面で止まっている。ファイルを開きに行って失敗したのではない
+                self.assertIn(out.removeprefix(ERROR_PREFIX), set(_PATH_MESSAGES.values()), out)
+                self.assertTrue(out.startswith(ERROR_PREFIX), out)
+
+    def test_accepted_everywhere(self):
+        b = self.box(config(files=(FileRule("*", True),)))
+        for v in ACCEPT_PATHS:
+            self.write(v, f"中身 {v}\n")
+            for position, raw in self.config_positions(v).items():
+                with self.subTest(v=v, position=position):
+                    load_config(raw)
+            with self.subTest(v=v, position="read_file"):
+                self.assertEqual(b.call("read_file", {"path": v}), f"中身 {v}\n")
 
 
 class SearchFiles(RepoCase):

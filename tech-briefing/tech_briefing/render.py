@@ -8,7 +8,6 @@ import re
 import unicodedata
 
 from tech_briefing.constants import (
-    BOT_LOGIN,
     CLASSIFICATIONS,
     FAIL_INTERNAL_ERROR,
     FAILURE_KINDS,
@@ -17,7 +16,8 @@ from tech_briefing.constants import (
     SELECT_TRIAGE,
     SELECT_UNEXPECTED,
 )
-from tech_briefing.protocols import CommentRef, GitHubApi
+from tech_briefing.marker import is_bot_report
+from tech_briefing.protocols import GitHubApi
 from tech_briefing.shapes import as_dict, as_list
 
 # 見えない文字は code point で組む。リテラルで書くとエディタや差分で見分けがつかなくなる
@@ -151,14 +151,6 @@ def render_unexpected() -> str:
 
 def render_too_large() -> str:
     return f"{MARKER}\n{_TOO_LARGE_BODY}\n"
-
-
-def is_bot_report(comment: CommentRef) -> bool:
-    """書き込みの名義の、印で始まるコメントか (処理済みの印)。名義は完全一致で比べる。
-
-    select の処理済みの判定と post の直前の再確認の両方がこれを使い、2つの判定を食い違わせない。
-    """
-    return comment.author == BOT_LOGIN and comment.body.lstrip().startswith(MARKER)
 
 
 def should_post(api: GitHubApi, number: int) -> bool:
