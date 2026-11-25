@@ -106,10 +106,12 @@ def decide(api: GitHubApi, author: str, now_utc: datetime, max_input_chars: int)
     mine = [i for i in exact if _same_login(i.author, author)]
 
     if not mine:
+        # 接頭辞は末尾の空白を外して比べる。空白が無い・タブになった形も「近い」に入れ、no-issue の緑で見逃さない
+        prefix = TITLE_PREFIX.rstrip()
         near = [
             i
             for i in issues
-            if _same_login(i.author, author) and i.title.startswith(TITLE_PREFIX) and date in i.title
+            if _same_login(i.author, author) and i.title.startswith(prefix) and date in i.title
         ]
         # 指定アカウントの近いタイトルは、他者の完全一致より先に見る。形が変わった投稿を緑で見逃さないため
         if near:

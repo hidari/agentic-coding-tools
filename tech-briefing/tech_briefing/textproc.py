@@ -12,7 +12,8 @@ _ID_PATTERN = re.compile(
     r"GHSA(?:-[a-z0-9]{4}){3}(?![a-z0-9])"
     r"|CVE-\d{4}-\d{4,}"
     r"|RUSTSEC-\d{4}-\d{4}(?!\d)",
-    re.IGNORECASE,
+    # ASCII を付けないと、大小を区別しない照合がケルビン記号を k と、\d が ASCII の外の数字を拾う
+    re.IGNORECASE | re.ASCII,
 )
 
 # URL の終端: 空白・閉じ括弧類・全角の句読点と全角空白。
@@ -22,7 +23,12 @@ _URL_PATTERN = re.compile(
     # [text](url) と <url> は囲み記号ごと 1 つの置き換えにする
     r"\[[^\]]*\]\(\s*(?P<md>" + _URL_BODY + r")[^)]*\)"
     r"|<(?P<angle>https?://[^\s>]+)>"
-    r"|(?P<bare>" + _URL_BODY + r")"
+    r"|(?P<bare>" + _URL_BODY + r")",
+    # スキームは大小を区別しない (RFC 3986)。大文字のスキームが GitHub でリンクになることは
+    # final review の指摘によるもので、実物では確かめていない。
+    # ASCII は付けない。付けると \s が NBSP などの ASCII の外の空白を含まなくなり、URL がそこで終わらなくなる
+    # (全角空白は終端の文字クラスに明示で入れてあるので変わらない)
+    re.IGNORECASE,
 )
 # URL の一部ではなく文の句読点として扱う末尾の ASCII 文字
 _TRAILING_PUNCT = ".,;:!?"
@@ -44,7 +50,8 @@ def extract_advisory_ids(text: str) -> list[str]:
 
 
 def _link(url: str) -> str:
-    # 国際化ドメインは書かれたまま残す (punycode へ変換しない)
+    # 国際化ドメインは punycode へ変換しない。ただし hostname は小文字にして返すので
+    # (urllib.parse の hostname の挙動。2026-11-25 に Python 3.15 で確認)、大文字は書かれたままには残らない
     # 信頼できない入力なので urlsplit の ValueError (不正な IPv6 括弧、NFKC で
     # 区切りに化けるホストなど) で落とさない。ホストが取れなければ固定の表現にする
     try:

@@ -1,7 +1,7 @@
 """LLM が書いた文字列の無害化と、投稿するコメントの整形、post の判定。
 
 post の job は issues: write を持つ唯一の job なので、LLM の文字列がメンション・他 Issue への自動リンク・
-HTML・Markdown のリンク・表の列の増加になる経路をここで塞ぐ。ここの関数は例外を上げず、常に str を返す。
+HTML・Markdown のリンク・表の列の増加・表示の順の入れ替えになる経路をここで塞ぐ。ここの関数は例外を上げず、常に str を返す。
 """
 
 import re
@@ -21,8 +21,22 @@ from tech_briefing.protocols import GitHubApi
 _ZWSP = chr(0x200B)
 _LONE_SURROGATE = re.compile("[" + chr(0xD800) + "-" + chr(0xDFFF) + "]")
 _NEWLINE = re.compile("\r\n|[\r\n\x0b\x0c\x85" + chr(0x2028) + chr(0x2029) + "]")
-# select が URL を置き換え済みなので裸の URL は来ないはずだが、自動リンクを二重に防ぐ
-_URL_SCHEME = re.compile(r"(https?:)(?=//)", re.IGNORECASE)
+# 改行とタブ以外の C0 制御文字と、双方向の埋め込み・上書き・分離の制御文字 (U+202A-202E、U+2066-2069)。
+# 双方向の制御は表示の順を入れ替えて、読み手が見る文字列と実際の文字列を食い違わせる。
+# 0x0b と 0x0c は _NEWLINE が先に空白にするので、ここでは数えない
+_CONTROL = re.compile(
+    "[\x00-\x08\x0e-\x1f" + chr(0x202A) + "-" + chr(0x202E) + chr(0x2066) + "-" + chr(0x2069) + "]"
+)
+# select が URL を置き換え済みなので裸の URL は来ないはずだが、自動リンクを二重に防ぐ。
+# https に限らず、// が続くスキームの形 (RFC 3986 の scheme) はすべて逃がす
+_URL_SCHEME = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*:)(?=//)")
+# スキーム無しの www. がリンクに、GH- と数字が Issue の参照になる形を、直後に見えない文字を入れて切る。
+# GitHub がそう解釈することは final review の指摘によるもので、実物では確かめていない (Issue の実物の確かめのタスクで見る)
+# 語の頭だけを見る。語の途中 (high-severity や awww.) まで切るとふつうの語の検索やコピーを壊す。
+# 境界は \b ではなく「直前が ASCII の英数字でない」にする。\b は _ と日本語を語の文字とみなすが、
+# GFM の仕様の autolinks の節は _ や * の直後の www. もリンクにするため (仕様の記憶による。実物では未確認)。
+# GH- は数字が続くときだけ参照になる
+_AUTOLINK_PREFIX = re.compile(r"(?<![A-Za-z0-9])(?:www\.|gh-(?=[0-9]))", re.IGNORECASE)
 
 # 1 文字ずつの置き換え。1 回の走査で済ませ、追加した文字を後段が再び加工しないようにする。
 # 先に \ を潰さないと、LLM が書いた \| が自分の \ で | のエスケープを打ち消し、表の列が増える
@@ -65,7 +79,11 @@ _TOO_LARGE_BODY = "入力が上限を超えたため、自動の報告をしな�
 def sanitize(text: str) -> str:
     text = _LONE_SURROGATE.sub(chr(0xFFFD), str(text))
     text = _NEWLINE.sub(" ", text)
+    # 制御文字は見えない文字を入れる前に落とす。後に落とすと、制御文字で割った ww?w. や GH?- が
+    # 除去の後に素の形へ戻る
+    text = _CONTROL.sub("", text)
     text = _URL_SCHEME.sub(lambda m: m.group(1) + _ZWSP, text)
+    text = _AUTOLINK_PREFIX.sub(lambda m: m.group(0) + _ZWSP, text)
     return "".join(_CHAR_MAP.get(ch, ch) for ch in text)
 
 

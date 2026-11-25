@@ -1,6 +1,8 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["anthropic==2.7.0", "PyYAML==6.0.3"]
+# [tool.uv]
+# exclude-newer = "2026-11-10T00:00:00Z"
 # ///
 """triage の job の入口。select の input.json と呼び出し側の設定から要求を組み、Messages API とのループを回す。
 

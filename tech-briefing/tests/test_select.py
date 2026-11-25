@@ -50,6 +50,10 @@ class DecisionTable(unittest.TestCase):
             ("末尾改行は不一致", [issue(6, TITLE + "\n")], {}, "title-mismatch", 6),
             ("完全一致があれば mismatch にならない", [issue(1), near], {}, "triage", 1),
             ("他者の近いタイトルは mismatch にしない", [issue(7, near.title, author="someone")], {}, "no-issue", None),
+            ("接頭辞の後に空白なし", [issue(8, "[tech-briefing]2026-11-24")], {}, "title-mismatch", 8),
+            ("接頭辞の後に空白2つ", [issue(9, "[tech-briefing]  2026-11-24")], {}, "title-mismatch", 9),
+            ("接頭辞の後にタブ", [issue(10, "[tech-briefing]\t2026-11-24")], {}, "title-mismatch", 10),
+            ("別の接頭辞で日付を含む", [issue(11, "[other-briefing] 2026-11-24")], {}, "no-issue", None),
         ]
         for name, issues, comments, result, number in rows:
             with self.subTest(name):

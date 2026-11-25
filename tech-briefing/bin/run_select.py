@@ -1,6 +1,8 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["PyYAML==6.0.3"]
+# [tool.uv]
+# exclude-newer = "2026-11-10T00:00:00Z"
 # ///
 """select の job の入口。設定と呼び出しの workflow を読み、当日の Issue を判定して input.json を書く。
 

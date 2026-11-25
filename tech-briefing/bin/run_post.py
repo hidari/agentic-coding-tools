@@ -1,6 +1,8 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = []
+# [tool.uv]
+# exclude-newer = "2026-11-10T00:00:00Z"
 # ///
 """post の job の入口。select と triage の artifact から本文を作り、当日の Issue に印付きのコメントを1件書く。
 

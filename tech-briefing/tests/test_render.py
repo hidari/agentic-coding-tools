@@ -82,6 +82,93 @@ class SanitizeTest(unittest.TestCase):
         self.assertEqual(sanitize("https://x"), "https:" + ZWSP + "//x")
         self.assertEqual(sanitize("HTTP://x"), "HTTP:" + ZWSP + "//x")
 
+    def test_any_scheme_gets_invisible_char_after_colon(self):
+        cases = {
+            "ftp://evil.example/x": "ftp:" + ZWSP + "//evil.example/x",
+            "FTP://evil.example/x": "FTP:" + ZWSP + "//evil.example/x",
+            "git+ssh://evil.example/x": "git+ssh:" + ZWSP + "//evil.example/x",
+            "a.b-c://x": "a.b-c:" + ZWSP + "//x",
+        }
+        for src, want in cases.items():
+            with self.subTest(src=src):
+                self.assertEqual(sanitize(src), want)
+        # 対照: // が続かないコロンと、英字を1つも含まないスキームの形には足さない
+        self.assertEqual(sanitize("note: a/b"), "note: a/b")
+        self.assertEqual(sanitize("+://y"), "+://y")
+        # 数字で始まる形は、英字から始まる後ろの部分がスキームの形になるので足す
+        self.assertEqual(sanitize("1x://y"), "1x:" + ZWSP + "//y")
+
+    def test_www_and_gh_reference_get_invisible_char(self):
+        cases = {
+            "www.evil.example/login": "www." + ZWSP + "evil.example/login",
+            "WWW.evil.example": "WWW." + ZWSP + "evil.example",
+            "GH-123": "GH-" + ZWSP + "123",
+            "gh-123": "gh-" + ZWSP + "123",
+            "see Gh-9 and wWw.x": "see Gh-" + ZWSP + "9 and wWw." + ZWSP + "x",
+            "https://www.x": "https:" + ZWSP + "//www." + ZWSP + "x",
+            "www.x://y": "www." + ZWSP + "x:" + ZWSP + "//y",
+        }
+        for src, want in cases.items():
+            with self.subTest(src=src):
+                self.assertEqual(sanitize(src), want)
+        # 対照: ドットやハイフンが無い形は変えない
+        self.assertEqual(sanitize("www gh 123"), "www gh 123")
+
+    def test_www_and_gh_only_at_word_start(self):
+        # 語の途中の gh- と www. は、ふつうの語を壊さないように無加工で残す
+        for src in ("high-severity", "awww.example", "GH-x", "gh-", "1www.x", "agh-1"):
+            with self.subTest(kept=src):
+                self.assertEqual(sanitize(src), src)
+        # 英数字以外の直後は語の頭として扱う。GFM は _ や * の直後の www. もリンクにするので、
+        # \b (_ と日本語を語の文字とみなす) では切らない
+        cases = {
+            "GH-123": "GH-" + ZWSP + "123",
+            "gh-7": "gh-" + ZWSP + "7",
+            "www.x": "www." + ZWSP + "x",
+            "_www.x_": "_www." + ZWSP + "x_",
+            "影響はwww.x": "影響はwww." + ZWSP + "x",
+            "参照gh-5": "参照gh-" + ZWSP + "5",
+        }
+        for src, want in cases.items():
+            with self.subTest(src=src):
+                self.assertEqual(sanitize(src), want)
+
+    def test_bidi_controls_are_removed(self):
+        for cp in list(range(0x202A, 0x202F)) + list(range(0x2066, 0x206A)):
+            with self.subTest(cp=hex(cp)):
+                self.assertEqual(sanitize("a" + chr(cp) + "b"), "ab")
+        # 対照: 範囲のすぐ外は残す (0x2029 は段落の区切りで改行として扱うので外す)
+        for cp in (0x202F, 0x2065, 0x206A):
+            with self.subTest(outside=hex(cp)):
+                self.assertEqual(sanitize("a" + chr(cp) + "b"), "a" + chr(cp) + "b")
+
+    def test_c0_controls_other_than_newline_and_tab_are_removed(self):
+        # 0x0a・0x0b・0x0c・0x0d は改行として空白にする (test_newlines_become_one_space_each と同じ扱い)
+        newlines = {0x0A, 0x0B, 0x0C, 0x0D}
+        for cp in range(0x00, 0x20):
+            if cp == 0x09 or cp in newlines:
+                continue
+            with self.subTest(cp=hex(cp)):
+                self.assertEqual(sanitize("a" + chr(cp) + "b"), "ab")
+        for cp in newlines:
+            with self.subTest(newline=hex(cp)):
+                self.assertEqual(sanitize("a" + chr(cp) + "b"), "a b")
+        # 対照: タブと空白と DEL は残す
+        self.assertEqual(sanitize("a\tb c" + chr(0x7F)), "a\tb c" + chr(0x7F))
+
+    def test_controls_are_removed_before_inserting_invisible_chars(self):
+        # 逆の順だと、制御文字で割った ww?w. や GH?- が除去の後に素の形へ戻る
+        nul = chr(0x00)
+        rlo = chr(0x202E)
+        cases = {
+            "ww" + nul + "w.evil.example": "www." + ZWSP + "evil.example",
+            "GH" + rlo + "-123": "GH-" + ZWSP + "123",
+            "https" + nul + "://x": "https:" + ZWSP + "//x",
+        }
+        for src, want in cases.items():
+            with self.subTest(src=ascii(src)):
+                self.assertEqual(sanitize(src), want)
+
     def test_lone_surrogate_is_replaced(self):
         out = sanitize("a" + chr(0xD800) + "b")
         out.encode("utf-8")

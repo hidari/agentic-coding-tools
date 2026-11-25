@@ -10,6 +10,7 @@ import re
 import sys
 import tomllib
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -22,6 +23,8 @@ RUNTIME_DEPS = {"adapters", "anthropic", "yaml"}
 # PEP 723 の参照の実装の正規表現 (packaging.python.org の inline script metadata、2026-11-24 時点の仕様)
 _PEP723 = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
 _PIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*==[0-9][0-9A-Za-z.+!-]*")
+# uv の exclude-newer に置く RFC 3339 の UTC の時刻 (秒まで、Z で終わる形に限る)
+_UTC_TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 
 
 def py_files(root: Path) -> list[Path]:
@@ -148,6 +151,30 @@ class Pep723(unittest.TestCase):
         # SDK を使うのは triage の入口だけ
         triage = [d for d in pep723(TB / "bin" / "run_triage.py")["dependencies"] if d.startswith("anthropic")]
         self.assertEqual(triage, ["anthropic==2.7.0"])
+
+    def test_each_script_has_the_same_exclude_newer(self):
+        # dependencies は直接の依存しか固定しない。uv の exclude-newer で、解決に考える配布をその時刻より前に絞る
+        # (docs.astral.sh/uv/guides/scripts、2026-11-25 確認)。間接の依存まで効くかは docs に明記が無いので、
+        # hash までの固定は Issue の準備のタスクの script の lock で扱う。値は anthropic 2.7.0 の wheel の公開 (2026-11-09) の後
+        values = set()
+        for path in workflow_scripts():
+            with self.subTest(path.name):
+                value = pep723(path).get("tool", {}).get("uv", {}).get("exclude-newer")
+                # 引用符が無いと tomllib は datetime にする。uv が読む形は文字列
+                self.assertIsInstance(value, str)
+                self.assertIsNotNone(_UTC_TIMESTAMP.fullmatch(value), value)
+                values.add(value)
+        self.assertEqual(len(values), 1, values)
+        (value,) = values
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        self.assertEqual(parsed.utcoffset(), timedelta(0))
+        self.assertGreater(parsed, datetime(2026, 11, 9, 18, 52, tzinfo=timezone.utc))
+
+    def test_timestamp_shape_rejects_date_only_and_offsets(self):
+        self.assertIsNotNone(_UTC_TIMESTAMP.fullmatch("2026-11-10T00:00:00Z"))
+        for bad in ("2026-11-10", "2026-11-10T09:00:00+09:00", "2026-11-10T00:00:00", "2026-11-10 00:00:00Z"):
+            with self.subTest(bad):
+                self.assertIsNone(_UTC_TIMESTAMP.fullmatch(bad))
 
     def test_parser_rejects_unpinned(self):
         self.assertIsNone(_PIN.fullmatch("anthropic>=0.79"))

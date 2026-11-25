@@ -27,6 +27,22 @@ class AdvisoryIds(unittest.TestCase):
     def test_ghsa_is_lowercase_body_as_written(self):
         self.assertEqual(extract_advisory_ids("ghsa-abcd-efgh-ijkl"), ["GHSA-abcd-efgh-ijkl"])
 
+    def test_non_ascii_digits_and_kelvin_sign_are_not_ids(self):
+        # 大小を区別しない照合は Unicode の既定だとケルビン記号を k と、\d はアラビア・インドの数字を数字とみなす
+        kelvin = chr(0x212A)
+        arabic = chr(0x0662) * 4
+        cases = [
+            "GHSA-abcd-efgh-ij" + kelvin + "l",
+            "CVE-" + arabic + "-12345",
+            "CVE-2026-" + arabic + "5",
+            "RUSTSEC-2026-" + arabic,
+        ]
+        for src in cases:
+            with self.subTest(src=ascii(src)):
+                self.assertEqual(extract_advisory_ids(src), [])
+        # 対照: ASCII の同じ形は ID になる
+        self.assertEqual(extract_advisory_ids("GHSA-abcd-efgh-ijkl CVE-2222-12345"), ["GHSA-abcd-efgh-ijkl", "CVE-2222-12345"])
+
 
 class ReplaceUrls(unittest.TestCase):
     def test_url_forms_become_host_only(self):
@@ -39,6 +55,39 @@ class ReplaceUrls(unittest.TestCase):
         }
         for src, want in cases.items():
             self.assertEqual(replace_urls(src), want, src)
+
+    def test_scheme_is_matched_case_insensitively(self):
+        # 出力の完全一致で見る。<...> の枝が外れても裸の URL の枝が拾うので、URL が消えたことだけでは区別できない
+        cases = {
+            "[t](HTTPS://evil.example/p?q=1)": "[link: evil.example]",
+            "<HTTPS://evil.example/p?q=1>": "[link: evil.example]",
+            "see HTTPS://evil.example/p?q=1.": "see [link: evil.example].",
+            "[t](Http://evil.example/p)": "[link: evil.example]",
+            "<hTtP://evil.example/p>": "[link: evil.example]",
+            "Http://evil.example/p": "[link: evil.example]",
+        }
+        for src, want in cases.items():
+            with self.subTest(src=src):
+                self.assertEqual(replace_urls(src), want)
+
+    def test_bare_url_ends_at_non_ascii_whitespace(self):
+        # NBSP は \s に入るので URL の終端になる。re.ASCII を付けるとここで終わらなくなる
+        nbsp = chr(0xA0)
+        self.assertEqual(replace_urls("https://a.example/x" + nbsp + "y"), "[link: a.example]" + nbsp + "y")
+        self.assertEqual(replace_urls("HTTPS://a.example/x" + nbsp + "y"), "[link: a.example]" + nbsp + "y")
+
+    def test_bare_url_ends_before_closing_bracket_and_angle(self):
+        cases = {
+            "x https://a.example/p]y": "x [link: a.example]]y",
+            "x https://a.example/p>y": "x [link: a.example]>y",
+        }
+        for src, want in cases.items():
+            with self.subTest(src=src):
+                self.assertEqual(replace_urls(src), want)
+
+    def test_markdown_link_with_title_is_replaced_whole(self):
+        self.assertEqual(replace_urls('[t](https://a.example/p "title") after'), "[link: a.example] after")
+        self.assertEqual(replace_urls("[t]( https://a.example/p 'title' ) after"), "[link: a.example] after")
 
     def test_trailing_ascii_punctuation_stays_in_text(self):
         for p in ".,;:!?":
@@ -59,6 +108,8 @@ class ReplaceUrls(unittest.TestCase):
             "https://a\ufe56b/x": "[link: unknown]",
             "[t](https://[bad/x)": "[link: unknown]",
             "<https://a\ufe56b/x>": "[link: unknown]",
+            "HTTPS://[bad/x y": "[link: unknown] y",
+            "[t](HTTPS://[bad/x)": "[link: unknown]",
         }
         for src, want in cases.items():
             self.assertEqual(replace_urls(src), want, src)
