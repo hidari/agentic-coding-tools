@@ -9,14 +9,13 @@ import http.client
 import urllib.error
 import urllib.request
 
-from adapters.no_redirect import opener
+from adapters.http_common import USER_AGENT, opener
 from tech_briefing.protocols import FetchError
 from tech_briefing.wire import read_json_limited
 
-TIMEOUT_SECONDS = 20
+FETCH_TIMEOUT_SECONDS = 20
 # 道具の結果は tools の側でさらに切るので、ここは通信の天井 (registry の metadata の大きいものが入る大きさ)
 MAX_BYTES = 5 * 1024 * 1024
-USER_AGENT = "tech-briefing-triage"
 
 
 class UrllibFetcher:
@@ -28,7 +27,7 @@ class UrllibFetcher:
             raise FetchError("https の URL だけを開きます")
         req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT}, method="GET")
         try:
-            with self._opener.open(req, timeout=TIMEOUT_SECONDS) as resp:
+            with self._opener.open(req, timeout=FETCH_TIMEOUT_SECONDS) as resp:
                 return read_json_limited(resp, MAX_BYTES)
         except FetchError:
             raise

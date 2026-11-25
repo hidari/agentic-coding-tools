@@ -23,9 +23,14 @@ _LINK = re.compile(r"\s*<([^>]*)>\s*;(.*)")
 _REL = re.compile(r'rel="([^"]*)"')
 
 
+def is_repo_segment(value: str) -> bool:
+    """GitHub の owner / repo の名前の1つの segment として受ける形か。. と .. はパスとして別の意味になるので外す。"""
+    return _SEGMENT.fullmatch(value) is not None and value not in (".", "..")
+
+
 def _repo(repo: str) -> str:
     parts = repo.split("/") if isinstance(repo, str) else []
-    if len(parts) != 2 or not all(_SEGMENT.fullmatch(p) and p not in (".", "..") for p in parts):
+    if len(parts) != 2 or not all(is_repo_segment(p) for p in parts):
         raise ValueError(f"リポジトリの名前が owner/repo の形ではありません: {repo!r}")
     return repo
 

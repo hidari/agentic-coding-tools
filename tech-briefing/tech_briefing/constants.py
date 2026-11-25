@@ -46,6 +46,9 @@ SELECT_RED_RESULTS = (
     SELECT_CONFIG_ERROR,
 )
 
+# 報告の分類。報告の schema の enum と、投稿の本文に載せてよい値の両方がここから作る
+CLASSIFICATIONS = ("A", "B", "C", "D")
+
 # 失敗の種類
 FAIL_API_ERROR = "api-error"
 FAIL_LOOP_LIMIT = "loop-limit"

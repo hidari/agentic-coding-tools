@@ -49,7 +49,7 @@ Spec: `docs/issues/ISSUE-113_外部ツールが立てる技術情報の Issue �
 - `.github/workflows/tech-briefing-triage.yml`: 生成物
 - `.github/workflows/ci.yml` と `.pre-commit-config.yaml`: 生成物の drift の検査を足す
 
-### Task 1: 土台と、advisory の ID の取り出しと URL の置き換え
+### Task 1: パッケージと定数、advisory の ID の取り出しと URL の置き換え
 
 Files:
 - Create: `tech-briefing/tech_briefing/__init__.py`、`constants.py`、`textproc.py`
@@ -142,7 +142,7 @@ Interfaces:
 - Produces: `today_jst(now_utc: datetime) -> str`、`@dataclass(frozen=True) class Decision: result: str; issue: IssueRef | None; input: dict | None; summary: str`、`decide(api: GitHubApi, author: str, now_utc: datetime, max_input_chars: int) -> Decision`、`run_select(raw_config: object, caller_workflow: object, reusable: str, api: GitHubApi, author: str, now_utc: datetime, max_input_chars: int) -> tuple[Decision, Config | None]` (Task 2 の `load_config` と Task 3 の `check_caller` を先に当て、どちらかが誤りなら api を1度も呼ばずに `config-error`)、`is_red(result: str) -> bool`
 - Consumes (追加): Task 2 の `load_config` と `ConfigError`、Task 3 の `check_caller`
 
-- [ ] Step 1: 失敗するテストを書く。spec の判定表の6行と、足した2行 (`title-mismatch`、`author` が `github-actions[bot]` のときの `config-error`、`author` が空のときの `config-error`) を表で回す。ほかに:
+- [ ] Step 1: 失敗するテストを書く。spec の判定表の6行と、足した3行 (`title-mismatch`、`author` が `github-actions[bot]` のときの `config-error`、`author` が空のときの `config-error`) を表で回す。ほかに:
   - `today_jst(datetime(2026,11,24,14,59,tzinfo=UTC)) == "2026-11-24"`、15:00 は `"2026-11-25"`
   - 入力に入るのは本文と指定アカウントのコメントだけ。印で始まるコメントはどのアカウントのものも外し、指定アカウントの印付きの件数が `removed_marked_by_author` に入る
   - 書き込みの名義の印付きのコメントが後から印を外されていたら `triage`

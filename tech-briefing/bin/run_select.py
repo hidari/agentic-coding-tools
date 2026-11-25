@@ -32,11 +32,12 @@ def main(env, deps) -> int:
     caller_workflow = jobio.load_yaml_under(caller, workflow_path, deps.load_yaml)
     reusable = f"{env['TB_WORKFLOW_REPOSITORY']}/{WORKFLOW_FILE}"
 
-    decision, _ = run_select(
+    decision = run_select(
         raw_config,
         caller_workflow,
         reusable,
         env["TB_WORKFLOW_SHA"],
+        lambda rel: jobio.read_criteria_or_none(caller, rel),
         deps.github,
         env["TB_AUTHOR"],
         deps.now(),

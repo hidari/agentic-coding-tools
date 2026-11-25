@@ -4,11 +4,12 @@
 """
 
 from dataclasses import dataclass
+from typing import Callable
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from tech_briefing.caller_check import check_caller
-from tech_briefing.config import Config, ConfigError, load_config
+from tech_briefing.config import ConfigError, load_config
 from tech_briefing.constants import (
     BOT_LOGIN,
     MARKER,
@@ -25,11 +26,12 @@ from tech_briefing.constants import (
     TITLE_PREFIX,
 )
 from tech_briefing.protocols import CommentRef, GitHubApi, IssueRef
+from tech_briefing.render import is_bot_report
 from tech_briefing.textproc import extract_advisory_ids, replace_urls
 
 
 # 本文とコメントの文字数の合計の上限 (仮の値)。Issue の本文の上限 65536 文字に数件のコメントが乗る大きさで、
-# 実際のブリーフィングの大きさを測ってから決め直す (ISSUE-113 のタスク)
+# 実際のブリーフィングの大きさを測ってから決め直す
 MAX_INPUT_CHARS = 100_000
 
 
@@ -99,8 +101,8 @@ def decide(api: GitHubApi, author: str, now_utc: datetime, max_input_chars: int)
             SELECT_CONFIG_ERROR, None, f"TECH_BRIEFING_AUTHOR に書き込みの名義 {BOT_LOGIN} は指定できません"
         )
 
-    title = TITLE_PREFIX + today_jst(now_utc)
     date = today_jst(now_utc)
+    title = TITLE_PREFIX + date
     issues = api.open_issues()
     exact = [i for i in issues if i.title == title]
     mine = [i for i in exact if _same_login(i.author, author)]
@@ -124,8 +126,7 @@ def decide(api: GitHubApi, author: str, now_utc: datetime, max_input_chars: int)
 
     target = _newest(mine)
     comments = api.comments(target.number)
-    processed = any(_is_marked(c) and c.author == BOT_LOGIN for c in comments)
-    if processed:
+    if any(is_bot_report(c) for c in comments):
         return _decision(SELECT_ALREADY_PROCESSED, target, f"#{target.number} は処理済みです")
     if len(mine) >= 2:
         return _decision(SELECT_UNEXPECTED, target, f"指定アカウントの当日の Issue が {len(mine)} 件あります")
@@ -143,18 +144,24 @@ def run_select(
     caller_workflow: object,
     reusable: str,
     workflow_sha: str,
+    read_text: Callable[[str], str | None],
     api: GitHubApi,
     author: str,
     now_utc: datetime,
     max_input_chars: int,
-) -> tuple[Decision, Config | None]:
+) -> Decision:
+    """read_text は呼び出し側のリポジトリの root からの相対パスを読み、読めなければ None を返す。"""
     # 設定の誤りは Issue を特定する前に終える。api には触れない
     try:
         config = load_config(raw_config)
     except ConfigError as e:
-        return _decision(SELECT_CONFIG_ERROR, None, f"設定が不正です: {e}"), None
+        return _decision(SELECT_CONFIG_ERROR, None, f"設定が不正です: {e}")
+    # criteria が読めない誤りを triage まで持ち越すと、失敗の報告を投稿してその日を処理済みにしてしまう。
+    # 中身は要約にも入力にも載せず、パスだけを書く
+    criteria = read_text(config.criteria)
+    if criteria is None or not criteria.strip():
+        return _decision(SELECT_CONFIG_ERROR, None, f"criteria のファイルを読めないか、中身が空です: {config.criteria}")
     violations = check_caller(caller_workflow, reusable, workflow_sha)
     if violations:
-        return _decision(SELECT_CONFIG_ERROR, None, "呼び出し側の検査に違反があります: " + "; ".join(violations)), None
-    decision = decide(api, author, now_utc, max_input_chars)
-    return decision, (None if decision.result == SELECT_CONFIG_ERROR else config)
+        return _decision(SELECT_CONFIG_ERROR, None, "呼び出し側の検査に違反があります: " + "; ".join(violations))
+    return decide(api, author, now_utc, max_input_chars)

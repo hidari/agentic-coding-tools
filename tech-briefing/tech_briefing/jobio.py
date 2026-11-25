@@ -9,6 +9,7 @@ import json
 import sys
 from pathlib import Path
 
+from tech_briefing.config import is_git_name
 from tech_briefing.protocols import YamlLoader
 
 _WORKFLOWS_DIR = ".github/workflows/"
@@ -49,16 +50,50 @@ def append_summary(env, text: str) -> None:
         f.write(text.rstrip("\n") + "\n")
 
 
-def read_under(root: Path, rel: str) -> str:
-    """root の下のファイルを読む。絶対パス・root の外へ出る .. や symlink は ValueError。"""
+def _resolve_under(root: Path, rel: str) -> tuple[Path, Path]:
+    """(解決した root, 解決した実体のパス)。絶対パス・root の外へ出る .. や symlink は ValueError。"""
     if not isinstance(rel, str) or not rel or Path(rel).is_absolute():
         raise ValueError(f"root からの相対パスではありません: {rel!r}")
     base = Path(root).resolve()
     target = (base / rel).resolve()
     if target != base and base not in target.parents:
         raise ValueError(f"root の外を指しています: {rel!r}")
+    return base, target
+
+
+def _read(target: Path) -> str:
     with open(target, encoding="utf-8") as f:
         return f.read()
+
+
+def read_under(root: Path, rel: str) -> str:
+    """root の下のファイルを読む。絶対パス・root の外へ出る .. や symlink は ValueError。"""
+    return _read(_resolve_under(root, rel)[1])
+
+
+def read_criteria(root: Path, rel: str) -> str:
+    """基準の文書を読む。read_under の制限に加え、実体が .git の中なら ValueError。
+
+    中身は LLM へ送られる。設定の検査はパスの文字列しか見ないので、リポジトリの中の symlink が
+    .git/config (checkout の認証情報が残りうる) を指す形は、symlink を解決した後の実体の位置で拒否する。
+    """
+    base, target = _resolve_under(root, rel)
+    if any(is_git_name(p) for p in target.relative_to(base).parts):
+        raise ValueError(f".git の中を指しています: {rel!r}")
+    return _read(target)
+
+
+def read_criteria_or_none(root: Path, rel: str) -> str | None:
+    """read_criteria と同じ。読めなければ理由を内部のログに出して None を返す。
+
+    None を本体の関数へ渡すと、設定の誤りとして扱う (config-error)。
+    """
+    try:
+        return read_criteria(root, rel)
+    except (OSError, ValueError) as e:
+        # UTF-8 として読めないファイルの UnicodeDecodeError も ValueError
+        print(f"{rel} を読めませんでした: {type(e).__name__}: {e}", file=sys.stderr)
+        return None
 
 
 def load_yaml_under(root: Path, rel: str | None, loader: YamlLoader) -> object | None:

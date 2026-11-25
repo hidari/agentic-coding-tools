@@ -33,9 +33,10 @@ def _triage(env, deps) -> Outcome:
     caller = Path(env["TB_CALLER_DIR"])
     user_input = jobio.read_json(out / INPUT_FILE)
     raw = jobio.load_yaml_under(caller, env["TB_CONFIG_PATH"], deps.load_yaml)
-    # select が同じ設定を検証済みなので、ここでの誤りは想定の外 (internal-error) として上げる
+    # select が同じ設定の形と criteria のファイルが読めて空でないことまで確かめているので、
+    # ここでの誤り (select の後に変わった場合など) は想定の外 (internal-error) として上げる
     config = load_config(raw)
-    criteria = jobio.read_under(caller, config.criteria)
+    criteria = jobio.read_criteria(caller, config.criteria)
     box = ToolBox(caller, config, deps.fetcher, RESULT_LIMIT)
     params = build_params(SYSTEM_PROMPT, criteria, user_input, box)
     return run_triage(deps.messages, params, box, LIMITS)

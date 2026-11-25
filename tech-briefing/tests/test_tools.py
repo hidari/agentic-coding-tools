@@ -123,7 +123,6 @@ class ReadFile(RepoCase):
         self.assertNotIn(".git/config", out)
         self.assertNotIn("token", out)
 
-
     def test_rejects_git_names_case_insensitively(self):
         # 大小を区別しない FS (macOS の既定) では .GIT も同じ実体を指すので、名前は casefold して比べる。
         # 実体を大文字の名前で作るので、大小を区別する FS (Linux) でも名前の規則を通る経路が赤になる
@@ -370,6 +369,42 @@ class ReleaseNotes(unittest.TestCase):
         self.assertEqual(fetcher.requested, [])
 
 
+class RegistryMemo(unittest.TestCase):
+    """1つの ToolBox (1 run) の中では、同じパッケージの registry を2回取らない。"""
+
+    def box(self, responses):
+        self.fetcher = FakeFetcher(responses)
+        return ToolBox(Path(tempfile.gettempdir()), config(), self.fetcher, LIMIT)
+
+    def test_metadata_then_release_notes_fetch_registry_once(self):
+        rel = RELEASES + "o/r/releases/tags/v1.2.3"
+        b = self.box({NPM + "pkg": npm_doc(), rel: RELEASE})
+        args = {"ecosystem": "npm", "package": "pkg"}
+        first = b.call("registry_metadata", args)
+        self.assertFalse(b.call("release_notes", dict(args, version="1.2.3")).startswith(ERROR_PREFIX))
+        self.assertEqual(b.call("registry_metadata", args), first)
+        self.assertEqual(self.fetcher.requested, [NPM + "pkg", rel])
+
+    def test_memo_is_keyed_by_ecosystem_and_package(self):
+        b = self.box({NPM + "pkg": npm_doc(), NPM + "other": npm_doc(), CRATES + "pkg": {"crate": {}}})
+        for eco, pkg in (("npm", "pkg"), ("npm", "other"), ("crates", "pkg"), ("npm", "pkg")):
+            b.call("registry_metadata", {"ecosystem": eco, "package": pkg})
+        self.assertEqual(self.fetcher.requested, [NPM + "pkg", NPM + "other", CRATES + "pkg"])
+
+    def test_failed_fetch_is_not_remembered(self):
+        b = self.box({NPM + "pkg": FetchError("HTTP 500", 500)})
+        for _ in range(2):
+            self.assertTrue(b.call("registry_metadata", {"ecosystem": "npm", "package": "pkg"}).startswith(ERROR_PREFIX))
+        self.assertEqual(self.fetcher.requested, [NPM + "pkg", NPM + "pkg"])
+
+    def test_memo_does_not_outlive_the_toolbox(self):
+        responses = {NPM + "pkg": npm_doc()}
+        fetcher = FakeFetcher(responses)
+        for _ in range(2):
+            ToolBox(Path(tempfile.gettempdir()), config(), fetcher, LIMIT).call("registry_metadata", {"ecosystem": "npm", "package": "pkg"})
+        self.assertEqual(fetcher.requested, [NPM + "pkg", NPM + "pkg"])
+
+
 class Advisory(unittest.TestCase):
     def box(self, responses):
         self.fetcher = FakeFetcher(responses)
@@ -464,7 +499,6 @@ class NeverRaises(RepoCase):
                 out = b.call(name, args)
                 self.assertIsInstance(out, str)
                 self.assertTrue(out.startswith(ERROR_PREFIX))
-
 
     def test_unencodable_path_returns_error_string(self):
         # JSON の入力は孤立したサロゲートを運べる。os のパスへ変換できず ValueError になる経路を塞ぐ

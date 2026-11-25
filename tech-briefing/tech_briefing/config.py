@@ -66,17 +66,32 @@ def _domain(value: object) -> str:
     return host
 
 
-def _glob(value: object, name: str) -> str:
+def is_git_name(name: str) -> bool:
+    """パスの1つの component が .git か。"""
+    # 大小を区別しない FS (macOS の既定) では .GIT も .git と同じ実体を指すので、casefold して比べる
+    return name.casefold() == ".git"
+
+
+def _rel_path(value: object, name: str) -> str:
+    """リポジトリの root からの正規形の相対パス (glob を含んでよい) だけを受ける。"""
     if not isinstance(value, str) or not value:
         raise ConfigError(f"{name} は空でない文字列にしてください: {value!r}")
-    if value.startswith("/") or ".." in value.split("/"):
+    parts = value.split("/")
+    if value.startswith("/") or ".." in parts:
         raise ConfigError(f"{name} はリポジトリの外を指せません (絶対パスと .. は不可): {value!r}")
+    # ToolBox は正規形の相対パスに glob を当てるので、. や空の segment を含む glob はどのファイルにも当たらず、
+    # 検索が黙って0件になる
+    if any(p in ("", ".") for p in parts):
+        raise ConfigError(f"{name} に . や空の segment は使えません: {value!r}")
+    # .git/config には checkout の認証情報が残りうる (未確認) ので、criteria の中身として LLM へ送らせない
+    if any(is_git_name(p) for p in parts):
+        raise ConfigError(f"{name} に .git は使えません: {value!r}")
     return value
 
 
 def _file_rule(entry: object) -> FileRule:
     if isinstance(entry, str):
-        return FileRule(_glob(entry, "files の glob"), False)
+        return FileRule(_rel_path(entry, "files の glob"), False)
     if isinstance(entry, dict):
         unknown = set(entry) - {"glob", "search"}
         if unknown or "glob" not in entry:
@@ -84,7 +99,7 @@ def _file_rule(entry: object) -> FileRule:
         search = entry.get("search", False)
         if not isinstance(search, bool):
             raise ConfigError(f"files の search は真偽値にしてください: {entry!r}")
-        return FileRule(_glob(entry["glob"], "files の glob"), search)
+        return FileRule(_rel_path(entry["glob"], "files の glob"), search)
     raise ConfigError(f"files の項目は文字列か {{glob, search}} の mapping にしてください: {entry!r}")
 
 
@@ -108,13 +123,15 @@ def load_config(raw: object) -> Config:
     criteria = raw["criteria"]
     if not isinstance(criteria, str) or not criteria.strip():
         raise ConfigError("criteria は空でない文字列にしてください")
+    # criteria は基準の文書のファイルのパス。中身は select が読めることを確かめ、triage が LLM へ送る
+    criteria = _rel_path(criteria, "criteria")
 
     sources = tuple(_domain(d) for d in _list(raw, "official_sources"))
     files = tuple(_file_rule(e) for e in _list(raw, "files"))
 
     issues_glob = raw.get("issues_glob")
     if "issues_glob" in raw:
-        issues_glob = _glob(issues_glob, "issues_glob")
+        issues_glob = _rel_path(issues_glob, "issues_glob")
 
     registries: tuple[str, ...] = ()
     if "registries" in raw:

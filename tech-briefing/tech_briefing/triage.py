@@ -7,7 +7,7 @@ user のメッセージの区切りの中にだけ置く。区切りは入力の
 import json
 from dataclasses import dataclass
 
-from .constants import (
+from tech_briefing.constants import (
     BETA,
     BOT_LOGIN,
     EFFORT,
@@ -21,10 +21,10 @@ from .constants import (
     MARKER,
     MODEL,
 )
-from .protocols import MessagesClient
-from .tools import ERROR_PREFIX, REPORT_SCHEMA, SUBMIT_REPORT, ToolBox
+from tech_briefing.protocols import MessagesClient
+from tech_briefing.tools import ERROR_PREFIX, REPORT_SCHEMA, SUBMIT_REPORT, ToolBox
 
-# コントローラの決定 (ISSUE-113 Task 6): streaming を使わない要求の値として 16000。実際の run の usage を見て決め直す
+# streaming を使わない要求の値として 16000 (仮の値)。実際の run の usage を見て決め直す
 MAX_TOKENS = 16000
 
 # 区切りはどちらも `<` を含む。入力の JSON の中の `<` はすべて < に逃がすので、入力は区切りを書けない
@@ -79,7 +79,7 @@ SYSTEM_PROMPT = f"""あなたは、外部のツールが自動で集めた技術
 
 def _sanitize(text: str) -> str:
     # 孤立したサロゲート (UTF-8 でないファイル名を surrogateescape で読んだものなど) は要求の JSON を
-    # UTF-8 にできず送信の段で落ちるので、送る前に置き換える
+    # UTF-8 にできず送信のときに落ちるので、送る前に置き換える
     return text.encode("utf-8", "replace").decode("utf-8")
 
 
@@ -101,6 +101,12 @@ def build_params(system: str, criteria: str, user_input: dict, toolbox: ToolBox)
         "output_config": {"effort": EFFORT},
         "betas": [BETA],
         "fallbacks": FALLBACKS,
+        # 最上位の cache_control (automatic caching) は最後のキャッシュできるブロックへ breakpoint を置き、
+        # 会話が伸びるたびに前へ動かす。往復ごとに直前までの会話が cache read になる。breakpoint は
+        # 下の system の分と合わせて2つで、上限の4つに収まる (claude-api skill 2.1.331 の prompt-caching、
+        # 2026-11-25 確認)。anthropic 2.7.0 の beta.messages.create が最上位の cache_control を受けることは
+        # wheel で確かめた (2026-11-25)
+        "cache_control": {"type": "ephemeral"},
         # 変わる値 (時刻や run の ID) を system に入れず、最後のブロックに breakpoint を置いてキャッシュを効かせる
         "system": [
             {"type": "text", "text": system},
@@ -109,7 +115,6 @@ def build_params(system: str, criteria: str, user_input: dict, toolbox: ToolBox)
         "tools": toolbox.definitions() + toolbox.server_tools(),
         "messages": [{"role": "user", "content": [{"type": "text", "text": _sanitize(user_text)}]}],
     }
-
 
 
 @dataclass(frozen=True)
@@ -241,7 +246,7 @@ def run_triage(client: MessagesClient, params: dict, toolbox: ToolBox, limits: L
             return end(None, FAIL_LOOP_LIMIT)
         if not uses:
             # pause_turn は応答をそのまま足して送り直す (docs、2026-11-24 確認)。client の tool_use を持たず
-            # 結果の無い server_tool_use だけの tool_use も同じに扱う (返す tool_result が無いため。コントローラの決定)
+            # 結果の無い server_tool_use だけの tool_use も同じに扱う (返す tool_result が無いため)
             continue
         results = []
         for b in uses:

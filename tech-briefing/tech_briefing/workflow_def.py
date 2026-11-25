@@ -9,7 +9,7 @@
 post は select の artifact と triage の artifact を別のディレクトリ (TB_SELECT_DIR と
 TB_TRIAGE_DIR) に受ける。run_post は対象の Issue を select の側の input.json からだけ取り、
 triage の側のディレクトリの input.json を読まない (LLM の job が post の入力を差し替えられないため。
-Task 9 の run_post との約束)。
+run_post との約束)。
 """
 
 import json
@@ -63,6 +63,11 @@ POSTED_RESULTS = (SELECT_TRIAGE, SELECT_UNEXPECTED, SELECT_INPUT_TOO_LARGE)
 
 MECH_REPO_EXPR = "${{ job.workflow_repository }}"
 MECH_SHA_EXPR = "${{ job.workflow_sha }}"
+
+
+def _posted_expr(result_expr: str) -> str:
+    """result_expr (select の結果を読む式) が post へ進む結果のどれかに等しい、という if の式。"""
+    return " || ".join(f"{result_expr} == '{r}'" for r in POSTED_RESULTS)
 
 
 def _script(name: str) -> str:
@@ -143,7 +148,6 @@ def _select_job() -> dict:
         "TB_WORKFLOW_REPOSITORY": MECH_REPO_EXPR,
         "TB_WORKFLOW_SHA": MECH_SHA_EXPR,
     }
-    posted = " || ".join(f"steps.select.outputs.result == '{r}'" for r in POSTED_RESULTS)
     return {
         "runs-on": "${{ inputs.runner }}",
         "timeout-minutes": 10,
@@ -157,7 +161,7 @@ def _select_job() -> dict:
             _run("select", env),
             {
                 "name": "入力を渡す",
-                "if": posted,
+                "if": _posted_expr("steps.select.outputs.result"),
                 "uses": UPLOAD_ARTIFACT,
                 "with": {
                     "name": SELECT_ARTIFACT,
@@ -223,13 +227,12 @@ def _post_job() -> dict:
         "TB_DRY_RUN": "${{ inputs.dry-run }}",
         "TB_SELECT_RESULT": "${{ needs.select.outputs.result }}",
     }
-    posted = " || ".join(f"needs.select.outputs.result == '{r}'" for r in POSTED_RESULTS)
     return {
         "needs": ["select", "triage"],
         # triage が赤でも post は走り、failure.json か internal-error の定型を投稿する。
         # always() は run の取り消しも無視して書き込みの job を走らせるので、!cancelled() にする
         "if": (
-            f"!cancelled() && needs.select.result == 'success' && ({posted}) "
+            f"!cancelled() && needs.select.result == 'success' && ({_posted_expr('needs.select.outputs.result')}) "
             "&& needs.triage.result != 'cancelled'"
         ),
         "runs-on": "${{ inputs.runner }}",

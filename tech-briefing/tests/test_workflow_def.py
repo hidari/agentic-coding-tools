@@ -5,7 +5,7 @@ Issue に書けたり、書き込みの job が鍵を持ったりする。YAML �
 生成物は JSON の文書として書き、dict と読み戻した結果の一致で生成物の側も固定する。
 """
 
-import ast
+import itertools
 import json
 import os
 import re
@@ -21,13 +21,11 @@ sys.path.insert(0, PKG_ROOT)
 
 from tech_briefing.constants import (  # noqa: E402
     SELECT_INPUT_TOO_LARGE,
+    SELECT_RESULTS,
     SELECT_TRIAGE,
     SELECT_UNEXPECTED,
 )
 from tech_briefing.workflow_def import (  # noqa: E402
-    FAILURE_FILE,
-    REPORT_FILE,
-    TOOL_LOG_FILE,
     TRIAGE_FILES,
     UV_VERSION,
     render,
@@ -51,6 +49,129 @@ SHA_RE = re.compile(r"[0-9a-f]{40}")
 
 def jobs():
     return workflow()["jobs"]
+
+
+# --- if の式の小さな評価器 ---
+# 配線の if の式を文字列の一致ではなく振る舞いで固定するため、使っている文法だけを解く。
+# 解けるのは文字列の literal、文脈の名前、cancelled()、!、==、!=、&&、||、括弧だけで、
+# 知らない字句・名前・関数は例外にする (綴りの誤りを黙って偽に倒さないため)。
+# 優先順位は ! が最も強く、比較、&&、|| の順 (GitHub の式の docs の演算子の表の記憶による。実物では未確認)
+
+_TOKEN = re.compile(r"\s*(?:(?P<op>&&|\|\||==|!=|!|\(|\))|'(?P<str>[^']*)'|(?P<name>[A-Za-z_][A-Za-z0-9_.-]*))")
+
+
+def _tokens(expr):
+    out, pos = [], 0
+    while pos < len(expr.rstrip()):
+        m = _TOKEN.match(expr, pos)
+        if m is None or m.end() == pos:
+            raise ValueError(f"評価器が知らない字句です: {expr[pos:]!r}")
+        kind = m.lastgroup
+        out.append((kind, m.group(kind)))
+        pos = m.end()
+    return out
+
+
+# 状態の関数。if の式がこのどれも含まないとき、GitHub は前に暗黙の success() && を付けて評価する
+# (docs.github.com の expressions の status check functions の節の記述に基づく。実物の run では確かめていない)
+_STATUS_FUNCTIONS = {"success", "failure", "always", "cancelled"}
+
+
+def _with_implicit_success(tokens):
+    calls = {v for (k, v), nxt in zip(tokens, tokens[1:]) if k == "name" and nxt == ("op", "(")}
+    if calls & _STATUS_FUNCTIONS:
+        return tokens
+    return [("name", "success"), ("op", "("), ("op", ")"), ("op", "&&"), ("op", "("), *tokens, ("op", ")")]
+
+
+def evaluate(expr, context, *, cancelled, success):
+    """expr を context (名前から文字列)、取り消しの有無、success() の値で評価し、真偽値を返す。
+
+    success() の値は、job の if なら needs の job がすべて成功したか、step の if なら前の step がすべて
+    成功したか。既定値を持たせない (呼ぶ側が毎回決めないと、暗黙の success() の分岐が素通りする)。
+    """
+    tokens = _with_implicit_success(_tokens(expr))
+    i = 0
+
+    def peek():
+        return tokens[i] if i < len(tokens) else (None, None)
+
+    def take(expected=None):
+        nonlocal i
+        token = peek()
+        if token[0] is None or (expected is not None and token != ("op", expected)):
+            raise ValueError(f"式の形が違います: {expr!r} の {i} 番目")
+        i += 1
+        return token
+
+    def boolean(value):
+        if not isinstance(value, bool):
+            raise ValueError(f"真偽値ではない値が条件に使われています: {value!r}")
+        return value
+
+    def disjunction():
+        value = conjunction()
+        while peek() == ("op", "||"):
+            take()
+            right = conjunction()
+            value = boolean(value) or boolean(right)
+        return value
+
+    def conjunction():
+        value = comparison()
+        while peek() == ("op", "&&"):
+            take()
+            right = comparison()
+            value = boolean(value) and boolean(right)
+        return value
+
+    def comparison():
+        left = unary()
+        if peek() in (("op", "=="), ("op", "!=")):
+            op = take()[1]
+            right = unary()
+            return (left == right) if op == "==" else (left != right)
+        return left
+
+    def unary():
+        if peek() == ("op", "!"):
+            take()
+            return not boolean(unary())
+        return primary()
+
+    def primary():
+        kind, value = take()
+        if (kind, value) == ("op", "("):
+            inner = disjunction()
+            take(")")
+            return inner
+        if kind == "str":
+            return value
+        if kind == "name":
+            if peek() == ("op", "("):
+                take()
+                take(")")
+                if value == "cancelled":
+                    return cancelled
+                if value == "success":
+                    return success
+                raise ValueError(f"評価器が知らない関数です: {value}")
+            if value not in context:
+                raise ValueError(f"評価器が知らない名前です: {value}")
+            return context[value]
+        raise ValueError(f"式の形が違います: {expr!r}")
+
+    result = disjunction()
+    if i != len(tokens):
+        raise ValueError(f"式の後ろに余りがあります: {expr!r}")
+    return boolean(result)
+
+
+JOB_RESULTS = ("success", "failure", "cancelled", "skipped")
+# post へ進む select の結果 (unexpected と input-too-large は triage を飛ばして定型のコメントにする)
+POSTED = {SELECT_TRIAGE, SELECT_UNEXPECTED, SELECT_INPUT_TOO_LARGE}
+# select が落ちて outputs が空のときも数える
+OUTPUT_VALUES = SELECT_RESULTS + ("",)
 
 
 def steps(job):
@@ -209,7 +330,6 @@ class Artifacts(unittest.TestCase):
     def test_triage_uploads_exactly_its_three_files(self):
         # LLM の job が post の入力 (input.json) を上書きできないよう、渡すファイルを閉じる
         # 名前は入口のスクリプトも同じ定数から取る (書く名前・upload する名前・読む名前の一致は test_entrypoints が見る)
-        self.assertEqual(TRIAGE_FILES, (REPORT_FILE, FAILURE_FILE, TOOL_LOG_FILE))
         self.assertEqual(TRIAGE_FILES, ("report.json", "failure.json", "tool-log.json"))
         self.assertEqual(self.upload_path("triage"), "\n".join(f"{OUT}/{f}" for f in TRIAGE_FILES))
 
@@ -264,21 +384,67 @@ class Flow(unittest.TestCase):
         self.assertEqual(jobs()["triage"]["needs"], ["select"])
         self.assertEqual(jobs()["triage"]["if"], f"needs.select.outputs.result == '{SELECT_TRIAGE}'")
 
-    def test_post_condition(self):
-        post = jobs()["post"]
-        self.assertEqual(post["needs"], ["select", "triage"])
-        # 部分文字列の有無では && と || の取り違えや括弧の欠けが見えないので、全体を比べる。
-        # always() は run の取り消しも無視して書き込みの job を走らせるので、!cancelled() で
-        # 前の job の失敗だけを越える
-        posted = " || ".join(
-            f"needs.select.outputs.result == '{r}'"
-            for r in (SELECT_TRIAGE, SELECT_UNEXPECTED, SELECT_INPUT_TOO_LARGE)
-        )
-        self.assertEqual(
-            post["if"],
-            f"!cancelled() && needs.select.result == 'success' && ({posted}) "
-            "&& needs.triage.result != 'cancelled'",
-        )
+    def post_runs(self, select, output, triage, cancelled):
+        context = {"needs.select.result": select, "needs.select.outputs.result": output, "needs.triage.result": triage}
+        # job の success() は needs の job がすべて成功したとき真。post の if は !cancelled() を持つので
+        # 暗黙の success() は付かず、triage が落ちた日も post へ進む
+        return evaluate(jobs()["post"]["if"], context, cancelled=cancelled, success=select == "success" and triage == "success")
+
+    def test_post_condition_scenarios(self):
+        self.assertEqual(jobs()["post"]["needs"], ["select", "triage"])
+        # 読み手が追える代表の行。下の全組み合わせの表と同じ規則の一部を名前付きで置く
+        rows = [
+            ("報告できた", ("success", SELECT_TRIAGE, "success", False), True),
+            ("triage が落ちても失敗を投稿する", ("success", SELECT_TRIAGE, "failure", False), True),
+            ("triage を飛ばした unexpected", ("success", SELECT_UNEXPECTED, "skipped", False), True),
+            ("triage を飛ばした input-too-large", ("success", SELECT_INPUT_TOO_LARGE, "skipped", False), True),
+            ("run の取り消しは尊重する", ("success", SELECT_TRIAGE, "success", True), False),
+            ("triage の取り消しは投稿しない", ("success", SELECT_TRIAGE, "cancelled", False), False),
+            ("select が赤", ("failure", "config-error", "skipped", False), False),
+            ("select が赤で outputs が posted の値", ("failure", SELECT_UNEXPECTED, "skipped", False), False),
+            ("処理済み", ("success", "already-processed", "skipped", False), False),
+            ("当日の Issue が無い", ("success", "no-issue", "skipped", False), False),
+        ]
+        for label, args, expected in rows:
+            with self.subTest(label):
+                self.assertIs(self.post_runs(*args), expected)
+
+    def test_post_condition_table(self):
+        # 文字列の一致では同じ振る舞いの書き換えを赤にし、部分文字列では && と || の取り違えや括弧の欠けを
+        # 見落とすので、全組み合わせで post へ進む集合を固定する。always() は run の取り消しも無視して
+        # 書き込みの job を走らせるので、取り消しの有無も表に入れる
+        for select, output, triage, cancelled in itertools.product(JOB_RESULTS, OUTPUT_VALUES, JOB_RESULTS, (False, True)):
+            expected = not cancelled and select == "success" and output in POSTED and triage != "cancelled"
+            with self.subTest(select=select, output=output, triage=triage, cancelled=cancelled):
+                self.assertIs(self.post_runs(select, output, triage, cancelled), expected)
+
+    def test_select_uploads_input_only_for_posted_results(self):
+        (upload,) = [s for s in steps("select") if uses_name(s) == UPLOAD]
+        # step の if は状態の関数を持たないので、暗黙の success() で前の step の成功も条件になる。
+        # 前の step が落ちた run では、outputs が posted の値でも input.json を渡さない
+        for output, previous_ok in itertools.product(OUTPUT_VALUES, (True, False)):
+            with self.subTest(output=output, previous_ok=previous_ok):
+                got = evaluate(upload["if"], {"steps.select.outputs.result": output}, cancelled=False, success=previous_ok)
+                self.assertIs(got, previous_ok and output in POSTED)
+
+    def test_evaluator_rejects_unknown_names_and_tokens(self):
+        # 対照: 評価器が綴りの誤りや知らない文法を偽に倒さず例外にする
+        for expr in ("needs.selct.result == 'success'", "always()", "a == 'x' & b", "contains(x, 'y')", "'x'"):
+            with self.subTest(expr):
+                with self.assertRaises(ValueError):
+                    evaluate(expr, {"a": "x", "b": "y", "x": "z"}, cancelled=False, success=True)
+        # 対照: && は || より強く結びつく
+        self.assertIs(evaluate("'a' == 'b' && 'a' == 'b' || 'a' == 'a'", {}, cancelled=False, success=True), True)
+        self.assertIs(evaluate("'a' == 'a' || 'a' == 'b' && 'a' == 'b'", {}, cancelled=False, success=True), True)
+        self.assertIs(evaluate("('a' == 'a' || 'a' == 'b') && 'a' == 'b'", {}, cancelled=False, success=True), False)
+
+    def test_evaluator_adds_implicit_success_only_without_status_function(self):
+        # 状態の関数が無い式は success() && (式) として読む。|| で始まる式も括弧ごと包むので success() に掛かる
+        self.assertIs(evaluate("'a' == 'a'", {}, cancelled=False, success=False), False)
+        self.assertIs(evaluate("'a' == 'b' || 'a' == 'a'", {}, cancelled=False, success=False), False)
+        self.assertIs(evaluate("'a' == 'a'", {}, cancelled=False, success=True), True)
+        # 状態の関数があれば付けない
+        self.assertIs(evaluate("!cancelled() && 'a' == 'a'", {}, cancelled=False, success=False), True)
 
     def test_concurrency_is_per_caller_and_not_cancelling(self):
         # run ごとに変わる値が混ざると run が並ぶので、group 全体を比べる
@@ -362,24 +528,6 @@ class GeneratorCli(unittest.TestCase):
     def test_requires_exactly_one_mode(self):
         self.assertNotEqual(self.run_gen().returncode, 0)
         self.assertNotEqual(self.run_gen("--check", "--write").returncode, 0)
-
-
-class BodyDoesNotImportAdapters(unittest.TestCase):
-    def test_no_adapter_or_bin_import(self):
-        pkg = os.path.join(PKG_ROOT, "tech_briefing")
-        files = sorted(f for f in os.listdir(pkg) if f.endswith(".py"))
-        self.assertIn("workflow_def.py", files)
-        for name in files:
-            with open(os.path.join(pkg, name), encoding="utf-8") as f:
-                tree = ast.parse(f.read())
-            for node in ast.walk(tree):
-                mods = []
-                if isinstance(node, ast.Import):
-                    mods = [a.name for a in node.names]
-                elif isinstance(node, ast.ImportFrom) and node.module:
-                    mods = [node.module]
-                for m in mods:
-                    self.assertNotIn(m.split(".")[0], ("adapters", "bin", "anthropic", "yaml"), name)
 
 
 if __name__ == "__main__":

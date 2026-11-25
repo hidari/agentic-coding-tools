@@ -5,9 +5,11 @@ HTML・Markdown のリンク・表の列の増加・表示の順の入れ替え�
 """
 
 import re
+import unicodedata
 
 from tech_briefing.constants import (
     BOT_LOGIN,
+    CLASSIFICATIONS,
     FAIL_INTERNAL_ERROR,
     FAILURE_KINDS,
     MARKER,
@@ -15,23 +17,26 @@ from tech_briefing.constants import (
     SELECT_TRIAGE,
     SELECT_UNEXPECTED,
 )
-from tech_briefing.protocols import GitHubApi
+from tech_briefing.protocols import CommentRef, GitHubApi
+from tech_briefing.shapes import as_dict, as_list
 
 # 見えない文字は code point で組む。リテラルで書くとエディタや差分で見分けがつかなくなる
 _ZWSP = chr(0x200B)
 _LONE_SURROGATE = re.compile("[" + chr(0xD800) + "-" + chr(0xDFFF) + "]")
 _NEWLINE = re.compile("\r\n|[\r\n\x0b\x0c\x85" + chr(0x2028) + chr(0x2029) + "]")
-# 改行とタブ以外の C0 制御文字と、双方向の埋め込み・上書き・分離の制御文字 (U+202A-202E、U+2066-2069)。
+# 落とす文字の一般カテゴリ。Cc は C0 / C1 の制御文字と DEL、Cf は双方向の制御 (埋め込み・上書き・分離・
+# LRM / RLM / ALM)、BOM、word joiner、タグ文字、幅の無い空白と結合子などの見えない書式の文字。
 # 双方向の制御は表示の順を入れ替えて、読み手が見る文字列と実際の文字列を食い違わせる。
-# 0x0b と 0x0c は _NEWLINE が先に空白にするので、ここでは数えない
-_CONTROL = re.compile(
-    "[\x00-\x08\x0e-\x1f" + chr(0x202A) + "-" + chr(0x202E) + chr(0x2066) + "-" + chr(0x2069) + "]"
-)
+# code point の範囲を列挙すると漏れるので、カテゴリでまとめて落とす (カテゴリは unicodedata が持つ
+# Unicode の版で決まる。Python 3.15.0 で 2026-11-25 に確認)。改行は _NEWLINE が先に空白にしている
+_CONTROL_CATEGORIES = ("Cc", "Cf")
+# タブは Cc だが、空白として見え、表示の順も変えないので残す
+_KEPT_CONTROLS = "\t"
 # select が URL を置き換え済みなので裸の URL は来ないはずだが、自動リンクを二重に防ぐ。
 # https に限らず、// が続くスキームの形 (RFC 3986 の scheme) はすべて逃がす
 _URL_SCHEME = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*:)(?=//)")
 # スキーム無しの www. がリンクに、GH- と数字が Issue の参照になる形を、直後に見えない文字を入れて切る。
-# GitHub がそう解釈することは final review の指摘によるもので、実物では確かめていない (Issue の実物の確かめのタスクで見る)
+# GitHub がそう解釈することは実物では確かめていない
 # 語の頭だけを見る。語の途中 (high-severity や awww.) まで切るとふつうの語の検索やコピーを壊す。
 # 境界は \b ではなく「直前が ASCII の英数字でない」にする。\b は _ と日本語を語の文字とみなすが、
 # GFM の仕様の autolinks の節は _ や * の直後の www. もリンクにするため (仕様の記憶による。実物では未確認)。
@@ -65,7 +70,6 @@ _SOURCE_LIMIT = 300
 _SOURCES_PER_ITEM = 10
 _UNREACHABLE_MAX = 20
 _NOTES_LIMIT = 2000
-_CLASSIFICATIONS = ("A", "B", "C", "D")
 
 _REPORT_HEADER = "## 技術情報のトリアージ結果"
 _FAILURE_PREFIX = "トリアージできなかった: "
@@ -81,14 +85,10 @@ def sanitize(text: str) -> str:
     text = _NEWLINE.sub(" ", text)
     # 制御文字は見えない文字を入れる前に落とす。後に落とすと、制御文字で割った ww?w. や GH?- が
     # 除去の後に素の形へ戻る
-    text = _CONTROL.sub("", text)
+    text = "".join(ch for ch in text if ch in _KEPT_CONTROLS or unicodedata.category(ch) not in _CONTROL_CATEGORIES)
     text = _URL_SCHEME.sub(lambda m: m.group(1) + _ZWSP, text)
     text = _AUTOLINK_PREFIX.sub(lambda m: m.group(0) + _ZWSP, text)
     return "".join(_CHAR_MAP.get(ch, ch) for ch in text)
-
-
-def _as_list(value: object) -> list:
-    return value if isinstance(value, list) else []
 
 
 def _clip(value: object, limit: int) -> str:
@@ -97,11 +97,11 @@ def _clip(value: object, limit: int) -> str:
 
 
 def _row(entry: object) -> str:
-    entry = entry if isinstance(entry, dict) else {}
+    entry = as_dict(entry)
     classification = entry.get("classification")
     # 許可した 4 値だけを通す。それ以外を sanitize して載せず "?" に固定する
-    shown = classification if classification in _CLASSIFICATIONS else "?"
-    sources = ", ".join(_clip(s, _SOURCE_LIMIT) for s in _as_list(entry.get("sources"))[:_SOURCES_PER_ITEM])
+    shown = classification if classification in CLASSIFICATIONS else "?"
+    sources = ", ".join(_clip(s, _SOURCE_LIMIT) for s in as_list(entry.get("sources"))[:_SOURCES_PER_ITEM])
     return f"| {_clip(entry.get('title'), _TITLE_LIMIT)} | {shown} | {_clip(entry.get('findings'), _FINDINGS_LIMIT)} | {sources} |"
 
 
@@ -118,11 +118,11 @@ def _assemble(rows: list[str], omitted: int, unreachable: list[str], notes: str)
 
 
 def render_report(report: dict) -> str:
-    report = report if isinstance(report, dict) else {}
-    items = _as_list(report.get("items"))
+    report = as_dict(report)
+    items = as_list(report.get("items"))
     rows = [_row(e) for e in items]
     unreachable = [
-        _clip(s, _SOURCE_LIMIT) for s in _as_list(report.get("unreachable_sources"))[:_UNREACHABLE_MAX] if isinstance(s, str)
+        _clip(s, _SOURCE_LIMIT) for s in as_list(report.get("unreachable_sources"))[:_UNREACHABLE_MAX] if isinstance(s, str)
     ]
     notes = _clip(report.get("notes"), _NOTES_LIMIT)
 
@@ -153,12 +153,17 @@ def render_too_large() -> str:
     return f"{MARKER}\n{_TOO_LARGE_BODY}\n"
 
 
+def is_bot_report(comment: CommentRef) -> bool:
+    """書き込みの名義の、印で始まるコメントか (処理済みの印)。名義は完全一致で比べる。
+
+    select の処理済みの判定と post の直前の再確認の両方がこれを使い、2つの判定を食い違わせない。
+    """
+    return comment.author == BOT_LOGIN and comment.body.lstrip().startswith(MARKER)
+
+
 def should_post(api: GitHubApi, number: int) -> bool:
-    """書き込みの名義の印付きのコメントが既に在れば False。名義は完全一致で比べる。"""
-    for c in api.comments(number):
-        if c.author == BOT_LOGIN and c.body.lstrip().startswith(MARKER):
-            return False
-    return True
+    """書き込みの名義の印付きのコメントが既に在れば False。"""
+    return not any(is_bot_report(c) for c in api.comments(number))
 
 
 def plan_post(select_result: str, report: dict | None, failure: str | None) -> tuple[str, int]:

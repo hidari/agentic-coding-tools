@@ -181,40 +181,77 @@ class Red(unittest.TestCase):
         self.assertEqual(red, {"wrong-author", "title-mismatch", "config-error"})
 
 
+CRITERIA_PATH = "docs/criteria.md"
+CRITERIA_TEXT = "基準の文書の中身の目印"
+
+
+class Reader:
+    """criteria のファイルを読む口の Fake。読んだパスを記録し、用意した値 (None は読めない) を返す。"""
+
+    def __init__(self, text=CRITERIA_TEXT):
+        self.text = text
+        self.paths = []
+
+    def __call__(self, rel):
+        self.paths.append(rel)
+        return self.text
+
+
 class RunSelect(unittest.TestCase):
-    RAW = {"criteria": "基準", "official_sources": ["docs.python.org"], "files": ["pyproject.toml"]}
+    RAW = {"criteria": CRITERIA_PATH, "official_sources": ["docs.python.org"], "files": ["pyproject.toml"]}
 
-    def go(self, raw, caller, api=None):
-        api = api or FakeGitHub([issue()])
-        return api, run_select(raw, caller, REUSABLE, SHA, api, AUTHOR, NOW, LIMIT)
+    def go(self, raw=None, caller=None, reader=None, sha=SHA, author=AUTHOR):
+        self.api = FakeGitHub([issue()])
+        self.reader = reader or Reader()
+        raw = self.RAW if raw is None else raw
+        caller = valid_caller() if caller is None else caller
+        return run_select(raw, caller, REUSABLE, sha, self.reader, self.api, author, NOW, LIMIT)
 
-    def test_ok(self):
-        api, (d, cfg) = self.go(self.RAW, valid_caller())
+    def assert_config_error_without_api(self, d):
+        self.assertEqual(d.result, "config-error")
+        self.assertIsNone(d.input)
+        self.assertEqual(self.api.calls, [])
+
+    def test_ok_reads_the_criteria_path(self):
+        d = self.go()
         self.assertEqual(d.result, "triage")
-        self.assertEqual(cfg.criteria, "基準")
+        self.assertEqual(self.reader.paths, [CRITERIA_PATH])
+        # 対照: 読めた中身は入力にも要約にも出さない
+        self.assertNotIn(CRITERIA_TEXT, repr(d))
+
+    def test_unreadable_or_blank_criteria_is_config_error(self):
+        for label, text in (("読めない", None), ("空", ""), ("空白だけ", " \n\t")):
+            with self.subTest(label):
+                d = self.go(reader=Reader(text))
+                self.assert_config_error_without_api(d)
+                self.assertEqual(self.reader.paths, [CRITERIA_PATH])
+                # エラーの文にはパスだけを載せる
+                self.assertIn(CRITERIA_PATH, d.summary)
+
+    def test_criteria_shape_is_config_error_before_reading(self):
+        for v in ("../secret.md", ".git/config", "a/.GIT/config", "./criteria.md", "a//b.md"):
+            with self.subTest(v):
+                d = self.go(raw=dict(self.RAW, criteria=v))
+                self.assert_config_error_without_api(d)
+                self.assertEqual(self.reader.paths, [])
 
     def test_bad_config_does_not_touch_api(self):
-        api, (d, cfg) = self.go({"criteria": ""}, valid_caller())
-        self.assertEqual((d.result, cfg), ("config-error", None))
-        self.assertEqual(api.calls, [])
+        d = self.go(raw={"criteria": ""})
+        self.assert_config_error_without_api(d)
+        self.assertEqual(self.reader.paths, [])
 
     def test_caller_violation_does_not_touch_api(self):
         bad = valid_caller()
         bad["on"] = {"pull_request": None}
-        api, (d, cfg) = self.go(self.RAW, bad)
-        self.assertEqual((d.result, cfg), ("config-error", None))
-        self.assertEqual(api.calls, [])
+        self.assert_config_error_without_api(self.go(caller=bad))
 
     def test_workflow_sha_mismatch_does_not_touch_api(self):
-        api = FakeGitHub([issue()])
-        d, cfg = run_select(self.RAW, valid_caller(), REUSABLE, "f" * 40, api, AUTHOR, NOW, LIMIT)
-        self.assertEqual((d.result, cfg), ("config-error", None))
-        self.assertEqual(api.calls, [])
+        self.assert_config_error_without_api(self.go(sha="f" * 40))
 
-    def test_bad_author_returns_no_config(self):
-        api = FakeGitHub([issue()])
-        d, cfg = run_select(self.RAW, valid_caller(), REUSABLE, SHA, api, "", NOW, LIMIT)
-        self.assertEqual((d.result, cfg), ("config-error", None))
+    def test_bad_author_is_config_error(self):
+        d = self.go(author="")
+        self.assertEqual(d.result, "config-error")
+        self.assertEqual(self.api.calls, [])
 
 
 if __name__ == "__main__":

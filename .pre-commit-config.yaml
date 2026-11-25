@@ -130,7 +130,7 @@ repos:
       - id: tech-briefing-workflow-drift
         name: 共通の reusable workflow が生成元と一致しているか検査する
         language: system
-        entry: python3 tech-briefing/bin/gen_workflow.py --check
+        entry: tech-briefing/bin/gen_workflow.py --check
         pass_filenames: false
         always_run: true
 

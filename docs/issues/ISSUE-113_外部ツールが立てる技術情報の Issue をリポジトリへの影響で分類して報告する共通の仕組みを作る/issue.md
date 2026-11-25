@@ -12,7 +12,7 @@ LLM にトリアージを任せたいが、Issue の本文とコメントは外�
 
 同じ仕組みを複数のリポジトリで使うので、リポジトリごとに作ると同じ問題を別々に直すことになる。共通の reusable workflow と Python の処理をこのリポジトリに置き、各リポジトリは SHA を固定して呼び、呼び出しの workflow と設定のファイルと基準の文書だけを持つ形にする。導入の手順は apm で配る skill にする。
 
-この段は報告だけで、自動の修正・PR・マージの段の土台になる。設計は `ISSUE-113-spec.md` に置く。
+設計は `ISSUE-113-spec.md` に置く。
 
 ## タスク
 
@@ -51,8 +51,9 @@ LLM にトリアージを任せたいが、Issue の本文とコメントは外�
   - select が GitHub の API の失敗 (URLError・TimeoutError・HTTPException) で `result=` と step summary を出さずに traceback で終わる。入口で捕まえて原因を1行出す。select の結果の値を足すかもここで決める
   - max_tokens などで止まって no-report になったときに、最後の stop_reason を内部ログに出す
   - `pause_turn` の応答に client の tool_use が混ざる形のテストを足す
-  - select の upload の step の `if:` を固定するテストを足す
-- [ ] spec の post の job の節を直す。`always()` と書いているところを `!cancelled()` にする。意図は「失敗を越えて走るが、取り消しは尊重する」で、`always()` は run の取り消しの後も投稿しうる。実装は `!cancelled()` になっている。spec は今回は直さず、スナップショットとして残してこのタスクで追う
+  - select の upload の step の `if:` を固定するテストを足す。済み (tech-briefing/tests/test_workflow_def.py の `Flow.test_select_uploads_input_only_for_posted_results` が、暗黙の `success()` を含む判定表で固定する)
+- [ ] spec の post の job の節を直す。`always()` と書いているところを `!cancelled()` にする。意図は「失敗を越えて走るが、取り消しは尊重する」で、`always()` は run の取り消しの後も投稿しうる。実装は `!cancelled()` になっている。spec は今回は直さず、スナップショットとして残してこのタスクで追う。plan の Task 8 の Step 1 も `always()` と書いているが、実装が正で、plan はスナップショットとして追わない
+- [ ] spec の select の job の節を、select が criteria のファイルを読んで確かめる実装に合わせて直す。呼び出し側のリポジトリの checkout を select が使う範囲 (「設定のファイルと呼び出しの workflow のファイルだけ」) に criteria のファイルを足し、設定の誤りの列挙 (`config-error` で終わるもの) に、criteria のパスの形の誤り (絶対パス・`..`・`.`・空の segment・`.git`) と、criteria のファイルが読めないか中身が空のときを足す。glob の形の誤りに `.`・空の segment・`.git` を足す
 - [ ] spec の「実装のときに確かめること」を片付ける。解消した項目は解消として spec に書き、残る項目は実物の run で確かめる
   - 解消: `job.workflow_repository` と `job.workflow_sha` は実在する (docs.github.com の原文で確認。GitHub Enterprise Server では使えない)。ただし step の `env:` と `with:` で効くかは上の実物の run で確かめる。docs の原文だけが根拠で、実物の run では確かめていない
   - 解消: environment の鍵は、呼び出し側が名前で渡せば呼ばれた側の job に届く (docs.github.com の reuse-workflows に "You can pass a secret by name even if it only exists in the environment" と "the environment secret takes precedence" とある)。docs の原文だけが根拠で、実物の run では確かめていない

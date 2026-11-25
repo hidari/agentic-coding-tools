@@ -140,7 +140,7 @@ class Pep723(unittest.TestCase):
         self.assertEqual(names, {"anthropic", "PyYAML"})
 
     def test_pinned_versions_are_the_checked_ones(self):
-        # 版は triage の kwargs (betas・fallbacks・output_config・thinking) と to_dict を wheel で確かめたもの。
+        # 版は triage の kwargs (betas・fallbacks・output_config・thinking・cache_control) と to_dict を wheel で確かめたもの。
         # 上げるときは同じ確かめをやり直してからここを変える (確かめていない版へ黙って動かさない)
         pins = {}
         for path in workflow_scripts():
@@ -155,7 +155,7 @@ class Pep723(unittest.TestCase):
     def test_each_script_has_the_same_exclude_newer(self):
         # dependencies は直接の依存しか固定しない。uv の exclude-newer で、解決に考える配布をその時刻より前に絞る
         # (docs.astral.sh/uv/guides/scripts、2026-11-25 確認)。間接の依存まで効くかは docs に明記が無いので、
-        # hash までの固定は Issue の準備のタスクの script の lock で扱う。値は anthropic 2.7.0 の wheel の公開 (2026-11-09) の後
+        # hash までの固定は script の lock で扱う。値は anthropic 2.7.0 の wheel の公開 (2026-11-09) の後
         values = set()
         for path in workflow_scripts():
             with self.subTest(path.name):

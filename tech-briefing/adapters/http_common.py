@@ -1,4 +1,4 @@
-"""urllib の redirect を拒否する handler。
+"""アダプタの HTTP の要求に共通する部分 (User-Agent と、redirect を拒否する opener)。
 
 urllib.request.HTTPRedirectHandler は redirect の先へ要求の header (add_header で足したもの) を
 そのまま付けて送り直す (Python 3.15 の urllib/request.py の redirect_request、2026-11-24 確認)。
@@ -8,6 +8,8 @@ urllib.request.HTTPRedirectHandler は redirect の先へ要求の header (add_h
 import urllib.request
 
 from tech_briefing.protocols import FetchError
+
+USER_AGENT = "tech-briefing-triage"
 
 
 class RefuseRedirect(urllib.request.HTTPRedirectHandler):

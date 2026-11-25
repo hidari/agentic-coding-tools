@@ -86,6 +86,22 @@ class BuildParams(unittest.TestCase):
         self.assertEqual(system[-1]["cache_control"], {"type": "ephemeral"})
         self.assertTrue(all("cache_control" not in b for b in system[:-1]))
 
+    def test_top_level_automatic_cache_and_breakpoint_count(self):
+        # 往復ごとに直前までの会話を cache read にするため、最上位の cache_control (automatic caching) を置く。
+        # automatic の breakpoint も4つの枠の1つに数える (claude-api skill 2.1.331 の prompt-caching、2026-11-25 確認)
+        self.assertEqual(self.params["cache_control"], {"type": "ephemeral"})
+
+        def count(value):
+            if isinstance(value, dict):
+                return ("cache_control" in value) + sum(count(v) for v in value.values())
+            if isinstance(value, list):
+                return sum(count(v) for v in value)
+            return 0
+
+        # 最上位と system の criteria の2つ
+        self.assertEqual(count(self.params), 2)
+        self.assertLessEqual(count(self.params), 4)
+
     def test_system_has_no_input(self):
         text = json.dumps(self.params["system"], ensure_ascii=False)
         for value in ("入力の本文", "入力のコメント", "CVE-2026-0001", "2026-11-24"):
@@ -123,7 +139,6 @@ class BuildParams(unittest.TestCase):
         self.assertEqual(block["text"].count(UNTRUSTED_END), 1)
         self.assertEqual(block["text"].count(UNTRUSTED_BEGIN), 1)
         self.assertEqual(untrusted_json(block["text"]), hostile)
-
 
     def test_lone_surrogate_in_input_is_replaced(self):
         lone = chr(0xDC80)
@@ -184,6 +199,7 @@ class Loop(unittest.TestCase):
         self.assertEqual(len(self.client.requests), 2)
         second = self.client.requests[1]
         self.assertEqual(second["tools"], self.params["tools"])
+        self.assertEqual(second["cache_control"], {"type": "ephemeral"})
         self.assertEqual(second["messages"][:-2], self.params["messages"])
         self.assertEqual(second["messages"][-2], {"role": "assistant", "content": first["content"]})
         last = second["messages"][-1]
@@ -193,7 +209,6 @@ class Loop(unittest.TestCase):
         self.assertIn("lodash", last["content"][0]["content"])
         self.assertEqual(out.report, REPORT)
         self.assertIsNone(out.failure)
-
 
     def test_tool_use_with_unanswered_server_tool_use_continues_with_client_results_in_order(self):
         first = response(
@@ -213,7 +228,6 @@ class Loop(unittest.TestCase):
         self.assertEqual([b["type"] for b in last["content"]], ["tool_result", "tool_result"])
         self.assertEqual([b["tool_use_id"] for b in last["content"]], ["t1", "t2"])
 
-
     def test_pause_turn_appends_content_unchanged_and_resends(self):
         first = response("pause_turn", thinking(), server_use("s1", "web_fetch", {"url": "https://docs.example.org/a"}))
         self.run_loop(first, submit())
@@ -231,12 +245,10 @@ class Loop(unittest.TestCase):
             self.params["messages"] + [{"role": "assistant", "content": first["content"]}],
         )
 
-
     def test_end_turn_without_submit_is_no_report(self):
         out = self.run_loop(response("end_turn", thinking(), {"type": "text", "text": "終わり"}), submit())
         self.assertEqual(len(self.client.requests), 1)
         self.assertEqual((out.report, out.failure), (None, "no-report"))
-
 
     def test_refusal(self):
         out = self.run_loop(response("refusal"), submit())
@@ -248,7 +260,6 @@ class Loop(unittest.TestCase):
         out = self.run_loop(cut, submit())
         self.assertEqual(len(self.client.requests), 1)
         self.assertEqual((out.report, out.failure), (None, "no-report"))
-
 
     def test_client_exception_is_api_error(self):
         first = response("tool_use", tool_use("t1", "search_files", {"term": "lodash"}), u=usage(inp=7))
@@ -267,7 +278,6 @@ class Loop(unittest.TestCase):
         first = response("tool_use", tool_use("t1", "search_files", {"term": "lodash"}))
         with self.assertRaises(LookupError):
             self.run_loop(first, submit(), box=Broken())
-
 
     def test_tool_log_and_usage_cover_every_call_and_sum(self):
         first = response(
@@ -309,7 +319,6 @@ class Loop(unittest.TestCase):
             },
         )
 
-
     def pauses(self, n):
         return [response("pause_turn", server_use(f"s{i}", "web_search", {"query": "q"})) for i in range(n)]
 
@@ -324,7 +333,6 @@ class Loop(unittest.TestCase):
         self.assertEqual(len(self.client.requests), 3)
         self.assertEqual((out.report, out.failure), (None, "loop-limit"))
         self.assertEqual(len(out.tool_log), 3)
-
 
     def test_token_limit_counts_cache_read_and_creation(self):
         # 3つの欄の和だけが上限を超える。input_tokens だけを数える実装では超えない
@@ -345,7 +353,6 @@ class Loop(unittest.TestCase):
         self.assertEqual(len(self.client.requests), 2)
         self.assertEqual(out.report, REPORT)
 
-
     def test_submit_stops_without_running_sibling_tools_or_sending_again(self):
         class Refuse:
             def call(self, name, args):
@@ -361,7 +368,6 @@ class Loop(unittest.TestCase):
         over = response("tool_use", tool_use("t_submit", "submit_report", REPORT), u=usage(inp=500))
         out = self.run_loop(over, max_input_tokens=100)
         self.assertEqual((out.report, out.failure), (REPORT, None))
-
 
     def test_invalid_submit_is_invalid_report(self):
         item = REPORT["items"][0]
@@ -382,7 +388,6 @@ class Loop(unittest.TestCase):
                 self.assertEqual(len(self.client.requests), 1)
                 self.assertEqual((out.report, out.failure), (None, "invalid-report"))
 
-
     def test_tool_error_result_sets_is_error(self):
         first = response(
             "tool_use",
@@ -393,7 +398,6 @@ class Loop(unittest.TestCase):
         results = self.client.requests[1]["messages"][-1]["content"]
         self.assertTrue(results[0]["content"].startswith(ERROR_PREFIX))
         self.assertEqual([r.get("is_error", False) for r in results], [True, False])
-
 
     def test_lone_surrogate_in_tool_result_is_replaced_before_sending(self):
         # UTF-8 でないファイル名は surrogateescape で孤立したサロゲートになる。コード点から作る
@@ -411,7 +415,6 @@ class Loop(unittest.TestCase):
         text = second["messages"][-1]["content"][0]["content"]
         self.assertNotIn(lone, text)
         self.assertIn("lodash", text)
-
 
 
 class MatchesSchema(unittest.TestCase):

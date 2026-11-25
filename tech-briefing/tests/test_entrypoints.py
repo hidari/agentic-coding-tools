@@ -264,6 +264,9 @@ class Select(Harness):
         self.assertEqual(data["issue_number"], 7)
         self.assertEqual([c["body"] for c in data["comments"]], ["コメント"])
         self.assertIn("triage", self.summary_text())
+        # select は criteria のファイルを読んで確かめるが、中身はどこにも書かない
+        for written in (json.dumps(data, ensure_ascii=False), self.summary_text(), self.outputs(), self.stdout.getvalue()):
+            self.assertNotIn(CRITERIA_TEXT, written)
 
     def test_unexpected_and_too_large_write_target_number(self):
         cases = {
@@ -317,6 +320,41 @@ class Select(Harness):
                 self.assertFalse((self.select_out / INPUT_FILE).exists())
                 self.assertEqual(github.calls, [])
 
+    def test_unreadable_or_blank_criteria_is_config_error(self):
+        cases = {
+            "missing": lambda: (self.caller / "docs" / "criteria.md").unlink(),
+            "blank": lambda: self.write(self.caller / "docs" / "criteria.md", " \n"),
+            "symlink outside caller": lambda: (
+                self.write(self.tmp / "outside.md", "外の文書"),
+                (self.caller / "docs" / "criteria.md").unlink(),
+                (self.caller / "docs" / "criteria.md").symlink_to(self.tmp / "outside.md"),
+            ),
+            "symlink into .git": self.link_criteria_into_git,
+        }
+        for label, prepare in cases.items():
+            with self.subTest(label):
+                self.setUp()
+                prepare()
+                github = FakeGitHub([issue()])
+                self.assertEqual(self.run_select(github), 1)
+                self.assertEqual(self.outputs(), "result=config-error\n")
+                self.assertIn("docs/criteria.md", self.summary_text())
+                self.assertFalse((self.select_out / INPUT_FILE).exists())
+                self.assertEqual(github.calls, [])
+
+    def link_criteria_into_git(self):
+        self.write(self.caller / ".git" / "config", "extraheader = AUTHORIZATION: token")
+        (self.caller / "docs" / "criteria.md").unlink()
+        (self.caller / "docs" / "criteria.md").symlink_to(self.caller / ".git" / "config")
+
+    def test_symlink_to_a_plain_file_in_caller_is_read(self):
+        # 対照: symlink そのものは拒否しない。リポジトリの中のふつうのファイルを指すなら triage へ進む
+        self.write(self.caller / "docs" / "real.md", CRITERIA_TEXT)
+        (self.caller / "docs" / "criteria.md").unlink()
+        (self.caller / "docs" / "criteria.md").symlink_to(self.caller / "docs" / "real.md")
+        self.assertEqual(self.run_select(FakeGitHub([issue()], {7: []})), 0)
+        self.assertEqual(self.outputs(), "result=triage\n")
+
     def test_unparseable_config_is_config_error(self):
         self.write(self.caller / "tb.yml", "{not json")
         self.assertEqual(self.run_select(FakeGitHub([issue()])), 1)
@@ -362,6 +400,14 @@ class Triage(Harness):
         self.assertEqual(self.read_json(self.triage_out / FAILURE_FILE), "internal-error")
         self.assertEqual(self.messages.requests, [])
         self.assertIn("Traceback", self.stderr.getvalue())
+
+    def test_criteria_symlink_into_git_is_internal_error(self):
+        # select の後に criteria が .git の中を指す symlink に替わった。中身は LLM へ送らない
+        self.select_triage()
+        Select.link_criteria_into_git(self)
+        self.assertEqual(self.run_triage([submit_response()]), 1)
+        self.assertEqual(self.read_json(self.triage_out / FAILURE_FILE), "internal-error")
+        self.assertEqual(self.messages.requests, [])
 
     def test_criteria_outside_caller_is_internal_error(self):
         self.select_triage()
@@ -576,6 +622,42 @@ class JobIo(unittest.TestCase):
             self.assertIsNone(jobio.load_yaml_under(root, "a.yml", broken))
         # 対照: 読める loader なら値が返る
         self.assertEqual(jobio.load_yaml_under(root, "a.yml", lambda t: {"text": t}), {"text": "x"})
+
+    def test_read_criteria_or_none(self):
+        root = self.tmp / "root"
+        root.mkdir()
+        (root / "a.md").write_text("中身", encoding="utf-8")
+        (root / "bin.md").write_bytes(bytes([0xFF, 0xFE]))
+        (self.tmp / "outside.md").write_text("外", encoding="utf-8")
+        cases = {"missing.md": None, "../outside.md": None, "/abs.md": None, "bin.md": None, "": None}
+        for rel, expected in cases.items():
+            with self.subTest(rel):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertIsNone(jobio.read_criteria_or_none(root, rel))
+                # 理由は内部のログに残す
+                self.assertNotEqual(err.getvalue(), "")
+        # 対照: 読めるファイルは中身が返る
+        self.assertEqual(jobio.read_criteria_or_none(root, "a.md"), "中身")
+
+    def test_read_criteria_rejects_symlink_into_git(self):
+        # パスの文字列の検査は symlink の先を見ない。resolve した後の実体の位置で .git の中を拒否する
+        root = self.tmp / "root"
+        (root / ".GIT").mkdir(parents=True)
+        (root / ".GIT" / "config").write_text("extraheader = AUTHORIZATION: token", encoding="utf-8")
+        (root / "docs").mkdir()
+        (root / "docs" / "real.md").write_text("基準", encoding="utf-8")
+        (root / "to-git.md").symlink_to(root / ".GIT" / "config")
+        (root / "to-git-dir").symlink_to(root / ".GIT")
+        for rel in ("to-git.md", "to-git-dir/config"):
+            with self.subTest(rel):
+                with self.assertRaises(ValueError):
+                    jobio.read_criteria(root, rel)
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertIsNone(jobio.read_criteria_or_none(root, rel))
+        # 対照: リポジトリの中のふつうのファイルを指す symlink は通る
+        (root / "link.md").symlink_to(root / "docs" / "real.md")
+        self.assertEqual(jobio.read_criteria(root, "link.md"), "基準")
 
     def test_read_under_rejects_symlink_out(self):
         root = self.tmp / "root"

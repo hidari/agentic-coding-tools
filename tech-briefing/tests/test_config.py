@@ -13,11 +13,17 @@ REJECT = [
     "github.com\n", "user.github.io\n", "docs.python.org\n", "github.com\t", " github.com",
 ]
 ACCEPT = ["docs.github.com", "docs.python.org", "nvd.nist.gov", "osv.dev"]
+# criteria と glob に共通のパスの形の規則
+REJECT_PATHS = [
+    "/abs", "../x", "a/../b", "./package.json", "a/./b", "a//package.json", "a/", ".git/config",
+    ".git/**", "a/.GIT/config", "b/.Git/*", ".git",
+]
+ACCEPT_PATHS = ["docs/criteria.md", ".github/criteria.md", ".gitignore", "a/.gitx/b"]
 
 
 def valid(**overrides):
     raw = {
-        "criteria": "セキュリティ修正を優先する",
+        "criteria": "docs/criteria.md",
         "official_sources": ["docs.python.org"],
         "files": ["pyproject.toml"],
     }
@@ -60,7 +66,7 @@ class Shape(unittest.TestCase):
             files=["a/*.toml", {"glob": "b/**", "search": True}, {"glob": "c"}],
             issues_glob="docs/issues/*", registries=["npm", "pypi"]))
         self.assertEqual(c, Config(
-            criteria="セキュリティ修正を優先する",
+            criteria="docs/criteria.md",
             official_sources=("docs.python.org",),
             files=(FileRule("a/*.toml", False), FileRule("b/**", True), FileRule("c", False)),
             issues_glob="docs/issues/*",
@@ -88,9 +94,21 @@ class Shape(unittest.TestCase):
             load_config(valid(extra=1))
 
     def test_criteria_type(self):
-        for v in ("", 1, None):
+        for v in ("", "  ", 1, None):
             with self.assertRaises(ConfigError, msg=repr(v)):
                 load_config(valid(criteria=v))
+
+    def test_criteria_path_shape(self):
+        # criteria は呼び出し側のリポジトリの中のファイルのパスで、中身はそのまま LLM へ送られる。
+        # .git/config には checkout の認証情報が残りうるので、glob と同じ形の検査で拒否する
+        for v in REJECT_PATHS:
+            with self.subTest(reject=v):
+                with self.assertRaises(ConfigError):
+                    load_config(valid(criteria=v))
+        # 対照: .git で始まるだけの名前と .github の下は通る (前方一致で拒否する実装を赤にする)
+        for v in ACCEPT_PATHS:
+            with self.subTest(accept=v):
+                self.assertEqual(load_config(valid(criteria=v)).criteria, v)
 
     def test_registries(self):
         for v in (["rubygems"], ["npm", "npm"], "npm", [1]):
@@ -111,6 +129,23 @@ class Shape(unittest.TestCase):
         for v in (1, "", "../x", "/abs", ["a"]):
             with self.assertRaises(ConfigError, msg=repr(v)):
                 load_config(valid(issues_glob=v))
+
+    def test_globs_reject_non_canonical_and_git(self):
+        # ToolBox は正規形の相対パス (./ も空の segment も無い) に glob を当て、.git の中を見ない。
+        # 正規形でない glob や .git を含む glob はどのファイルにも当たらず、検索が黙って0件になる
+        for v in REJECT_PATHS:
+            with self.subTest(files=v):
+                with self.assertRaises(ConfigError):
+                    load_config(valid(files=[v]))
+            with self.subTest(files_mapping=v):
+                with self.assertRaises(ConfigError):
+                    load_config(valid(files=[{"glob": v, "search": True}]))
+            with self.subTest(issues_glob=v):
+                with self.assertRaises(ConfigError):
+                    load_config(valid(issues_glob=v))
+        for v in ACCEPT_PATHS + [".github/workflows/*.yml", "docs/issues/*/issue.md"]:
+            with self.subTest(accept=v):
+                self.assertEqual(load_config(valid(files=[v], issues_glob=v)).issues_glob, v)
 
 
 if __name__ == "__main__":

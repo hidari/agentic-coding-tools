@@ -23,7 +23,7 @@ class CommentRef:
 
 
 class GitHubApi(Protocol):
-    """GitHub の API の口。実装 (Task 9 のアダプタ) と Fake が次の契約を守る。
+    """GitHub の API の口。アダプタと Fake が次の契約を守る。
 
     - open_issues() と comments() は全ページ分を返す (1ページの上限で打ち切らない)
     - open_issues() は pull request を含まない
@@ -54,7 +54,7 @@ class Fetcher(Protocol):
     """外部の JSON の API を読む口。行き先の URL は常に tools が組み立て、LLM は URL を渡せない。
 
     - get_json(url) は応答の JSON を復号した値を返す
-    - 失敗は FetchError で知らせる (実装の Task のアダプタがこの契約を守る)
+    - 失敗は FetchError で知らせる (アダプタがこの契約を守る)
     """
 
     def get_json(self, url: str) -> object: ...

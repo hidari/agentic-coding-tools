@@ -3,10 +3,11 @@
 ID は URL の置き換えより先に取る。GHSA の ID は URL のパスにも現れ、
 置き換えた後では失われるため。
 """
+
 import re
 from urllib.parse import urlsplit
 
-from .constants import URL_REPLACEMENT, URL_UNKNOWN_HOST
+from tech_briefing.constants import URL_REPLACEMENT, URL_UNKNOWN_HOST
 
 _ID_PATTERN = re.compile(
     r"GHSA(?:-[a-z0-9]{4}){3}(?![a-z0-9])"
@@ -25,7 +26,7 @@ _URL_PATTERN = re.compile(
     r"|<(?P<angle>https?://[^\s>]+)>"
     r"|(?P<bare>" + _URL_BODY + r")",
     # スキームは大小を区別しない (RFC 3986)。大文字のスキームが GitHub でリンクになることは
-    # final review の指摘によるもので、実物では確かめていない。
+    # 実物では確かめていない。
     # ASCII は付けない。付けると \s が NBSP などの ASCII の外の空白を含まなくなり、URL がそこで終わらなくなる
     # (全角空白は終端の文字クラスに明示で入れてあるので変わらない)
     re.IGNORECASE,
@@ -34,7 +35,22 @@ _URL_PATTERN = re.compile(
 _TRAILING_PUNCT = ".,;:!?"
 
 
-def _normalize_id(raw: str) -> str:
+# 抽出用の _ID_PATTERN は長さの上限と ASCII の限定を持たない (本文の中から拾うため)。
+# 1つの値を ID として受けるかの判定にはこの上限と ASCII の限定を足す
+_ADVISORY_ID_MAX = 32
+
+
+def is_advisory_id(value: object) -> bool:
+    """value がそれ1つで GHSA / CVE / RUSTSEC の ID の形か。"""
+    return (
+        isinstance(value, str)
+        and value.isascii()
+        and len(value) <= _ADVISORY_ID_MAX
+        and _ID_PATTERN.fullmatch(value) is not None
+    )
+
+
+def normalize_advisory_id(raw: str) -> str:
     if raw[:4].upper() == "GHSA":
         # GHSA の本体は小文字が正規形
         return "GHSA" + raw[4:].lower()
@@ -45,7 +61,7 @@ def extract_advisory_ids(text: str) -> list[str]:
     """GHSA / CVE / RUSTSEC の ID を出現順・重複なしで返す。"""
     seen: dict[str, None] = {}
     for m in _ID_PATTERN.finditer(text):
-        seen.setdefault(_normalize_id(m.group(0)), None)
+        seen.setdefault(normalize_advisory_id(m.group(0)), None)
     return list(seen)
 
 

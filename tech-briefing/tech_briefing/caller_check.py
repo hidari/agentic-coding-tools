@@ -3,6 +3,7 @@
 権限の天井をここで守る。共有の reusable workflow を呼ぶ側が、権限を広げたり
 外部入力で起動する trigger を足したりできないようにする。
 """
+
 import re
 
 ALLOWED_TRIGGERS = frozenset({"workflow_dispatch", "schedule"})
@@ -18,11 +19,9 @@ SHA_RE = re.compile(r"[0-9a-f]{40}")
 def _triggers(workflow):
     # YAML 1.1 の parser は鍵 `on` を真偽値 True にするので両方を見る
     found = set()
-    present = False
     for key in ("on", True):
         if key not in workflow:
             continue
-        present = True
         value = workflow[key]
         if isinstance(value, str):
             found.add(value)
@@ -32,7 +31,7 @@ def _triggers(workflow):
             found.update(k if isinstance(k, str) else repr(k) for k in value)
         elif value is not None:
             found.add(repr(value))
-    return present, found
+    return found
 
 
 def _has_write(permissions):
@@ -60,9 +59,10 @@ def check_caller(workflow, reusable, workflow_sha):
         return ["workflow が mapping ではありません"]
     violations = []
 
-    present, triggers = _triggers(workflow)
+    triggers = _triggers(workflow)
     extra = sorted(triggers - ALLOWED_TRIGGERS)
-    if not present or not triggers:
+    # 鍵が無いときも値が空のときも、集めた trigger は空になる
+    if not triggers:
         violations.append("trigger (on) がありません。workflow_dispatch と schedule だけを許可します")
     elif extra:
         violations.append(f"許可されない trigger があります: {', '.join(extra)}")

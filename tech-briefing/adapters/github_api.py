@@ -8,16 +8,15 @@ import json
 import urllib.error
 import urllib.request
 
-from adapters.no_redirect import opener
+from adapters.http_common import USER_AGENT, opener
 from tech_briefing import wire
 from tech_briefing.protocols import CommentRef, FetchError, IssueRef
 
-TIMEOUT_SECONDS = 30
+GITHUB_TIMEOUT_SECONDS = 30
 # 1ページ (100件) のコメントは本文が長くても数 MB に収まる
 MAX_PAGE_BYTES = 20 * 1024 * 1024
 # REST の版を固定する (docs.github.com の API versions、2026-11-24 確認)
 API_VERSION = "2022-11-28"
-USER_AGENT = "tech-briefing-triage"
 
 
 class GitHubError(Exception):
@@ -46,7 +45,7 @@ class GitHubRest:
         if data is not None:
             req.add_header("Content-Type", "application/json")
         try:
-            with self._opener.open(req, timeout=TIMEOUT_SECONDS) as resp:
+            with self._opener.open(req, timeout=GITHUB_TIMEOUT_SECONDS) as resp:
                 return wire.read_json_limited(resp, MAX_PAGE_BYTES), resp.headers.get("Link")
         except urllib.error.HTTPError as e:
             raise GitHubError(f"GitHub の API が HTTP {e.code} を返しました: {method} {url}", e.code) from None

@@ -21,6 +21,7 @@ from tech_briefing.render import (  # noqa: E402
     render_failure,
     render_report,
     render_too_large,
+    is_bot_report,
     render_unexpected,
     sanitize,
     should_post,
@@ -137,9 +138,31 @@ class SanitizeTest(unittest.TestCase):
         for cp in list(range(0x202A, 0x202F)) + list(range(0x2066, 0x206A)):
             with self.subTest(cp=hex(cp)):
                 self.assertEqual(sanitize("a" + chr(cp) + "b"), "ab")
-        # 対照: 範囲のすぐ外は残す (0x2029 は段落の区切りで改行として扱うので外す)
-        for cp in (0x202F, 0x2065, 0x206A):
-            with self.subTest(outside=hex(cp)):
+
+    def test_format_and_control_characters_are_removed(self):
+        # 範囲の列挙ではなく一般カテゴリ (Cc と Cf) で落とすことを、列挙から漏れやすかった文字で見る
+        removed = {
+            "LRM": 0x200E,
+            "RLM": 0x200F,
+            "ALM": 0x061C,
+            "BOM": 0xFEFF,
+            "WORD JOINER": 0x2060,
+            "LANGUAGE TAG": 0xE0001,
+            "TAG SPACE": 0xE0020,
+            "CANCEL TAG": 0xE007F,
+            "C1 DCS": 0x0090,
+            "C1 CSI": 0x009B,
+            "DEL": 0x007F,
+            "SOFT HYPHEN": 0x00AD,
+            "ZWJ": 0x200D,
+            "ZWSP": 0x200B,
+        }
+        for name, cp in removed.items():
+            with self.subTest(name):
+                self.assertEqual(sanitize("a" + chr(cp) + "b"), "ab")
+        # 対照: Cc でも Cf でもない文字は残す (空白類・未割り当て・置換文字)
+        for cp in (0x00A0, 0x202F, 0x3000, 0x2065, 0xFFFD):
+            with self.subTest(kept=hex(cp)):
                 self.assertEqual(sanitize("a" + chr(cp) + "b"), "a" + chr(cp) + "b")
 
     def test_c0_controls_other_than_newline_and_tab_are_removed(self):
@@ -153,8 +176,8 @@ class SanitizeTest(unittest.TestCase):
         for cp in newlines:
             with self.subTest(newline=hex(cp)):
                 self.assertEqual(sanitize("a" + chr(cp) + "b"), "a b")
-        # 対照: タブと空白と DEL は残す
-        self.assertEqual(sanitize("a\tb c" + chr(0x7F)), "a\tb c" + chr(0x7F))
+        # 対照: タブと空白は残す
+        self.assertEqual(sanitize("a\tb c"), "a\tb c")
 
     def test_controls_are_removed_before_inserting_invisible_chars(self):
         # 逆の順だと、制御文字で割った ww?w. や GH?- が除去の後に素の形へ戻る
@@ -296,6 +319,21 @@ class RenderFailureTest(unittest.TestCase):
         self.assertTrue(render_unexpected().startswith(MARKER + "\n"))
         self.assertTrue(render_too_large().startswith(MARKER + "\n"))
         self.assertNotEqual(render_unexpected(), render_too_large())
+
+
+class IsBotReportTest(unittest.TestCase):
+    def test_table(self):
+        rows = [
+            ("名義と印", comment(), True),
+            ("先頭の空白の後の印", comment(body="\n  " + MARKER), True),
+            ("他のアカウントの印", comment(author="someone"), False),
+            ("名義は完全一致で比べる", comment(author=BOT_LOGIN.upper()), False),
+            ("印の無い名義のコメント", comment(body="ふつうのコメント"), False),
+            ("本文の途中の印", comment(body="前置き\n" + MARKER), False),
+        ]
+        for label, c, expected in rows:
+            with self.subTest(label):
+                self.assertIs(is_bot_report(c), expected)
 
 
 class ShouldPostTest(unittest.TestCase):
