@@ -14,11 +14,7 @@ run_post との約束)。
 
 import json
 
-from tech_briefing.constants import (
-    SELECT_INPUT_TOO_LARGE,
-    SELECT_TRIAGE,
-    SELECT_UNEXPECTED,
-)
+from tech_briefing.constants import POSTED_RESULTS, SELECT_TRIAGE
 
 # action は 40 桁の commit SHA で固定する (タグは付け替えられるため)。2026-11-24 に GitHub の API で
 # 引いた値で、どのタグも commit を直に指していた
@@ -56,10 +52,6 @@ TOOL_LOG_FILE = "tool-log.json"
 TRIAGE_FILES = (REPORT_FILE, FAILURE_FILE, TOOL_LOG_FILE)
 # 中身は Issue の本文と報告で、Issue そのものより長く残す理由が無い
 RETENTION_DAYS = 7
-
-# select の結果のうち post へ進むもの。unexpected と input-too-large は triage を飛ばして
-# post が定型のコメントにする
-POSTED_RESULTS = (SELECT_TRIAGE, SELECT_UNEXPECTED, SELECT_INPUT_TOO_LARGE)
 
 MECH_REPO_EXPR = "${{ job.workflow_repository }}"
 MECH_SHA_EXPR = "${{ job.workflow_sha }}"

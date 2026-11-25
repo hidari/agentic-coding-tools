@@ -4,21 +4,29 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 from urllib.parse import urlsplit
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from fakes import FakeFetcher, UnexpectedUrl  # noqa: E402
 from test_config import ACCEPT_PATHS, REJECT_PATHS, valid  # noqa: E402
-from tech_briefing.config import Config, ConfigError, FileRule, load_config  # noqa: E402
+from tech_briefing.config import REGISTRIES, Config, ConfigError, FileRule, load_config  # noqa: E402
 from tech_briefing.constants import WEB_FETCH_TOOL, WEB_SEARCH_TOOL  # noqa: E402
 from tech_briefing.protocols import FetchError  # noqa: E402
+from tech_briefing.repo_paths import GIT  # noqa: E402
 from tech_briefing.tools import (  # noqa: E402
+    _NAME_SHAPES,
     _PATH_MESSAGES,
     ERROR_PREFIX,
     REPO_UNKNOWN,
     REPORT_SCHEMA,
+    RESULT_LIMIT,
+    WEB_FETCH_MAX_CONTENT_TOKENS,
+    WEB_FETCH_MAX_USES,
+    WEB_SEARCH_MAX_USES,
     ToolBox,
+    _ToolError,
 )
 
 LIMIT = 100_000
@@ -212,6 +220,26 @@ class SearchFiles(RepoCase):
 
     def test_rejects_empty_term(self):
         self.assertTrue(self.box().call("search_files", {"term": ""}).startswith(ERROR_PREFIX))
+
+    def test_git_dir_under_broad_glob_is_skipped_without_failing(self):
+        # 走査は .git を除くので、glob が .git の下に当たっても検索は誤りにならずに続く
+        self.write(".git/config", "extraheader = AUTHORIZATION: token\n")
+        b = self.box(config(files=(FileRule("*", True),), issues_glob="*"))
+        # 数えるのは RepoCase のふつうのファイル (package.json・Cargo.lock・docs/criteria.md・secret.txt) だけ
+        self.assertEqual(b.call("search_files", {"term": "AUTHORIZATION"}), "検索したファイル: 4件、当たった行: 0件")
+        self.assertEqual(b.call("search_issues", {"term": "AUTHORIZATION"}), "検索した Issue: 4件、当たった Issue: 0件")
+
+    def test_search_refuses_git_paths_even_if_the_walk_returns_them(self):
+        # .git の守りは読み手 (repo_paths.read_regular) の正規形の規則が持つ。走査の除外が抜けても中身は読まない
+        self.write(".git/config", "extraheader = AUTHORIZATION: token\n")
+        b = self.box(config(files=(FileRule("*", True),), issues_glob="*"))
+        for walked in ([".git/config"], [".GIT/config"]):
+            for tool in ("search_files", "search_issues"):
+                with self.subTest(tool=tool, walked=walked):
+                    with mock.patch.object(b, "_walk", return_value=walked):
+                        out = b.call(tool, {"term": "AUTHORIZATION"})
+                    self.assertEqual(out, ERROR_PREFIX + _PATH_MESSAGES[GIT])
+                    self.assertNotIn("token", out)
 
 
 class SearchIssues(RepoCase):
@@ -600,6 +628,30 @@ class Definitions(unittest.TestCase):
             self.assertEqual(sorted(obj["required"]), sorted(obj["properties"]))
 
 
+class RegistryShapes(unittest.TestCase):
+    def test_every_registry_has_a_name_shape(self):
+        # 設定が受ける registry と、名前の形の規則を持つ registry が食い違うと、足し忘れた側が KeyError で落ちる
+        self.assertEqual(set(_NAME_SHAPES), set(REGISTRIES))
+
+    def test_unknown_ecosystem_is_refused_before_fetching(self):
+        # 取得先を知らない ecosystem を、黙ってほかの registry の経路へ落とさない
+        fetcher = FakeFetcher()
+        b = ToolBox(Path(tempfile.gettempdir()), config(), fetcher, LIMIT)
+        with self.assertRaises(_ToolError):
+            b._fetch_registry("maven", "pkg")
+        self.assertEqual(fetcher.requested, [])
+
+
+class CostLimits(unittest.TestCase):
+    def test_result_limit_is_the_provisional_value(self):
+        # 仮の値。実物の run の usage で決め直すときはこのテストも直す (費用の定数の変更が差分に必ず出るようにするため)
+        self.assertEqual(RESULT_LIMIT, 20_000)
+
+    def test_server_tool_limits_are_the_provisional_values(self):
+        # 仮の値。実物の run の usage で決め直すときはこのテストも直す
+        self.assertEqual((WEB_FETCH_MAX_USES, WEB_SEARCH_MAX_USES, WEB_FETCH_MAX_CONTENT_TOKENS), (5, 5, 20000))
+
+
 class ServerTools(unittest.TestCase):
     def test_shape(self):
         cfg = config(sources=("docs.example.org", "nodejs.org"))
@@ -609,13 +661,14 @@ class ServerTools(unittest.TestCase):
         self.assertEqual(fetch["name"], "web_fetch")
         self.assertEqual(fetch["url_sources"], {"client_tool_results": {"type": "none"}})
         self.assertEqual(fetch["allowed_domains"], ["docs.example.org", "nodejs.org"])
-        self.assertIsInstance(fetch["max_uses"], int)
-        self.assertIsInstance(fetch["max_content_tokens"], int)
+        # 仮の値。実物の run の usage で決め直すときはこのテストも直す
+        self.assertEqual(fetch["max_uses"], 5)
+        self.assertEqual(fetch["max_content_tokens"], 20000)
         self.assertEqual(search["type"], WEB_SEARCH_TOOL)
         self.assertEqual(search["type"], "web_search_20260209")
         self.assertEqual(search["name"], "web_search")
         self.assertEqual(search["allowed_domains"], ["docs.example.org", "nodejs.org"])
-        self.assertIsInstance(search["max_uses"], int)
+        self.assertEqual(search["max_uses"], 5)
         self.assertNotIn("url_sources", search)
 
 

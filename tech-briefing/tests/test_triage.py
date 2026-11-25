@@ -14,6 +14,7 @@ from tech_briefing.shapes import as_int  # noqa: E402
 from tech_briefing.tools import ERROR_PREFIX, REPORT_SCHEMA, ToolBox  # noqa: E402
 from tech_briefing.triage import (  # noqa: E402
     DO_NOT_FOLLOW,
+    LIMITS,
     SYSTEM_PROMPT,
     UNTRUSTED_BEGIN,
     UNTRUSTED_END,
@@ -319,6 +320,10 @@ class Loop(unittest.TestCase):
                 "server_tool_use": {"web_search_requests": 3, "web_fetch_requests": 1},
             },
         )
+
+    def test_limits_are_the_provisional_values(self):
+        # 仮の値。実物の run の usage で決め直すときはこのテストも直す (費用の天井の変更が差分に必ず出るようにするため)
+        self.assertEqual(LIMITS, Limits(max_rounds=25, max_input_tokens=2_000_000))
 
     def pauses(self, n):
         return [response("pause_turn", server_use(f"s{i}", "web_search", {"query": "q"})) for i in range(n)]

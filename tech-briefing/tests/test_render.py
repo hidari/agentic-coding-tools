@@ -8,9 +8,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from fakes import FakeGitHub  # noqa: E402
 from tech_briefing.constants import (  # noqa: E402
     BOT_LOGIN,
+    FAIL_INTERNAL_ERROR,
     FAILURE_KINDS,
     MARKER,
+    POSTED_RESULTS,
     SELECT_INPUT_TOO_LARGE,
+    SELECT_RESULTS,
     SELECT_TRIAGE,
     SELECT_UNEXPECTED,
 )
@@ -397,6 +400,18 @@ class PlanPostTest(unittest.TestCase):
         body, code = plan_post("no-issue", None, None)
         self.assertEqual(code, 1)
         self.assertIn("internal-error", body)
+
+    def test_every_posted_result_has_its_own_body(self):
+        # select が post へ進めた結果を plan_post が知らないと、毎回 internal-error の定型を投稿する
+        internal = render_failure(FAIL_INTERNAL_ERROR)
+        self.assertEqual(len(POSTED_RESULTS), 3)
+        for result in POSTED_RESULTS:
+            with self.subTest(result):
+                self.assertNotEqual(plan_post(result, report(), None)[0], internal)
+        # 対照: post へ進まない結果は、届いても internal-error の定型になる
+        for result in set(SELECT_RESULTS) - set(POSTED_RESULTS):
+            with self.subTest(result):
+                self.assertEqual(plan_post(result, report(), None), (internal, 1))
 
     def test_every_body_starts_with_marker(self):
         for args in (

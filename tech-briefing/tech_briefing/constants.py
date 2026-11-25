@@ -45,6 +45,13 @@ SELECT_RED_RESULTS = (
     SELECT_TITLE_MISMATCH,
     SELECT_CONFIG_ERROR,
 )
+# post へ進む結果。unexpected と input-too-large は triage を飛ばして post が定型のコメントにする。
+# 各値の本文は render.plan_post が決める
+POSTED_RESULTS = (
+    SELECT_TRIAGE,
+    SELECT_UNEXPECTED,
+    SELECT_INPUT_TOO_LARGE,
+)
 
 # 報告の分類。報告の schema の enum と、投稿の本文に載せてよい値の両方がここから作る
 CLASSIFICATIONS = ("A", "B", "C", "D")

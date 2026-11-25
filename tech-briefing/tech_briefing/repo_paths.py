@@ -55,28 +55,32 @@ def canonical_parts(value: str) -> tuple[str, ...]:
     return tuple(parts)
 
 
-def read_regular(root: Path, parts: tuple[str, ...], errors: str = "strict") -> str:
-    """root から component を1つずつ lstat し、symlink を含む経路と通常のファイル以外を拒否して UTF-8 で読む。
+def read_regular(root: Path, rel: str, errors: str = "strict") -> str:
+    """root からの相対パス rel を canonical_parts の規則で検査し、component を1つずつ lstat して、
+    symlink を含む経路と通常のファイル以外を拒否して UTF-8 で読む。
 
-    parts は canonical_parts が返した形。errors は str.decode の errors と同じ。
+    正規形でない rel は PathShapeError、読めないものは UnreadableFile (どちらも ValueError)。
+    errors は str.decode の errors と同じ。
     """
+    # 呼び出し元 (criteria・read_file・検索) が別々に検査すると、迂回した経路だけが .git を読める。
+    # 規則は読み手の中で1回だけ通す
+    parts = canonical_parts(rel)
     # macOS の一時ディレクトリのように root 自体が symlink の下にあることがあるので、root は先に解決し、
     # symlink の検査は root より下の component だけに行う
     base = Path(root).resolve()
-    shown = "/".join(parts)
     current = base
     try:
         for part in parts:
             current = current / part
             if stat.S_ISLNK(os.lstat(current).st_mode):
-                raise UnreadableFile(f"symlink は辿りません: {shown}")
+                raise UnreadableFile(f"symlink は辿りません: {rel}")
         if not stat.S_ISREG(os.lstat(current).st_mode):
-            raise UnreadableFile(f"通常のファイルではありません: {shown}")
+            raise UnreadableFile(f"通常のファイルではありません: {rel}")
         if not current.resolve().is_relative_to(base):
-            raise UnreadableFile(f"リポジトリの外です: {shown}")
+            raise UnreadableFile(f"リポジトリの外です: {rel}")
         # 検査と open のあいだに差し替えられても最後の component の symlink は辿らない
         fd = os.open(current, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with open(fd, encoding="utf-8", errors=errors) as f:
             return f.read()
     except OSError as e:
-        raise UnreadableFile(f"読めません: {shown} ({e.strerror})") from None
+        raise UnreadableFile(f"読めません: {rel} ({e.strerror})") from None

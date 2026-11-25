@@ -63,7 +63,7 @@ def read_under(root: Path, rel: str) -> str:
         raise ValueError(f"root からの相対パスではありません: {rel!r}")
     base = Path(root).resolve()
     target = (base / rel).resolve()
-    if target != base and base not in target.parents:
+    if not target.is_relative_to(base):
         raise ValueError(f"root の外を指しています: {rel!r}")
     with open(target, encoding="utf-8") as f:
         return f.read()
@@ -76,7 +76,7 @@ def read_criteria(root: Path, rel: str) -> str:
     (指す先で .git/config を拒否する形は、指す先の判定を誤ると認証情報を送る)。UTF-8 として読めない
     ファイルは置き換えずに UnicodeDecodeError (ValueError) にする。
     """
-    return repo_paths.read_regular(root, repo_paths.canonical_parts(rel))
+    return repo_paths.read_regular(root, rel)
 
 
 def _none_on_error(rel: str, read: Callable[[], _T]) -> _T | None:
@@ -115,6 +115,11 @@ def caller_workflow_path(workflow_ref: str, repository: str) -> str | None:
     if not sep or not ref.startswith(prefix):
         return None
     path = ref[len(prefix):]
-    if not path.startswith(_WORKFLOWS_DIR) or ".." in path.split("/"):
+    if not path.startswith(_WORKFLOWS_DIR):
+        return None
+    try:
+        # 道具や criteria と同じ正規形の規則で見る (.. のほか NUL・. ・空の segment・.git も拒否する)
+        repo_paths.canonical_parts(path)
+    except repo_paths.PathShapeError:
         return None
     return path

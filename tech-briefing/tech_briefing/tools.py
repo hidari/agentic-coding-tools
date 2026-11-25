@@ -18,7 +18,6 @@ from tech_briefing import repo_paths
 from tech_briefing.config import Config
 from tech_briefing.constants import CLASSIFICATIONS, WEB_FETCH_TOOL, WEB_SEARCH_TOOL
 from tech_briefing.protocols import Fetcher, FetchError
-from tech_briefing.repo_paths import is_git_name
 from tech_briefing.shapes import as_dict, as_list
 from tech_briefing.textproc import is_advisory_id, normalize_advisory_id
 from tech_briefing.wire import API_ROOT, is_repo_segment
@@ -149,8 +148,6 @@ def _version(value: object) -> str | None:
 
 class ToolBox:
     def __init__(self, repo_root: Path, config: Config, fetcher: Fetcher, result_limit: int):
-        # macOS の一時ディレクトリのように root 自体が symlink の下にあることがあるので、root は先に解決し、
-        # symlink の検査は root より下の component だけに行う
         self._root = Path(repo_root).resolve()
         self._config = config
         self._fetcher = fetcher
@@ -270,33 +267,40 @@ class ToolBox:
 
     # --- ファイル ---
 
-    def _check_rel(self, rel: str) -> tuple[str, ...]:
+    @staticmethod
+    def _check_rel(rel: str) -> None:
         try:
-            return repo_paths.canonical_parts(rel)
+            repo_paths.canonical_parts(rel)
         except repo_paths.PathShapeError as e:
             raise _ToolError(_PATH_MESSAGES[e.reason]) from None
 
-    def _open_regular(self, parts: tuple[str, ...]) -> str:
+    def _open_regular(self, rel: str) -> str:
         # lock ファイルに UTF-8 でないバイトが混ざっても検索と読み取りを止めないよう、置き換えて読む
         try:
-            return repo_paths.read_regular(self._root, parts, errors="replace")
+            return repo_paths.read_regular(self._root, rel, errors="replace")
+        except repo_paths.PathShapeError as e:
+            raise _ToolError(_PATH_MESSAGES[e.reason]) from None
         except repo_paths.UnreadableFile as e:
             raise _ToolError(str(e)) from None
 
     def _read_file(self, path: object) -> str:
-        parts = self._check_rel(_nonempty(path, "path"))
-        if not any(fnmatch.fnmatchcase("/".join(parts), r.glob) for r in self._config.files):
+        path = _nonempty(path, "path")
+        # 形の誤りは files の照合より先に、形の規則の文面で返す (「files に無い」と取り違えさせない)
+        self._check_rel(path)
+        if not any(fnmatch.fnmatchcase(path, r.glob) for r in self._config.files):
             raise _ToolError(f"設定の files に無いファイルは読めません: {path}")
-        return self._open_regular(parts)
+        return self._open_regular(path)
 
     def _walk(self, globs: list[str]):
         """globs に当たる通常のファイルを、symlink を辿らずにパスの順で返す。"""
         found = []
         for dirpath, dirnames, filenames in os.walk(self._root, followlinks=False):
-            dirnames[:] = sorted(d for d in dirnames if not is_git_name(d))
+            # .git の守りは読み手 (repo_paths.read_regular) が持つ。ここで .git のディレクトリと、worktree や
+            # submodule の gitdir の指し先を書いた .git という名前のファイルを除くのは、走査を軽くするのと、
+            # glob が .git の下に当たっても読み手の拒否で検索全体が誤りで終わらないようにするため
+            dirnames[:] = sorted(d for d in dirnames if not repo_paths.is_git_name(d))
             for name in filenames:
-                # .git という名前のファイルは worktree や submodule の gitdir の指し先なので、検索にも出さない
-                if is_git_name(name):
+                if repo_paths.is_git_name(name):
                     continue
                 full = Path(dirpath, name)
                 rel = full.relative_to(self._root).as_posix()
@@ -317,7 +321,7 @@ class ToolBox:
         files = self._walk([r.glob for r in self._config.files if r.searchable])
         hits = []
         for rel in files:
-            for n, line in enumerate(self._open_regular(PurePosixPath(rel).parts).splitlines(), 1):
+            for n, line in enumerate(self._open_regular(rel).splitlines(), 1):
                 if term in line:
                     hits.append(f"{rel}:{n}: {line}")
         # 0件のときも見たファイルの数を返し、「当たらない」と「見ていない」を区別させる
@@ -327,7 +331,7 @@ class ToolBox:
         term = _nonempty(term, "term")
         files = self._walk([self._config.issues_glob])
         names = sorted(
-            {PurePosixPath(rel).parent.name for rel in files if term in self._open_regular(PurePosixPath(rel).parts)}
+            {PurePosixPath(rel).parent.name for rel in files if term in self._open_regular(rel)}
         )
         return "\n".join([f"検索した Issue: {len(files)}件、当たった Issue: {len(names)}件", *names])
 
@@ -360,11 +364,14 @@ class ToolBox:
             crate = as_dict(as_dict(self._fetcher.get_json("https://crates.io/api/v1/crates/" + quote(package, safe=""))).get("crate"))
             latest = crate.get("max_stable_version") or crate.get("max_version")
             repo = _github_repo(crate.get("repository"))
-        else:
+        elif ecosystem == "pypi":
             info = as_dict(as_dict(self._fetcher.get_json(f"https://pypi.org/pypi/{quote(package, safe='')}/json")).get("info"))
             latest = info.get("version")
             urls = {str(k).lower(): v for k, v in as_dict(info.get("project_urls")).items()}
             repo = next((r for k in _PYPI_URL_KEYS if (r := _github_repo(urls.get(k)))), None)
+        else:
+            # config.REGISTRIES に足して、ここに取得先を足し忘れた ecosystem を、ほかの registry の経路へ落とさない
+            raise _ToolError(f"取得先を知らない ecosystem です: {ecosystem!r}")
         return _version(latest), repo
 
     def _registry_metadata(self, ecosystem: object, package: object) -> str:

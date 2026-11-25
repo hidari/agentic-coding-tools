@@ -21,8 +21,9 @@ TB_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(TB_ROOT))
 
 from tech_briefing import jobio  # noqa: E402
+from tech_briefing.constants import POSTED_RESULTS  # noqa: E402
 from tech_briefing.selection import MAX_INPUT_CHARS, is_red, run_select  # noqa: E402
-from tech_briefing.workflow_def import INPUT_FILE, POSTED_RESULTS, WORKFLOW_FILE  # noqa: E402
+from tech_briefing.workflow_def import INPUT_FILE, WORKFLOW_FILE  # noqa: E402
 
 
 def main(env, deps) -> int:

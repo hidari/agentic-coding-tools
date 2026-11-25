@@ -3,10 +3,13 @@
 本体とテストは標準ライブラリだけで回り、実行時の依存 (anthropic の SDK と PyYAML) はアダプタと
 入口のスクリプトだけが持つ。入口は PEP 723 で版を固定し、`uv run --script` で起動される。
 
-テストが import 文で adapters を読むことはここで禁じるが、importlib でファイルのパスから読むことは禁じない
-(この検査は import 文だけを見る)。依存の無いアダプタ (http_common・github_api・fetcher) は token と取得先の
-守りを固定するために test_adapters_stdlib がファイルから読む。依存のあるアダプタ (anthropic_client・
-yaml_loader) は読むと CI のテストに依存が増えるので読まず、守りは下の ast の検査で固定する。
+テストが import してよいアダプタは、実行時の依存を直にも兄弟のアダプタ経由でも import しないものだけ。
+どれがそうかは adapters の ast から導くので、依存の無いアダプタが依存のある兄弟を import すれば、
+そのアダプタもテストから読めなくなる。依存の無いアダプタ (http_common・github_api・fetcher) は token と
+取得先の守りを固定するために test_adapters_stdlib が読む。依存のあるアダプタ (anthropic_client・yaml_loader) は
+読むと CI のテストに依存が増えるので読まず、守りは下の ast の検査で固定する。この検査は import 文を見るので、
+本体・アダプタ・入口が動的な import (`__import__`・importlib) を持たないことも固定する。テストの側は
+入口のスクリプトを importlib でファイルから読む (test_entrypoints) ので、その検査の対象にしない。
 """
 
 import ast
@@ -24,7 +27,11 @@ from tech_briefing.workflow_def import workflow  # noqa: E402
 
 TB = Path(__file__).resolve().parent.parent
 REPO = TB.parent
-RUNTIME_DEPS = {"adapters", "anthropic", "yaml"}
+# 実行時の依存 (PEP 723 で入口が宣言する配布物の import 名)
+RUNTIME_DEPS = {"anthropic", "yaml"}
+# 本体はどこでも、入口は module の読み込みの時点で読んではならないもの。アダプタは丸ごと入口の関数の中でだけ読む
+NOT_AT_IMPORT_TIME = RUNTIME_DEPS | {"adapters"}
+ADAPTERS = "adapters"
 # PEP 723 の参照の実装の正規表現 (packaging.python.org の inline script metadata、2026-11-24 時点の仕様)
 _PEP723 = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
 _PIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*==[0-9][0-9A-Za-z.+!-]*")
@@ -36,31 +43,94 @@ def py_files(root: Path) -> list[Path]:
     return sorted(p for p in root.rglob("*.py") if "__pycache__" not in p.parts)
 
 
-def imported(tree: ast.AST) -> set[str]:
-    """import された module の先頭の名前。相対 import は同じパッケージの中なので数えない。"""
+def _import_names(nodes, package: str | None) -> set[str]:
     names = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            names.update(a.name.split(".")[0] for a in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            names.add(node.module.split(".")[0])
-    return names
-
-
-def imported_modules(tree: ast.AST) -> set[str]:
-    """import された module の完全な名前。imported() は先頭の名前に丸めるので、パッケージの中の向きを見るときに使う。"""
-    names = set()
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, ast.Import):
             names.update(a.name for a in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            names.add(node.module)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0:
+                base = node.module
+            elif node.level == 1 and package is not None:
+                # `from . import x` と `from .x import y` は、パッケージの中のファイルでは兄弟を読む
+                base = f"{package}.{node.module}" if node.module else package
+            else:
+                # パッケージを渡さない相対 import は、検査の対象の外 (同じパッケージの中) として数えない
+                continue
+            names.add(base)
+            # `from pkg import name` の name は submodule でもありうる。兄弟のアダプタを名指しで読む形を
+            # 見落とさないよう、属性か submodule かを問わず完全な名前として数える
+            names.update(f"{base}.{a.name}" for a in node.names)
     return names
+
+
+def imported_modules(tree: ast.AST, package: str | None = None) -> set[str]:
+    """関数の中を含め、import された module の完全な名前。package を渡すと、その中の相対 import も解決する。"""
+    return _import_names(ast.walk(tree), package)
+
+
+def imported(tree: ast.AST) -> set[str]:
+    """import された module の先頭の名前。"""
+    return {name.split(".")[0] for name in imported_modules(tree)}
+
+
+def _module_level_nodes(tree: ast.AST):
+    # 関数の本体は呼ぶまで走らない。class の本体と最上位の try / if / with は module を読む時点で走るので辿る
+    stack = [tree]
+    while stack:
+        node = stack.pop()
+        yield node
+        stack.extend(
+            child
+            for child in ast.iter_child_nodes(node)
+            if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
+        )
 
 
 def top_level_imported(tree: ast.Module) -> set[str]:
-    # 関数の中の import は、その関数を呼ぶまで走らない。入口は実物のアダプタを関数の中でだけ読む
-    return imported(ast.Module(body=[n for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))], type_ignores=[]))
+    """module を読む時点で走る import の先頭の名前。入口は実物のアダプタを関数の中でだけ読む。"""
+    return {name.split(".")[0] for name in _import_names(_module_level_nodes(tree), None)}
+
+
+def _hits_any(name: str, prefixes: set[str]) -> bool:
+    """name が prefixes のどれかか、その中の名前か。"""
+    return any(name == p or name.startswith(p + ".") for p in prefixes)
+
+
+def dependent_modules(imports: dict[str, set[str]], deps: set[str]) -> set[str]:
+    """imports (module の完全な名前 → それが import する完全な名前) のうち、deps を直にか、
+    deps に当たる別の module を経由して import するもの。"""
+    found: set[str] = set()
+    while True:
+        # 兄弟の兄弟まで辿るため、増えなくなるまで繰り返す
+        more = {m for m, names in imports.items() if m not in found and any(_hits_any(n, deps | found) for n in names)}
+        if not more:
+            return found
+        found |= more
+
+
+def adapter_imports() -> dict[str, set[str]]:
+    return {
+        f"{ADAPTERS}.{p.stem}": imported_modules(parse(p), ADAPTERS)
+        for p in py_files(TB / ADAPTERS)
+        if p.stem != "__init__"
+    }
+
+
+def forbidden_in_tests() -> set[str]:
+    """テストが import してはならない完全な名前の接頭辞。依存を読むアダプタと、依存と、入口。"""
+    return dependent_modules(adapter_imports(), RUNTIME_DEPS) | RUNTIME_DEPS | {"bin"} | {p.stem for p in py_files(TB / "bin")}
+
+
+def dynamic_imports(tree: ast.AST) -> set[str]:
+    """import 文を通らずに module を読む形 (`__import__` と importlib)。"""
+    found = {f"import {n}" for n in imported_modules(tree) if _hits_any(n, {"importlib"})}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == "__import__":
+            found.add("__import__")
+        elif isinstance(node, ast.Attribute) and node.attr == "__import__":
+            found.add(f"{ast.unparse(node.value)}.__import__")
+    return found
 
 
 def parse(path: Path) -> ast.Module:
@@ -89,30 +159,102 @@ class Imports(unittest.TestCase):
         self.assertIn("yaml", imported(parse(TB / "adapters" / "yaml_loader.py")))
         self.assertIn("tech_briefing", imported(parse(TB / "tests" / "test_select.py")))
 
+    def test_collector_resolves_full_names(self):
+        # 対照: 兄弟のアダプタを名指しで読む形 (from pkg import name と相対 import) を完全な名前で拾う
+        tree = ast.parse("from adapters import yaml_loader\nfrom . import fetcher\nfrom .http_common import opener\n")
+        self.assertEqual(
+            imported_modules(tree, ADAPTERS),
+            {
+                "adapters", "adapters.yaml_loader", "adapters.fetcher",
+                "adapters.http_common", "adapters.http_common.opener",
+            },
+        )
+        # パッケージを渡さなければ相対 import は数えない
+        self.assertEqual(imported_modules(tree), {"adapters", "adapters.yaml_loader"})
+
     def test_core_does_not_import_runtime_deps(self):
         files = py_files(TB / "tech_briefing")
         self.assertGreaterEqual(len(files), 10)
         for path in files:
             with self.subTest(path.name):
-                self.assertEqual(imported(parse(path)) & (RUNTIME_DEPS | {"bin"}), set())
+                self.assertEqual(imported(parse(path)) & (NOT_AT_IMPORT_TIME | {"bin"}), set())
 
-    def test_tests_do_not_import_adapters_or_bin(self):
+    def test_dependent_modules_follow_siblings(self):
+        # 依存の無いアダプタが依存のある兄弟を読むと、そのアダプタも依存を読むものになる (兄弟の兄弟も)
+        imports = {
+            "adapters.a": {"yaml"},
+            "adapters.b": {"adapters", "adapters.a"},
+            "adapters.c": {"adapters.b.load"},
+            "adapters.d": {"json", "adapters.ab"},
+        }
+        self.assertEqual(dependent_modules(imports, RUNTIME_DEPS), {"adapters.a", "adapters.b", "adapters.c"})
+
+    def test_dependent_adapters_are_the_ones_with_deps(self):
+        # 対照: ast から導いた集合が実物の配置と合う (導き方が何も拾えなければ、下のテストの禁止が空になる)
+        self.assertEqual(
+            dependent_modules(adapter_imports(), RUNTIME_DEPS),
+            {"adapters.anthropic_client", "adapters.yaml_loader"},
+        )
+
+    def test_tests_do_not_import_deps_dependent_adapters_or_bin(self):
         files = py_files(TB / "tests")
         self.assertGreaterEqual(len(files), 10)
-        bin_stems = {p.stem for p in py_files(TB / "bin")}
+        forbidden = forbidden_in_tests()
         for path in files:
             with self.subTest(path.name):
-                names = imported(parse(path))
-                self.assertEqual(names & (RUNTIME_DEPS | {"bin"} | bin_stems), set())
+                names = imported_modules(parse(path))
+                self.assertEqual({n for n in names if _hits_any(n, forbidden)}, set())
+
+    def test_forbidden_names_catch_sibling_imports(self):
+        # 対照: 禁止の照合は、依存のあるアダプタを読む形と、依存の無いアダプタを読む形を分ける
+        forbidden = forbidden_in_tests()
+        for source in ("from adapters import yaml_loader", "from adapters.anthropic_client import SdkMessages", "import yaml", "import run_select"):
+            with self.subTest(source):
+                self.assertNotEqual({n for n in imported_modules(ast.parse(source)) if _hits_any(n, forbidden)}, set())
+        names = imported_modules(ast.parse("from adapters import fetcher, github_api, http_common"))
+        self.assertEqual({n for n in names if _hits_any(n, forbidden)}, set())
+
+    def test_module_level_collector_sees_nested_blocks(self):
+        # 対照: module を読む時点で走る try / if / with / class の本体の import は拾い、関数の本体は拾わない
+        tree = ast.parse(
+            "try:\n    import yaml\nexcept ImportError:\n    pass\n"
+            "if True:\n    import anthropic\n"
+            "with open('x'):\n    import adapters.fetcher\n"
+            "class C:\n    import json\n"
+            "def f():\n    import zlib\n"
+            "async def g():\n    import gzip\n"
+        )
+        self.assertEqual(top_level_imported(tree), {"yaml", "anthropic", "adapters", "json"})
 
     def test_bin_scripts_import_runtime_deps_only_inside_functions(self):
         scripts = workflow_scripts()
         for path in scripts:
             with self.subTest(path.name):
                 tree = parse(path)
-                self.assertEqual(top_level_imported(tree) & RUNTIME_DEPS, set())
+                self.assertEqual(top_level_imported(tree) & NOT_AT_IMPORT_TIME, set())
                 # 対照: 実物のアダプタはどこかで読んでいる (読まないなら __main__ の配線が抜けている)
                 self.assertIn("adapters", imported(tree))
+
+    def test_no_dynamic_imports_outside_tests(self):
+        # 上の検査は import 文だけを見るので、__import__ や importlib で読む形はすり抜ける
+        files = py_files(TB / "tech_briefing") + py_files(TB / ADAPTERS) + py_files(TB / "bin")
+        self.assertGreaterEqual(len(files), 25)
+        for path in files:
+            with self.subTest(str(path.relative_to(TB))):
+                self.assertEqual(dynamic_imports(parse(path)), set())
+
+    def test_dynamic_import_collector_sees_each_form(self):
+        tree = ast.parse(
+            "import importlib\nfrom importlib import import_module\nimport importlib.util\n"
+            "__import__('yaml')\nbuiltins.__import__('yaml')\n"
+        )
+        self.assertEqual(
+            dynamic_imports(tree),
+            {
+                "import importlib", "import importlib.import_module", "import importlib.util",
+                "__import__", "builtins.__import__",
+            },
+        )
 
     def test_selection_does_not_depend_on_render(self):
         # 印の判定は marker が持つ。select の判定が投稿の整形のモジュールに依存すると、整形の都合の変更が
@@ -132,39 +274,74 @@ class Imports(unittest.TestCase):
                 parse(path)
 
 
-def yaml_uses(tree: ast.AST) -> tuple[set[str], set[str]]:
-    """(yaml の属性として呼んだ名前, yaml を読んだ import の形)。from yaml import や別名は形として記録する。"""
-    called, forms = set(), set()
+YAML_LOADER = TB / ADAPTERS / "yaml_loader.py"
+# yaml_loader が yaml から使ってよい属性。load や unsafe_load は任意の Python のオブジェクトを作れる
+YAML_ALLOWED_ATTRS = {"safe_load", "YAMLError"}
+
+
+def yaml_import_forms(tree: ast.AST) -> set[str]:
+    """yaml を読んだ import の形。from yaml import や別名は、下の名前の規則を通らずに load へ届く。"""
+    forms = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            if isinstance(node.func.value, ast.Name) and node.func.value.id == "yaml":
-                called.add(node.func.attr)
-        elif isinstance(node, ast.Import):
+        if isinstance(node, ast.Import):
             for a in node.names:
                 if a.name.split(".")[0] == "yaml":
                     forms.add(f"import {a.name} as {a.asname}" if a.asname else f"import {a.name}")
         elif isinstance(node, ast.ImportFrom) and node.module and node.module.split(".")[0] == "yaml":
             forms.add(f"from {node.module} import")
-    return called, forms
+    return forms
+
+
+def yaml_uses(tree: ast.AST) -> tuple[set[str], list[str]]:
+    """(yaml の属性として読んだ名前, 許した属性の .value 以外で yaml の名前を読んだ箇所)。
+
+    呼び出しの形だけを見ると、`f = yaml.load` や `getattr(yaml, "load")` のように呼ばずに取り出す形をすり抜ける。
+    規則は「yaml の名前は、許した属性を取る式の左辺にしか現れない」の1つにする。
+    """
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    attrs, violations = set(), []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Name) and node.id == "yaml" and isinstance(node.ctx, ast.Load)):
+            continue
+        parent = parents.get(node)
+        if isinstance(parent, ast.Attribute) and parent.value is node:
+            attrs.add(parent.attr)
+            if parent.attr in YAML_ALLOWED_ATTRS:
+                continue
+        violations.append(ast.unparse(parent) if parent is not None else node.id)
+    return attrs, violations
 
 
 class YamlSafeLoad(unittest.TestCase):
-    def test_adapters_call_only_safe_load(self):
-        # yaml.load や unsafe_load は任意の Python のオブジェクトを作れる。呼び出し側のリポジトリの YAML は信頼できない
-        called, forms = set(), set()
-        for path in py_files(TB / "adapters"):
-            c, f = yaml_uses(parse(path))
-            called |= c
-            forms |= f
-        # 部分集合ではなく一致で見る。呼び出しを1つも拾えない集め方でも素通りしないため
-        self.assertEqual(called, {"safe_load"})
-        # from yaml import load や別名で読むと、上の属性の呼び出しの検査を通らずに load を呼べる
-        self.assertEqual(forms, {"import yaml"})
+    def test_only_yaml_loader_imports_yaml(self):
+        # 呼び出し側のリポジトリの YAML は信頼できない。読む口を yaml_loader の1つに絞り、そこだけを下で見る
+        files = [p for p in py_files(TB / ADAPTERS) + py_files(TB / "bin") if p != YAML_LOADER]
+        self.assertIn(TB / "bin" / "gen_workflow.py", files)
+        self.assertGreaterEqual(len(files), 9)
+        for path in files:
+            with self.subTest(str(path.relative_to(TB))):
+                self.assertNotIn("yaml", imported(parse(path)))
+
+    def test_yaml_loader_reaches_only_allowed_attrs(self):
+        tree = parse(YAML_LOADER)
+        self.assertEqual(yaml_import_forms(tree), {"import yaml"})
+        attrs, violations = yaml_uses(tree)
+        self.assertEqual(violations, [])
+        # 一致で見る。yaml の名前を1つも拾えない集め方でも素通りしないため
+        self.assertEqual(attrs, YAML_ALLOWED_ATTRS)
 
     def test_collector_sees_other_forms(self):
-        # 対照: 集め方は safe_load 以外の呼び出しと、別の import の形を拾える
-        tree = ast.parse("import yaml as y\nfrom yaml import load\nyaml.load(t)\nyaml.unsafe_load(t)\n")
-        self.assertEqual(yaml_uses(tree), ({"load", "unsafe_load"}, {"import yaml as y", "from yaml import"}))
+        # 対照: 呼ばずに取り出す形・getattr・属性の先の属性と、別の import の形を拾う
+        tree = ast.parse(
+            "import yaml as y\nfrom yaml import load\n"
+            "f = yaml.load\ngetattr(yaml, 'load')\nyaml.load.__call__(t)\nyaml.unsafe_load(t)\n"
+            "yaml.safe_load(t)\n"
+        )
+        self.assertEqual(yaml_import_forms(tree), {"import yaml as y", "from yaml import"})
+        attrs, violations = yaml_uses(tree)
+        # ast.walk は幅優先なので、並びではなく集めた箇所の多重集合で見る
+        self.assertEqual(sorted(violations), sorted(["yaml.load", "getattr(yaml, 'load')", "yaml.load", "yaml.unsafe_load"]))
+        self.assertEqual(attrs, {"load", "unsafe_load", "safe_load"})
 
 
 class Names(unittest.TestCase):
@@ -240,15 +417,6 @@ class Pep723(unittest.TestCase):
         self.assertIsNone(_PIN.fullmatch("anthropic>=0.79"))
         self.assertIsNone(_PIN.fullmatch("anthropic"))
         self.assertIsNotNone(_PIN.fullmatch("PyYAML==6.0.3"))
-
-
-class Fetcher(unittest.TestCase):
-    def test_fetcher_never_sends_credentials(self):
-        # release notes は認証なしで引く。token を付けると LLM が選んだパッケージ経由で private の release が読める
-        source = (TB / "adapters" / "fetcher.py").read_text(encoding="utf-8")
-        for word in ("Authorization", "GITHUB_TOKEN", "add_unredirected_header", "add_header"):
-            with self.subTest(word):
-                self.assertNotIn(word, source)
 
 
 if __name__ == "__main__":

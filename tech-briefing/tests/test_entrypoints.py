@@ -31,6 +31,8 @@ from tech_briefing.constants import BOT_LOGIN, MARKER  # noqa: E402
 from tech_briefing.protocols import CommentRef, IssueRef, YamlLoader  # noqa: E402
 from tech_briefing.render import render_failure, render_report, render_too_large, render_unexpected  # noqa: E402
 from tech_briefing.selection import MAX_INPUT_CHARS  # noqa: E402
+from tech_briefing.tools import RESULT_LIMIT  # noqa: E402
+from tech_briefing.triage import LIMITS  # noqa: E402
 from tech_briefing.workflow_def import (  # noqa: E402
     FAILURE_FILE,
     INPUT_FILE,
@@ -82,6 +84,11 @@ def caller_workflow(mech_repo=MECH_REPO):
 def submit_response(report=REPORT):
     block = {"type": "tool_use", "id": "t1", "name": "submit_report", "input": report}
     return {"content": [block], "stop_reason": "tool_use", "usage": dict(USAGE)}
+
+
+def pause_response(i, input_tokens=USAGE["input_tokens"]):
+    block = {"type": "server_tool_use", "id": f"s{i}", "name": "web_search", "input": {"query": "q"}}
+    return {"content": [block], "stop_reason": "pause_turn", "usage": dict(USAGE, input_tokens=input_tokens)}
 
 
 def end_turn_response():
@@ -258,18 +265,6 @@ class Harness(unittest.TestCase):
         return json.loads(path.read_text(encoding="utf-8"))
 
 
-class Import(unittest.TestCase):
-    def test_loading_scripts_does_not_import_runtime_deps(self):
-        watched = ("anthropic", "yaml", "adapters")
-        before = {m for m in sys.modules if m.split(".")[0] in watched}
-        for name in ("select", "triage", "post"):
-            with self.subTest(name):
-                module = load_script(name)
-                self.assertTrue(callable(module.main))
-        after = {m for m in sys.modules if m.split(".")[0] in watched}
-        self.assertEqual(after - before, set())
-
-
 class Select(Harness):
     def test_triage_writes_input_and_result(self):
         rc = self.run_select(FakeGitHub([issue()], {7: [CommentRef(1, AUTHOR, "コメント", "2026-11-24T00:01:00Z")]}))
@@ -360,19 +355,9 @@ class Select(Harness):
                 self.assertIn("docs/criteria.md", self.summary_text())
                 self.assertFalse((self.select_out / INPUT_FILE).exists())
                 self.assertEqual(github.calls, [])
-
-    def test_symlink_to_a_plain_file_in_caller_is_config_error(self):
-        # 指す先がリポジトリの中のふつうのファイルでも、symlink は辿らない (道具の読み取りの規則と同じ)
-        self.link_criteria_to_plain_file()
-        github = FakeGitHub([issue()], {7: []})
-        self.assertEqual(self.run_select(github), 1)
-        self.assertEqual(self.outputs(), "result=config-error\n")
-        self.assertIn("symlink", self.stderr.getvalue())
-        # 対照: 同じ中身のふつうのファイルなら triage へ進む
-        self.setUp()
-        self.write(self.caller / "docs" / "criteria.md", CRITERIA_TEXT)
-        self.assertEqual(self.run_select(FakeGitHub([issue()], {7: []})), 0)
-        self.assertEqual(self.outputs(), "result=triage\n")
+                if "symlink" in label:
+                    # 止めたのは symlink を辿らない規則で、指す先を開きに行った失敗ではない
+                    self.assertIn("symlink", self.stderr.getvalue())
 
     def test_unparseable_config_is_config_error(self):
         self.write(self.caller / "tb.yml", "{not json")
@@ -430,6 +415,38 @@ class Triage(Harness):
                 self.assertEqual(self.run_triage([submit_response()]), 1)
                 self.assertEqual(self.read_json(self.triage_out / FAILURE_FILE), "internal-error")
                 self.assertEqual(self.messages.requests, [])
+
+    # 下の3つは入口が費用の上限を本体へ渡すことを固定する。値は入口が import する定数から組み、
+    # 値そのものの固定は test_triage と test_tools が持つ
+
+    def test_entry_passes_the_round_limit(self):
+        # 応答の数は定数から決まるので、定数が膨らんだときは組む前に止める
+        self.assertLessEqual(LIMITS.max_rounds, 1000)
+        self.select_triage()
+        self.assertEqual(self.run_triage([pause_response(i) for i in range(LIMITS.max_rounds + 1)]), 1)
+        self.assertEqual(self.read_json(self.triage_out / FAILURE_FILE), "loop-limit")
+        # 予備の応答を1つ残し、止まったのが Fake の使い切りではなく上限であることを示す
+        self.assertEqual(len(self.messages.requests), LIMITS.max_rounds)
+
+    def test_entry_passes_the_token_limit(self):
+        self.select_triage()
+        over = pause_response(0, input_tokens=LIMITS.max_input_tokens + 1)
+        self.assertEqual(self.run_triage([over, submit_response()]), 1)
+        self.assertEqual(self.read_json(self.triage_out / FAILURE_FILE), "token-limit")
+        self.assertEqual(len(self.messages.requests), 1)
+
+    def test_entry_passes_the_result_limit(self):
+        # ファイルの大きさは定数から決まるので、定数が膨らんだときは書く前に止める
+        self.assertLessEqual(RESULT_LIMIT, 1_000_000)
+        self.write(self.caller / "package.json", "x" * (RESULT_LIMIT + 5))
+        self.select_triage()
+        read = {"type": "tool_use", "id": "t0", "name": "read_file", "input": {"path": "package.json"}}
+        first = {"content": [read], "stop_reason": "tool_use", "usage": dict(USAGE)}
+        self.assertEqual(self.run_triage([first, submit_response()]), 0)
+        (result,) = self.messages.requests[1]["messages"][-1]["content"]
+        self.assertEqual(result["tool_use_id"], "t0")
+        self.assertTrue(result["content"].startswith("x" * RESULT_LIMIT + "\n"), result["content"][-80:])
+        self.assertNotIn("x" * (RESULT_LIMIT + 1), result["content"])
 
     def test_criteria_outside_caller_is_internal_error(self):
         self.select_triage()
@@ -623,6 +640,12 @@ class JobIo(unittest.TestCase):
             f"{CALLER_REPO}/.github/workflows/../../tb.yml@refs/heads/main": None,
             f"{CALLER_REPO}x/{CALLER_WORKFLOW}@refs/heads/main": None,
             "": None,
+            # パスの正規形の規則 (repo_paths.canonical_parts) で拒否する形
+            f"{CALLER_REPO}/.github/workflows/a{chr(0x0)}.yml@refs/heads/main": None,
+            f"{CALLER_REPO}/.github/workflows/./briefing.yml@refs/heads/main": None,
+            f"{CALLER_REPO}/.github/workflows//briefing.yml@refs/heads/main": None,
+            f"{CALLER_REPO}/.github/workflows/.git/config@refs/heads/main": None,
+            f"{CALLER_REPO}/.github/workflows/.GIT/config@refs/heads/main": None,
         }
         for ref, expected in cases.items():
             with self.subTest(ref):

@@ -1,45 +1,24 @@
 """標準ライブラリだけで書いたアダプタ (http_common・github_api・fetcher) の、token と取得先を守る検査。
 
-アダプタは test_entrypoints が入口を読むのと同じく、importlib でファイルのパスから読む。読むのは依存の無い
-アダプタだけで、依存のあるもの (anthropic_client・yaml_loader) は読まない (CI のテストに依存を増やさないため)。
+読むのは依存の無いアダプタだけで、依存のあるもの (anthropic_client・yaml_loader) は読まない (CI のテストに
+依存を増やさないため)。どのアダプタを読んでよいかは test_boundaries が ast から導いて固定する。
 送信の口 (`_opener`) を記録係に差し替え、通信はしない。
 """
 
-import ast
-import importlib.util
 import os
 import sys
 import unittest
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
+from adapters import fetcher, github_api, http_common  # noqa: E402
 from tech_briefing import wire  # noqa: E402
 from tech_briefing.protocols import FetchError  # noqa: E402
 
-TB = Path(__file__).resolve().parent.parent
-STDLIB_ADAPTERS = ("http_common", "github_api", "fetcher")
-# アダプタが import してよい、標準ライブラリの外の名前 (同じリポジトリの中のパッケージ)
-_IN_REPO = {"adapters", "tech_briefing"}
 # token は形だけの値。実物の token と取り違えない並びを変数で組む
 TOKEN = "-".join(["test", "token", "value"])
-
-
-def load_adapter(name: str):
-    if name not in STDLIB_ADAPTERS:
-        raise AssertionError(f"依存のあるアダプタはテストから読みません: {name}")
-    spec = importlib.util.spec_from_file_location(f"tb_adapter_{name}", TB / "adapters" / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def refuse_redirect_class(module):
-    # github_api と fetcher は adapters.http_common を通常の import で読むので、ファイルから別に読んだ
-    # http_common とはクラスの実体が違う。各アダプタが実際に使う opener の module から取る
-    return sys.modules[module.opener.__module__].RefuseRedirect
 
 
 class FakeResponse:
@@ -81,61 +60,35 @@ def headers_of(req) -> dict[str, str]:
     return {k.casefold(): v for k, v in req.header_items()}
 
 
-class StdlibOnly(unittest.TestCase):
-    def test_loaded_adapters_import_only_stdlib_and_repo_packages(self):
-        # 依存の無いことが、ファイルから読んでよい前提。依存が増えたらここで止める
-        for name in STDLIB_ADAPTERS:
-            with self.subTest(name):
-                tree = ast.parse((TB / "adapters" / f"{name}.py").read_text(encoding="utf-8"))
-                tops = set()
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.Import):
-                        tops.update(a.name.split(".")[0] for a in node.names)
-                    elif isinstance(node, ast.ImportFrom) and node.module:
-                        tops.add(node.module.split(".")[0])
-                self.assertNotEqual(tops, set())
-                self.assertEqual(tops - set(sys.stdlib_module_names) - _IN_REPO, set())
-
-    def test_loader_refuses_adapters_with_deps(self):
-        for name in ("anthropic_client", "yaml_loader"):
-            with self.subTest(name):
-                with self.assertRaises(AssertionError):
-                    load_adapter(name)
-
-
 class Redirects(unittest.TestCase):
     def test_opener_refuses_redirects(self):
-        hc = load_adapter("http_common")
-        handlers = hc.opener().handlers
+        handlers = http_common.opener().handlers
         redirectors = [h for h in handlers if isinstance(h, urllib.request.HTTPRedirectHandler)]
         # 素の HTTPRedirectHandler は redirect の先へ header を付けたまま送り直す
         self.assertEqual([h for h in redirectors if type(h) is urllib.request.HTTPRedirectHandler], [])
-        self.assertEqual([type(h) for h in redirectors], [hc.RefuseRedirect])
+        self.assertEqual([type(h) for h in redirectors], [http_common.RefuseRedirect])
 
     def test_refuse_redirect_raises_fetch_error(self):
-        hc = load_adapter("http_common")
         req = urllib.request.Request(wire.API_ROOT + "/x")
         with self.assertRaises(FetchError) as cm:
-            hc.RefuseRedirect().redirect_request(req, None, 302, "Found", {}, "https://example.org/y")
+            http_common.RefuseRedirect().redirect_request(req, None, 302, "Found", {}, "https://example.org/y")
         self.assertEqual(cm.exception.status, 302)
 
     def test_each_adapter_wires_the_refusing_opener(self):
         # 記録係に差し替える前の、組み立てたままの opener を見る (差し替えた後では配線が見えない)
-        gh = load_adapter("github_api")
-        fe = load_adapter("fetcher")
-        for label, module, instance in (
-            ("github_api", gh, gh.GitHubRest(TOKEN, "o/r")),
-            ("fetcher", fe, fe.UrllibFetcher()),
+        for label, instance in (
+            ("github_api", github_api.GitHubRest(TOKEN, "o/r")),
+            ("fetcher", fetcher.UrllibFetcher()),
         ):
             with self.subTest(label):
                 types = [type(h) for h in instance._opener.handlers]
-                self.assertIn(refuse_redirect_class(module), types)
+                self.assertIn(http_common.RefuseRedirect, types)
                 self.assertNotIn(urllib.request.HTTPRedirectHandler, types)
 
 
 class GitHubRestGuards(unittest.TestCase):
     def setUp(self):
-        self.gh = load_adapter("github_api")
+        self.gh = github_api
         self.rest = self.gh.GitHubRest(TOKEN, "o/r")
         self.recorder = Recorder()
         self.rest._opener = self.recorder
@@ -182,7 +135,7 @@ class GitHubRestGuards(unittest.TestCase):
 
 class FetcherGuards(unittest.TestCase):
     def setUp(self):
-        self.fe = load_adapter("fetcher")
+        self.fe = fetcher
         self.fetcher = self.fe.UrllibFetcher()
         self.recorder = Recorder(b'{"ok": true}')
         self.fetcher._opener = self.recorder

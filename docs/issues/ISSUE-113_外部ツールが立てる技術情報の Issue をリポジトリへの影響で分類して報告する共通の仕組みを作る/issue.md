@@ -43,7 +43,7 @@ LLM にトリアージを任せたいが、Issue の本文とコメントは外�
   - run を re-run したときに、同じ名前の artifact が衝突しないか
   - stop_reason が tool_use なのに client の道具のブロックが無い応答を API が返すか。返すなら、いまのループは assistant を最後にして送り直し、400 から api-error に化けうる
   - スキーム無しの URL (`www.` で始まる形) を web_fetch が開くか
-- [ ] 有効にする前のテストを、spec の「有効にする前のテスト」のとおり、最初に導入するリポジトリで回す。基準の run と入力の範囲、2回目と対照、injection (道具の制限の確かめを含む) の順。ブリーフィングが投稿を始める前に行う
+- [ ] 有効にする前のテストを、spec の「有効にする前のテスト」のとおり、最初に導入するリポジトリで回す。基準の run と入力の範囲、2回目と対照、injection (道具の制限の確かめを含む) の順。外部のツールが当日の Issue を立て始める前に行う
   - 基準の run と2回目は導入するリポジトリごとに1回ずつ、injection は共通の仕組みの SHA ごとに1回回す
   - 終わったらテスト用に立てた Issue を閉じる
 - [ ] 導入の手順の skill を apm で配る形で書く。有効にする前のテストを最初のリポジトリで1回回したあとに書く
@@ -54,14 +54,16 @@ LLM にトリアージを任せたいが、Issue の本文とコメントは外�
   - select が GitHub の API の失敗 (URLError・TimeoutError・HTTPException) で `result=` と step summary を出さずに traceback で終わる。入口で捕まえて原因を1行出す。select の結果の値を足すかもここで決める
   - max_tokens などで止まって no-report になったときに、最後の stop_reason を内部ログに出す
   - `pause_turn` の応答に client の tool_use が混ざる形のテストを足す
-  - select の upload の step の `if:` を固定するテストを足す。済み (tech-briefing/tests/test_workflow_def.py の `Flow.test_select_uploads_input_only_for_posted_results` が、暗黙の `success()` を含む判定表で固定する)
   - テストの builder の複製 (`issue()`・`comment()`・ToolBox の組み立て) を tech-briefing/tests/fakes.py に寄せる。いまは test_select・test_entrypoints・test_render・test_tools・test_triage がそれぞれ持つ
   - tech-briefing/tests/test_render.py の `ShouldPostTest` と `IsBotReportTest` の表が重なっている。表の各行で `is_marked`・`is_bot_report`・`should_post` を見る形にまとめる
   - tech-briefing/tests/test_entrypoints.py の `recording_open` の複製 (`Post.test_target_comes_only_from_select_dir` と `ArtifactNames.test_post_reads_only_uploaded_names`) を Harness の contextmanager にする
+  - 「想定と違う型は空として読む」を tech-briefing/tech_briefing/shapes.py の `as_dict` に揃える。いまは tech-briefing/tech_briefing/caller_check.py の3か所と tech-briefing/tech_briefing/wire.py の1か所が、それぞれ `isinstance` で書いている
+  - search_files と search_issues は、正規形の規則が拒否する名前のファイル (UTF-8 で表せない名前など) や読めないファイルが1つでも走査に出ると、検索の全体が誤りになる。中身を読まない側に倒れているので守りとしては正しいが、そのファイルだけを飛ばして件数に数える形にするかを決める
+  - パスの規則と criteria の誤りの表を1か所に寄せる。tech-briefing/tests/test_tools.py の `SharedPathRule` と tech-briefing/tests/test_config.py の `REJECT_PATHS` / `ACCEPT_PATHS` のループが重なり、tech-briefing/tests/test_select.py に criteria の誤りの手書きの列挙があり、tech-briefing/tests/test_entrypoints.py の `JobIo.test_read_criteria_or_none` の表は使われない値を持つ dict になっている
 - [ ] spec の post の job の節を直す。`always()` と書いているところを `!cancelled()` にする。意図は「失敗を越えて走るが、取り消しは尊重する」で、`always()` は run の取り消しの後も投稿しうる。実装は `!cancelled()` になっている。spec は今回は直さず、スナップショットとして残してこのタスクで追う。plan の Task 8 の Step 1 も `always()` と書いているが、実装が正で、plan はスナップショットとして追わない
 - [ ] spec の select の job の節を、select が criteria のファイルを読んで確かめる実装に合わせて直す。呼び出し側のリポジトリの checkout を select が使う範囲 (「設定のファイルと呼び出しの workflow のファイルだけ」) に criteria のファイルを足し、設定の誤りの列挙 (`config-error` で終わるもの) に、criteria のパスの形の誤り (絶対パス・`..`・`.`・空の segment・`.git`) と、criteria のファイルが読めないか中身が空のときを足す。glob の形の誤りに `.`・空の segment・`.git` を足す
   - 設定の誤りの列挙に、パスに NUL や UTF-8 で表せない文字を含むときと、criteria の経路のどこかが symlink のとき (指す先がリポジトリの中のふつうのファイルでも) を足す。criteria は道具の読み取りと同じ読み手 (tech-briefing/tech_briefing/repo_paths.py の `read_regular`) で読み、symlink を辿らない
-  - spec の「置き場とモジュールの分け方」の「アダプタと入口のスクリプトはこのリポジトリの CI のテストから import しない」を、「依存のあるアダプタ (anthropic_client・yaml_loader) は CI のテストから読まない。依存の無いアダプタは importlib でファイルから読んでよい」に直す (tech-briefing/tests/test_adapters_stdlib.py が依存の無いアダプタを読む)
+  - spec の「置き場とモジュールの分け方」の「アダプタと入口のスクリプトはこのリポジトリの CI のテストから import しない」を、「実行時の依存を直にか兄弟のアダプタ経由で import するアダプタ (いまは anthropic_client・yaml_loader) は CI のテストから読まない。依存の無いアダプタは読んでよい」に直す (tech-briefing/tests/test_adapters_stdlib.py が依存の無いアダプタを読み、どれを読んでよいかは tech-briefing/tests/test_boundaries.py が ast から導いて固定する)
 - [ ] spec の「実装のときに確かめること」を片付ける。解消した項目は解消として spec に書き、残る項目は実物の run で確かめる
   - 解消: `job.workflow_repository` と `job.workflow_sha` は実在する (docs.github.com の原文で確認。GitHub Enterprise Server では使えない)。ただし step の `env:` と `with:` で効くかは上の実物の run で確かめる。docs の原文だけが根拠で、実物の run では確かめていない
   - 解消: environment の鍵は、呼び出し側が名前で渡せば呼ばれた側の job に届く (docs.github.com の reuse-workflows に "You can pass a secret by name even if it only exists in the environment" と "the environment secret takes precedence" とある)。docs の原文だけが根拠で、実物の run では確かめていない
