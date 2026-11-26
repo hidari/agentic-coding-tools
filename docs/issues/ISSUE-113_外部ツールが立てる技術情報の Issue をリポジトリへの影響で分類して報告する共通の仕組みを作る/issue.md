@@ -55,7 +55,7 @@ LLM にトリアージを任せたいが、Issue の本文とコメントは外�
   - max_tokens などで止まって no-report になったときに、最後の stop_reason を内部ログに出す
   - `pause_turn` の応答に client の tool_use が混ざる形のテストを足す
   - テストの builder の複製 (`issue()`・`comment()`・ToolBox の組み立て) を tech-briefing/tests/fakes.py に寄せる。いまは test_select・test_entrypoints・test_render・test_tools・test_triage がそれぞれ持つ
-    - 応答の builder も同じく寄せる (test_entrypoints の `pause_response`、test_triage の `pauses`・`server_use`・`submit_response`)
+    - 応答の builder も同じく寄せる (test_entrypoints の `submit_response`・`pause_response`・`end_turn_response`、test_triage の `response`・`usage`・`thinking`・`tool_use`・`server_use`・`submit`・`pauses`)
   - tech-briefing/tests/test_render.py の `ShouldPostTest` と `IsBotReportTest` の表が重なっている。表の各行で `is_marked`・`is_bot_report`・`should_post` を見る形にまとめる
   - tech-briefing/tests/test_entrypoints.py の `recording_open` の複製 (`Post.test_target_comes_only_from_select_dir` と `ArtifactNames.test_post_reads_only_uploaded_names`) を Harness の contextmanager にする
   - 「想定と違う型は空として読む」を tech-briefing/tech_briefing/shapes.py の `as_dict` に揃える。いまは tech-briefing/tech_briefing/caller_check.py の3か所と tech-briefing/tech_briefing/wire.py の1か所が、それぞれ `isinstance` で書いている
@@ -63,8 +63,8 @@ LLM にトリアージを任せたいが、Issue の本文とコメントは外�
   - パスの規則と criteria の誤りの表を1か所に寄せる。tech-briefing/tests/test_tools.py の `SharedPathRule` と tech-briefing/tests/test_config.py の `REJECT_PATHS` / `ACCEPT_PATHS` のループが重なり、tech-briefing/tests/test_select.py に criteria の誤りの手書きの列挙があり、tech-briefing/tests/test_entrypoints.py の `JobIo.test_read_criteria_or_none` の表は使われない値を持つ dict になっている
   - 以下は PR #112 のマージ前のゲートで、挙動を誤らせないので直さずに記録したもの (PR #112 のコメントにも残した)
   - tech-briefing/tech_briefing/triage.py:31 のコメントが「`<` はすべて < に逃がす」と、同じ文字から同じ文字への変換に読める。89行の実装は JSON のエスケープの6文字へ置き換えていて正しい。直すときはエスケープの表記を文で書く (編集の道具が表記を実際の文字へ解くと、同じ化けが再発しうる)
-  - tech-briefing/tests/test_workflow_def.py:292-293 のコメントが「checkout と artifact と uv の分があることを見る」と書くが、検査は件数が正であることだけ。コメントを検査に合わせる
-  - tech-briefing/tech_briefing/workflow_def.py:125 の「env には入口か SDK が読む鍵だけを置く」が、無関係な定数 `REPOSITORY_EXPR` の直上にある。`_step` の直前へ移す
+  - tech-briefing/tests/test_workflow_def.py の `Uses.test_every_uses_is_pinned_by_full_sha` の293行のコメントが「checkout と artifact と uv の分があることを見る」と書くが、検査は件数が正であることだけ。コメントを検査に合わせる
+  - tech-briefing/tech_briefing/workflow_def.py:125 の「env には入口か SDK が読む鍵だけを置く」が、無関係な定数 `REPOSITORY_EXPR` の直上にある。env を受けて step を組む `_run` (114行) の直前へ移す
   - tech-briefing/bin/gen_workflow.py:31 の `os.path.relpath(TARGET, REPO_ROOT)` は `WORKFLOW_FILE` を組んでから逆算している。エラーの文に `WORKFLOW_FILE` をそのまま使う
   - 投稿先の鍵 `"issue_number"` が tech-briefing/tech_briefing/selection.py:84・tech-briefing/bin/run_select.py:48・tech-briefing/bin/run_post.py:30 に literal で3回ある (job の間の約束)。constants の定数か、selection の「番号だけの入力」を作る関数に寄せる
   - tech-briefing/tests/test_tools.py の `CostLimits.test_server_tool_limits_are_the_provisional_values` と `ServerTools.test_shape` が費用の上限の仮の値を二重に literal で固定している。片方に寄せる (pin は減らない)
