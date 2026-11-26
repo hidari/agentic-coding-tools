@@ -55,11 +55,28 @@ LLM にトリアージを任せたいが、Issue の本文とコメントは外�
   - max_tokens などで止まって no-report になったときに、最後の stop_reason を内部ログに出す
   - `pause_turn` の応答に client の tool_use が混ざる形のテストを足す
   - テストの builder の複製 (`issue()`・`comment()`・ToolBox の組み立て) を tech-briefing/tests/fakes.py に寄せる。いまは test_select・test_entrypoints・test_render・test_tools・test_triage がそれぞれ持つ
+    - 応答の builder も同じく寄せる (test_entrypoints の `pause_response`、test_triage の `pauses`・`server_use`・`submit_response`)
   - tech-briefing/tests/test_render.py の `ShouldPostTest` と `IsBotReportTest` の表が重なっている。表の各行で `is_marked`・`is_bot_report`・`should_post` を見る形にまとめる
   - tech-briefing/tests/test_entrypoints.py の `recording_open` の複製 (`Post.test_target_comes_only_from_select_dir` と `ArtifactNames.test_post_reads_only_uploaded_names`) を Harness の contextmanager にする
   - 「想定と違う型は空として読む」を tech-briefing/tech_briefing/shapes.py の `as_dict` に揃える。いまは tech-briefing/tech_briefing/caller_check.py の3か所と tech-briefing/tech_briefing/wire.py の1か所が、それぞれ `isinstance` で書いている
   - search_files と search_issues は、正規形の規則が拒否する名前のファイル (UTF-8 で表せない名前など) や読めないファイルが1つでも走査に出ると、検索の全体が誤りになる。中身を読まない側に倒れているので守りとしては正しいが、そのファイルだけを飛ばして件数に数える形にするかを決める
   - パスの規則と criteria の誤りの表を1か所に寄せる。tech-briefing/tests/test_tools.py の `SharedPathRule` と tech-briefing/tests/test_config.py の `REJECT_PATHS` / `ACCEPT_PATHS` のループが重なり、tech-briefing/tests/test_select.py に criteria の誤りの手書きの列挙があり、tech-briefing/tests/test_entrypoints.py の `JobIo.test_read_criteria_or_none` の表は使われない値を持つ dict になっている
+  - 以下は PR #112 のマージ前のゲートで、挙動を誤らせないので直さずに記録したもの (PR #112 のコメントにも残した)
+  - tech-briefing/tech_briefing/triage.py:31 のコメントが「`<` はすべて < に逃がす」と、同じ文字から同じ文字への変換に読める。89行の実装は JSON のエスケープの6文字へ置き換えていて正しい。直すときはエスケープの表記を文で書く (編集の道具が表記を実際の文字へ解くと、同じ化けが再発しうる)
+  - tech-briefing/tests/test_workflow_def.py:292-293 のコメントが「checkout と artifact と uv の分があることを見る」と書くが、検査は件数が正であることだけ。コメントを検査に合わせる
+  - tech-briefing/tech_briefing/workflow_def.py:125 の「env には入口か SDK が読む鍵だけを置く」が、無関係な定数 `REPOSITORY_EXPR` の直上にある。`_step` の直前へ移す
+  - tech-briefing/bin/gen_workflow.py:31 の `os.path.relpath(TARGET, REPO_ROOT)` は `WORKFLOW_FILE` を組んでから逆算している。エラーの文に `WORKFLOW_FILE` をそのまま使う
+  - 投稿先の鍵 `"issue_number"` が tech-briefing/tech_briefing/selection.py:84・tech-briefing/bin/run_select.py:48・tech-briefing/bin/run_post.py:30 に literal で3回ある (job の間の約束)。constants の定数か、selection の「番号だけの入力」を作る関数に寄せる
+  - tech-briefing/tests/test_tools.py の `CostLimits.test_server_tool_limits_are_the_provisional_values` と `ServerTools.test_shape` が費用の上限の仮の値を二重に literal で固定している。片方に寄せる (pin は減らない)
+  - tech-briefing/tests/test_render.py:399-402 の `PlanPostTest.test_other_results_are_internal_error` は、412-414行の対照のループに含まれる。消す
+  - tech-briefing/tests/test_adapters_stdlib.py:91・138 の `self.gh` / `self.fe` は import した module の別名で、別の実体に見える。module を直に使う
+  - tech-briefing/tests/test_adapters_stdlib.py:1-4 と tech-briefing/tests/test_boundaries.py:8-10 の docstring が、ast から導いて固定しているアダプタの名前を literal で再掲している。tech-briefing/adapters/__init__.py と同じく参照だけにする
+  - tech-briefing/tests/test_boundaries.py の定数 `ADAPTERS` を足したのに、33・158・159・236行に literal の `"adapters"` が残っている。揃える
+  - tech-briefing/tests/test_boundaries.py:356 の `Names` のテストが `{"anthropic", "yaml"}` を literal で持ち、同じファイルの `RUNTIME_DEPS` と二重記述になっている。`RUNTIME_DEPS` を参照する
+  - tech-briefing/tests/test_boundaries.py:100-122 の `dependent_modules` は `RUNTIME_DEPS` に載った名前しか知らず、依存の無いアダプタに `RUNTIME_DEPS` の外の第三者の import が足されても静的には止まらない (CI の ImportError で赤にはなる)。`dynamic_imports` と `yaml_uses` は `sys.modules[...]` 経由の形を拾わない
+  - tech-briefing/tech_briefing/caller_check.py:10-14 の `CALLER_WITH_KEYS`・`CALLER_SECRETS`・`CALLER_PERMISSIONS` が、tech-briefing/tech_briefing/workflow_def.py の `workflow()` の workflow_call の inputs・secrets と job の権限の写しで、両者を突き合わせるテストが無い (input を足すと test_workflow_def の literal の1件だけが赤になり、そこを直すと caller_check とのずれは誰も捕まえない)。`CALLER_WITH_KEYS` と `CALLER_SECRETS` は workflow_def から導く。`CALLER_PERMISSIONS` は権限の天井なので literal のまま残し (導くと呼ばれる側の権限が増えたときに天井が黙って広がる)、job の権限の scope ごとの最大と一致することをテストで固定する
+  - 同じ caller_check.py の89行と97行のエラーの文が `CALLER_PERMISSIONS` と `CALLER_SECRETS` の値を literal で再掲している。101行は `CALLER_WITH_KEYS` から文を組んでいる。3つの文の作り方を揃え、集合から組む
+  - tech-briefing/tech_briefing/jobio.py の `read_under` は絶対パスと root の外への脱出しか見ず、`./tb.yml`・`.//tb.yml`・`.git/config` を受ける。同じモジュールの `caller_workflow_path` は `canonical_parts` を通す。`.git/config` を config-path に渡すと YAML として読めずに config-error になり、PyYAML の例外の文が該当の行の断片を Actions のログへ出す (checkout は `persist-credentials: false` なのでトークンは無い)。`caller_workflow_path` の `canonical_parts` は残し (test_entrypoints の `test_caller_workflow_path` の6行が固定している)、`read_under` にも `canonical_parts` を足す。root の中の symlink (tb.yml から .git/config) は文字列の検査では止まらないので、resolve の後の相対の parts にも `is_git_name` を当てるか、tech-briefing/adapters/yaml_loader.py:12 の ValueError から例外の本文を外して型と行・列だけにする。テストの行は `test_config_errors_are_red_and_do_not_touch_github` の既存の config_path の行の隣へ足す
 - [ ] spec の post の job の節を直す。`always()` と書いているところを `!cancelled()` にする。意図は「失敗を越えて走るが、取り消しは尊重する」で、`always()` は run の取り消しの後も投稿しうる。実装は `!cancelled()` になっている。spec は今回は直さず、スナップショットとして残してこのタスクで追う。plan の Task 8 の Step 1 も `always()` と書いているが、実装が正で、plan はスナップショットとして追わない
 - [ ] spec の select の job の節を、select が criteria のファイルを読んで確かめる実装に合わせて直す。呼び出し側のリポジトリの checkout を select が使う範囲 (「設定のファイルと呼び出しの workflow のファイルだけ」) に criteria のファイルを足し、設定の誤りの列挙 (`config-error` で終わるもの) に、criteria のパスの形の誤り (絶対パス・`..`・`.`・空の segment・`.git`) と、criteria のファイルが読めないか中身が空のときを足す。glob の形の誤りに `.`・空の segment・`.git` を足す
   - 設定の誤りの列挙に、パスに NUL や UTF-8 で表せない文字を含むときと、criteria の経路のどこかが symlink のとき (指す先がリポジトリの中のふつうのファイルでも) を足す。criteria は道具の読み取りと同じ読み手 (tech-briefing/tech_briefing/repo_paths.py の `read_regular`) で読み、symlink を辿らない
