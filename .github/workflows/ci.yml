@@ -77,6 +77,13 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - run: python3 scripts/gen-readme.py --check
 
+      # 生成物と生成元の一致という同じ種類の検査なので、新 job を作らずこの job へ相乗りさせる
+      # (新 job は runner を 1 つ増やす)。job 名が覆えていないので step に name を置く。
+      # pre-commit にも同じ検査を置いてあるが、-n での skip や pre-commit 未導入の
+      # 経路があるので防御を 1 層にしない。
+      - name: 共通の reusable workflow が生成元と一致しているか検査する
+        run: python3 tech-briefing/bin/gen_workflow.py --check
+
   python-tests:
     name: Python テスト (stdlib unittest)
     runs-on: ubuntu-26.04
