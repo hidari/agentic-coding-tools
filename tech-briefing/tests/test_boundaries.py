@@ -2,9 +2,7 @@
 
 本体とテストは標準ライブラリだけで回り、実行時の依存 (anthropic の SDK と PyYAML) はアダプタと
 入口のスクリプトだけが持つ。入口は PEP 723 で版を固定し、隣の `<script>.lock` で間接の依存まで hash で固定して、
-`uv run --locked --script` で起動される。`--locked` は起動の時点で、lock が無いときと、依存・requires-python・
-前へずらした exclude-newer が PEP 723 と食い違うときに止める。後ろへずらした exclude-newer は lock のまま黙って通るので
-(uv 0.13.4)、ここは lock が追跡下にあって PEP 723 と食い違わないことを固定する。
+`uv run --locked --script` で起動される。`--locked` が止めない食い違いと lock の検査は ScriptLock が持つ。
 
 テストが import してよいアダプタは、実行時の依存を直にも兄弟のアダプタ経由でも import しないものだけ。
 どれがそうかは adapters の ast から導くので、依存の無いアダプタが依存のある兄弟を import すれば、
@@ -145,11 +143,23 @@ def parse(path: Path) -> ast.Module:
 def workflow_scripts() -> list[Path]:
     runs = [s["run"] for job in workflow()["jobs"].values() for s in job["steps"] if "run" in s]
     found = [m.group(1) for r in runs for m in re.finditer(r"uv run --locked --script (\S+)", r)]
+    if not found:
+        # 起動の形を拾えないと、入口を回すテストがどれも0本で素通りする
+        raise AssertionError("workflow から入口の起動を1つも拾えません")
     return sorted({REPO / f for f in found})
 
 
 def lock_of(path: Path) -> Path:
     return path.with_name(f"{path.name}.lock")
+
+
+def read_lock(path: Path) -> dict:
+    return tomllib.loads(lock_of(path).read_text(encoding="utf-8"))
+
+
+def pins(path: Path) -> list[tuple[str, str]]:
+    """PEP 723 の dependencies を (名前, 版) の組にする。`==` で固定していることは Pep723 が見る。"""
+    return [(name, version) for name, _, version in (d.partition("==") for d in pep723(path)["dependencies"])]
 
 
 def normalized(name: str) -> str:
@@ -241,8 +251,6 @@ class Imports(unittest.TestCase):
 
     def test_bin_scripts_import_runtime_deps_only_inside_functions(self):
         scripts = workflow_scripts()
-        # 対照: 起動の形を拾えずに0本で素通りしていない
-        self.assertEqual(len(scripts), 3)
         for path in scripts:
             with self.subTest(path.name):
                 tree = parse(path)
@@ -394,12 +402,11 @@ class Pep723(unittest.TestCase):
     def test_pinned_versions_are_the_checked_ones(self):
         # 版は triage の kwargs (betas・fallbacks・output_config・thinking・cache_control) と to_dict を wheel で確かめたもの。
         # 上げるときは同じ確かめをやり直してからここを変える (確かめていない版へ黙って動かさない)
-        pins = {}
+        versions = {}
         for path in workflow_scripts():
-            for dep in pep723(path)["dependencies"]:
-                name, _, version = dep.partition("==")
-                pins.setdefault(name, set()).add(version)
-        self.assertEqual(pins, {"anthropic": {"2.7.0"}, "PyYAML": {"6.0.3"}})
+            for name, version in pins(path):
+                versions.setdefault(name, set()).add(version)
+        self.assertEqual(versions, {"anthropic": {"2.7.0"}, "PyYAML": {"6.0.3"}})
         # SDK を使うのは triage の入口だけ
         triage = [d for d in pep723(TB / "bin" / "run_triage.py")["dependencies"] if d.startswith("anthropic")]
         self.assertEqual(triage, ["anthropic==2.7.0"])
@@ -437,12 +444,13 @@ class Pep723(unittest.TestCase):
 class ScriptLock(unittest.TestCase):
     """入口の隣の lock (`uv lock --script` が作る) が追跡下にあり、PEP 723 と食い違わないこと。
 
-    lock の形は uv 0.13.4 で作って確かめたもの。依存の無い入口の lock は `[manifest]` を持たない。
+    `--locked` は起動の時点で、lock が無いとき (rc 2) と、依存・requires-python・前へずらした exclude-newer が
+    PEP 723 と食い違うとき (rc 1) に止める。後ろへずらした exclude-newer は lock のまま黙って通るので、その一致は
+    ここだけが見る。lock の形も含め uv 0.13.4 で確かめた。依存の無い入口の lock は `[manifest]` を持たない。
     """
 
     def test_each_script_has_a_tracked_lock(self):
         locks = [lock_of(p) for p in workflow_scripts()]
-        self.assertEqual(len(locks), 3)
         out = subprocess.run(
             ["git", "ls-files", "-z", "--", *(str(p.relative_to(REPO)) for p in locks)],
             cwd=REPO, capture_output=True, check=True,
@@ -455,13 +463,13 @@ class ScriptLock(unittest.TestCase):
         for path in workflow_scripts():
             with self.subTest(path.name):
                 meta = pep723(path)
-                lock = tomllib.loads(lock_of(path).read_text(encoding="utf-8"))
-                self.assertEqual(lock.get("requires-python"), meta["requires-python"])
-                # exclude-newer を後ろへずらした食い違いは --locked が止めないので、ここだけが見る (uv 0.13.4)
-                self.assertEqual(lock.get("options", {}).get("exclude-newer"), meta["tool"]["uv"]["exclude-newer"])
-                wanted = sorted((normalized(n), f"=={v}") for n, _, v in (d.partition("==") for d in meta["dependencies"]))
+                lock = read_lock(path)
+                regen = f"uv lock --script {path.relative_to(REPO)} で作り直す"
+                self.assertEqual(lock.get("requires-python"), meta["requires-python"], regen)
+                self.assertEqual(lock.get("options", {}).get("exclude-newer"), meta["tool"]["uv"]["exclude-newer"], regen)
+                wanted = sorted((normalized(n), f"=={v}") for n, v in pins(path))
                 got = sorted((r["name"], r["specifier"]) for r in lock.get("manifest", {}).get("requirements", []))
-                self.assertEqual(got, wanted)
+                self.assertEqual(got, wanted, regen)
                 seen.update(n for n, _ in got)
         # 対照: 突き合わせが空の requirements どうしで素通りしていない
         self.assertEqual(seen, {"anthropic", "pyyaml"})
@@ -470,11 +478,10 @@ class ScriptLock(unittest.TestCase):
         checked = 0
         for path in workflow_scripts():
             with self.subTest(path.name):
-                packages = tomllib.loads(lock_of(path).read_text(encoding="utf-8")).get("package", [])
+                packages = read_lock(path).get("package", [])
                 versions = {p["name"]: p["version"] for p in packages}
-                for dep in pep723(path)["dependencies"]:
-                    name, _, version = dep.partition("==")
-                    self.assertEqual(versions.get(normalized(name)), version, dep)
+                for name, version in pins(path):
+                    self.assertEqual(versions.get(normalized(name)), version, name)
                     checked += 1
                 # 間接の依存も含め、どの配布物も PyPI から取り、sha256 の hash を持つ (hash まで固定するのが lock を置く理由)
                 for p in packages:
