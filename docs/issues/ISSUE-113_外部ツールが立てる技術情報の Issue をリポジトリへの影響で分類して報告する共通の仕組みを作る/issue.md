@@ -71,11 +71,15 @@ LLM にトリアージを任せたいが、Issue の本文とコメントは外�
   - 実物の応答が `anthropic-workspace-id` のヘッダを持ち、`usage_by_response` に値が入るか。`usage.iterations` を server の道具のループで返すか
   - dynamic filtering の中の呼び出しと結果のブロックが caller を持って応答に出るか (`response_inclusion` の既定は full)。最初の run の7回の web fetch が、code execution の呼び出しごとにどう分かれるか
   - fallback が起きたときに、ループが入力トークンの上限に数える量は実際より少なくなる。トップレベルの usage は返した1回分だけを数え、課金の記録は `usage.iterations` のほうにある (docs の Refusals and fallback、2026-11-27確認)。上限を iterations の合計で数えるかを、fallback の実績を見て決める
+- [ ] 最初の導入先の呼び出しを、最初の run で分かった残りを直した版 (PR #116 のマージ) の SHA へ上げる。有効にする前のテストはその SHA で回す
+  - この版で config-path の検査が厳しくなった (正規形の規則と、解決した先の .git の拒否) ので、select だけの dry-run で config-error にならないことを先に確かめる
 - [ ] 有効にする前のテストを、spec の「有効にする前のテスト」のとおり、最初に導入するリポジトリで回す。基準の run と入力の範囲、2回目と対照、injection (道具の制限の確かめを含む) の順。外部のツールが当日の Issue を立て始める前に行う
   - 基準の run と2回目は導入するリポジトリごとに1回ずつ、injection は共通の仕組みの SHA ごとに1回回す
   - 終わったらテスト用に立てた Issue を閉じる
+- [ ] 呼び出しの workflow に `schedule` を足して有効にする。有効にする前のテストが通ったあとに、人の了承を得てから足す。間隔と時間帯は導入するリポジトリが決める (spec の「起動と費用」)
 - [ ] 導入の手順の skill を apm で配る形で書く。有効にする前のテストを最初のリポジトリで1回回したあとに書く
   - spec の「設定のファイル」の節と導入の手順の2は、組織の許可の一覧があることを前提に、`official_sources` がその部分集合かを確かめると書いている。組織の側に一覧が無いと検査は効かない (準備のタスクの子)。skill には、一覧の有無を先に見る手順として書く。spec の側は下の spec を直すタスクで追う
+- [ ] 残りの導入先へ展開する。導入の手順の skill に沿って、導入するリポジトリごとに呼び出しの workflow と設定のファイルと基準の文書を置き、基準の run と2回目を回す (injection は共通の仕組みの SHA ごとに1回なので、同じ SHA なら回し直さない)
 - [ ] 拒否のドメインの一覧と files の glob の残りを直す
   - 拒否のドメインの一覧を広げる。いまは blogspot.com・medium.com・readthedocs.io・web.archive.org・translate.goog・s3.amazonaws.com・storage.googleapis.com・codeberg.org が通る。導入の skill に「一覧は網羅ではない」と書く
   - 設定の files の glob の `*` が `/` をまたぐ (fnmatch の挙動)。導入の skill と設定の説明にそう書くか、`/` をまたがない照合に替える
