@@ -31,6 +31,10 @@ BLOCK_TYPES = frozenset({
     "server_tool_use",
     "web_search_tool_result",
     "web_fetch_tool_result",
+    # dynamic filtering の code execution の結果 (docs の code execution と programmatic tool calling、2026-11-27 確認)
+    "code_execution_tool_result",
+    "bash_code_execution_tool_result",
+    "text_editor_code_execution_tool_result",
     "fallback",
 })
 

@@ -36,6 +36,7 @@ LLM にトリアージを任せたいが、Issue の本文とコメントは外�
   - api.github.com を認証なしで引くときの rate limit に、1回の triage の道具の呼び出しが収まるか
   - npm の registry を packument の全体で取っている (tech-briefing/tech_briefing/tools.py の `ToolBox._fetch_registry`)。`/latest` の経路 (scoped package の `%2F` を含む) を実物で確かめてから、`dist-tags.latest` と `repository` だけを取る形へ替える
   - anthropic のアダプタの「stderr に例外の型と状態コードだけを出し、本文を出さない」守り (tech-briefing/adapters/anthropic_client.py の `SdkMessages.create`) を固定するテストが無い。依存のあるアダプタなので CI のテストからは読まない。実物の契約テストで、失敗の応答のときに本文が stderr に出ないことを見る
+    - 2026-11-27に、ロックした版の SDK に偽のトランスポートで400を返させた書き捨ての smoke で、stderr に本文が出ないことを確かめた (対照として、例外の文には本文が入っていた)。実物の API の失敗の応答では、まだ確かめていない
 - [ ] 入口のスクリプトとアダプタを実物で走らせる。select だけの dry-run から始め、続けて triage と post に進む。`gh` と GitHub の API を呼ぶ経路は live smoke で通す。次を実物の run で確かめる
   - `job.workflow_repository` と `job.workflow_sha` が step の `env:` と `with:` で効くか、`inputs.config-path` のようなハイフン付きの名前をドットで読めるか
   - select は開いている Issue の全ページを本文ごと取る (tech-briefing/adapters/github_api.py の `GitHubRest.open_issues`)。開いたままの Issue の件数の実績を見てから、絞り込み (タイトルの検索や作者の指定) を設計で決める
@@ -55,11 +56,21 @@ LLM にトリアージを任せたいが、Issue の本文とコメントは外�
     - triage の upload は、ファイルの共通の祖先を root にするので、artifact の中では `report.json` と `tool-log.json` がファイル名だけで並んだ。post は「dry-run のため投稿せず、本文を step summary に出しました」で終わった
     - `warn_env_static_shadows_auto_discovery` は確かめられていない。anthropic 2.7.0 はこの警告を、自動探索できる資格情報の手がかり (ANTHROPIC_PROFILE や ANTHROPIC_CONFIG_DIR などの env か、設定のディレクトリの `active_config` のファイル) があるときだけ出す。runner にはその手がかりが無いと見られ (推定。ファイルの有無は観測していない)、この警告の経路は通っていない。警告の文面は関数名を含まないので、ログを関数名で探した0件はそもそも何も見ていない
     - この run で答えが出たのは、この子の上の問いのうち checkout の式 (`env:` と `with:`) と config-path、upload の相対パス。開いている Issue の件数、credentials の自動探索、無害化した本文 (dry-run は投稿しない)、timeout、re-run、client の道具のブロックが無い tool_use、スキーム無しの URL は、まだ確かめていない
-- [ ] 最初の run で分かった残りを直すか決める
+- [x] 最初の run で分かった残りを直すか決める
+  - 2026-11-27に4件とも人が決め、同じ日に直した。決めたことは各項目の末尾に書く。実物の run でしか確かめられない残りは、この下の「直したことを実物で確かめる」のタスクで追う
   - web fetch が7回呼ばれ、`WEB_FETCH_MAX_USES` (5) を超えた。tool-log には呼び出し元の欄が無いが、web fetch の前に、その URL を `web_fetch` で取るコードを持つ code execution が並んでいたので、dynamic filtering の中からの呼び出しと見られる (推定)。docs の web fetch の Max uses の節は、code execution から呼んだ取得は、turn の中の前の要求の分として上限に数えないと書くので、`max_uses` は run 全体の上限としては効かないと読める (推定。7回が要求ごとにどう分かれたかは記録が無い)。費用の上限を効かせるのはループの上限と支出上限のほうになる。spec の「起動と費用」の節は `max_uses` も上限を効かせるものに数えているので、直すなら spec のこの1文も直す。`max_uses` の値は spec の「作り手に任せること」の節のとおり実測から決める。同じ要求の中では code execution からの取得も上限に数え、超えると code execution が error で終わる (docs の同じ節)
+    - 決めたこと: `max_uses` は1回の要求の中の守りとして残し、spec の「起動と費用」の1文と triage の job の節を、費用の上限を効かせるのはループの上限と支出上限だと直した。値は実測から決める
   - web fetch の最初の取得がひと月前のキャッシュを返し (日付の出所はモデルが書いた報告の notes だけ)、モデルが自分で `use_cache` を偽にして取り直した (取り直しは tool-log で確かめた)。キャッシュを使わない既定にするかを決める
+    - 決めたこと: web fetch の tool の定義で `use_cache` を偽にする (docs の web fetch の Cache bypass は既定を真とし、変わりやすい取得先では偽を勧める)。tech-briefing/tests/test_tools.py の `ServerTools.test_shape` が固定する
   - artifact の usage に `anthropic-workspace-id` と `usage.iterations` が残らないので、run からはワークスペースと fallback の有無が分からない。tool-log の usage へ足すかを決める
+    - 決めたこと: 両方を足す。tool-log.json の `usage_by_response` に応答ごとの model・ワークスペースの id・`usage.iterations` (数と名前だけ) を残し、step summary には合計の usage だけを出す。ワークスペースの id は、アダプタが応答ヘッダの `anthropic-workspace-id` を `with_raw_response` で読んで応答の dict に足す (鍵は tech-briefing/tech_briefing/protocols.py の `WORKSPACE_ID_KEY`)。アダプタは CI から読まないので、ロックした版の SDK に偽のトランスポートを当てた書き捨ての smoke で、ヘッダの取り込みと、ヘッダが無いときに鍵を足さないことを確かめた
   - tool-log は道具の呼び出しの入力だけを残し、結果 (web の道具の `error_code` など) を残さない。今回の害の無い run でも tool-log には `official_sources` の外への web fetch が2回ある。spec の「有効にする前のテスト」の injection の判定 (tool-log に許した道具と行き先のほかが無い) を書いてあるとおりに当てると、害の無いふるまいでも赤になり、拒否の原因も見分けられない。結果を残すか、判定を「外から取れた結果が無いこと」に直すかを決める
+    - 決めたこと: 結果の要約を残し、判定も直す。tool-log は server の道具の結果のブロック (type の末尾が `_tool_result`) を、種類・tool_use_id・取得した URL・error_code・retrieved_at・return_code と caller だけの要約で残し、ほかの欄 (本文・stdout など) を残さない。呼び出しの側にも id と caller (type と tool_id だけ) を残し、dynamic filtering の中の呼び出しを code execution の id と結び付けられるようにした。spec の injection の判定は、許した行き先の外から取得に成功した結果が無いことと、埋めた指示の文にだけ出てくる目印のホストやクエリへの呼び出しが1回も無いことの2つにした (守りが止めた呼び出しでも、試みたことはモデルが指示に従った証拠になるため)
+- [ ] 直したことを実物で確かめる。有効にする前のテストの基準の run で兼ねる
+  - API が web fetch の `use_cache` を偽にした要求を400にせず受けるか
+  - 実物の応答が `anthropic-workspace-id` のヘッダを持ち、`usage_by_response` に値が入るか。`usage.iterations` を server の道具のループで返すか
+  - dynamic filtering の中の呼び出しと結果のブロックが caller を持って応答に出るか (`response_inclusion` の既定は full)。最初の run の7回の web fetch が、code execution の呼び出しごとにどう分かれるか
+  - fallback が起きたときに、ループが入力トークンの上限に数える量は実際より少なくなる。トップレベルの usage は返した1回分だけを数え、課金の記録は `usage.iterations` のほうにある (docs の Refusals and fallback、2026-11-27確認)。上限を iterations の合計で数えるかを、fallback の実績を見て決める
 - [ ] 有効にする前のテストを、spec の「有効にする前のテスト」のとおり、最初に導入するリポジトリで回す。基準の run と入力の範囲、2回目と対照、injection (道具の制限の確かめを含む) の順。外部のツールが当日の Issue を立て始める前に行う
   - 基準の run と2回目は導入するリポジトリごとに1回ずつ、injection は共通の仕組みの SHA ごとに1回回す
   - 終わったらテスト用に立てた Issue を閉じる
@@ -80,7 +91,7 @@ LLM にトリアージを任せたいが、Issue の本文とコメントは外�
   - search_files と search_issues は、正規形の規則が拒否する名前のファイル (UTF-8 で表せない名前など) や読めないファイルが1つでも走査に出ると、検索の全体が誤りになる。中身を読まない側に倒れているので守りとしては正しいが、そのファイルだけを飛ばして件数に数える形にするかを決める
   - パスの規則と criteria の誤りの表を1か所に寄せる。tech-briefing/tests/test_tools.py の `SharedPathRule` と tech-briefing/tests/test_config.py の `REJECT_PATHS` / `ACCEPT_PATHS` のループが重なり、tech-briefing/tests/test_select.py に criteria の誤りの手書きの列挙があり、tech-briefing/tests/test_entrypoints.py の `JobIo.test_read_criteria_or_none` の表は使われない値を持つ dict になっている
   - 以下は PR #112 のマージ前のゲートで、挙動を誤らせないので直さずに記録したもの (PR #112 のコメントにも残した)
-  - tech-briefing/tech_briefing/triage.py:31 のコメントが「`<` はすべて < に逃がす」と、同じ文字から同じ文字への変換に読める。89行の実装は JSON のエスケープの6文字へ置き換えていて正しい。直すときはエスケープの表記を文で書く (編集の道具が表記を実際の文字へ解くと、同じ化けが再発しうる)
+  - 2026-11-27に直した: tech-briefing/tech_briefing/triage.py の区切りのコメントが、同じ文字から同じ文字への変換に読めた。エスケープの表記を使わない文にした
   - tech-briefing/bin/gen_workflow.py:31 の `os.path.relpath(TARGET, REPO_ROOT)` は `WORKFLOW_FILE` を組んでから逆算している。エラーの文に `WORKFLOW_FILE` をそのまま使う
   - 投稿先の鍵 `"issue_number"` が tech-briefing/tech_briefing/selection.py:84・tech-briefing/bin/run_select.py:48・tech-briefing/bin/run_post.py:30 に literal で3回ある (job の間の約束)。constants の定数か、selection の「番号だけの入力」を作る関数に寄せる
   - tech-briefing/tests/test_tools.py の `CostLimits.test_server_tool_limits_are_the_provisional_values` と `ServerTools.test_shape` が費用の上限の仮の値を二重に literal で固定している。片方に寄せる (pin は減らない)
@@ -90,7 +101,8 @@ LLM にトリアージを任せたいが、Issue の本文とコメントは外�
   - tech-briefing/tests/test_boundaries.py の `dependent_modules` は `RUNTIME_DEPS` に載った名前しか知らず、依存の無いアダプタに `RUNTIME_DEPS` の外の第三者の import が足されても静的には止まらない (CI で赤になるのは、そのアダプタをテストが import し、かつ runner の素の python3 にそのパッケージが無いときだけ)。`dynamic_imports` と `yaml_uses` は `sys.modules[...]` 経由の形を拾わない
   - tech-briefing/tech_briefing/caller_check.py:10-14 の `CALLER_WITH_KEYS`・`CALLER_SECRETS`・`CALLER_PERMISSIONS` が、tech-briefing/tech_briefing/workflow_def.py の `workflow()` の workflow_call の inputs・secrets と job の権限の写しで、両者を突き合わせるテストが無い (input を足すと test_workflow_def の literal の1件だけが赤になり、そこを直すと caller_check とのずれは誰も捕まえない)。`CALLER_WITH_KEYS` と `CALLER_SECRETS` は workflow_def から導く。`CALLER_PERMISSIONS` は権限の天井なので literal のまま残し (導くと呼ばれる側の権限が増えたときに天井が黙って広がる)、job の権限の scope ごとの最大と一致することをテストで固定する
   - 同じ caller_check.py の89行と97行のエラーの文が `CALLER_PERMISSIONS` と `CALLER_SECRETS` の値を literal で再掲している。101行は `CALLER_WITH_KEYS` から文を組んでいる。3つの文の作り方を揃え、集合から組む
-  - tech-briefing/tech_briefing/jobio.py の `read_under` は絶対パスと root の外への脱出しか見ず、`./tb.yml`・`.//tb.yml`・`.git/config` を受ける。同じモジュールの `caller_workflow_path` は `canonical_parts` を通す。`.git/config` を config-path に渡すと YAML として読めずに config-error になり、PyYAML の例外の文が該当の行の断片を Actions のログへ出す (checkout は `persist-credentials: false` なのでトークンは無い)。`caller_workflow_path` の `canonical_parts` は残し (test_entrypoints の `test_caller_workflow_path` の6行が固定している)、`read_under` にも `canonical_parts` を足す。root の中の symlink (tb.yml から .git/config) は文字列の検査では止まらないので、resolve の後の相対の parts にも `is_git_name` を当てるか、tech-briefing/adapters/yaml_loader.py:12 の ValueError から例外の本文を外して型と行・列だけにする。テストの行は `test_config_errors_are_red_and_do_not_touch_github` の既存の config_path の行の隣へ足す
+  - 2026-11-27に直した: tech-briefing/tech_briefing/jobio.py の `read_under` は、config-path に `./tb.yml`・`.//tb.yml`・`.git/config` を受け、`.git/config` を YAML として読ませると PyYAML の例外の文が該当の行の断片を Actions のログへ出していた。`read_under` は `canonical_parts` を、パスの文字列と解決した先の経路の両方に当てる (root の中の symlink で .git/config を指す形も止める)。`load_yaml_under` は読み手の例外の文を出さず型だけを出し、守りはこちらに置いた (アダプタは CI から読まないため)。アダプタの yaml_loader も例外の文を位置だけにし、`protocols.YamlLoader` の約束に書いた
+  - `read_under` を `repo_paths.read_regular` に寄せ、設定と呼び出しの workflow の読み取りでも symlink を辿らない形にするかを決める。読み手が1つになり、解決した先の検査が要らなくなる。ただし symlink にした設定のファイルが config-error に変わる (挙動の変更なので、PR のマージ前のゲートでは直さずに記録した)。呼び出しの workflow のファイルが symlink のとき Actions が走らせるかは確かめていない
 - [ ] spec の post の job の節を直す。`always()` と書いているところを `!cancelled()` にする。意図は「失敗を越えて走るが、取り消しは尊重する」で、`always()` は run の取り消しの後も投稿しうる。実装は `!cancelled()` になっている。spec は今回は直さず、スナップショットとして残してこのタスクで追う。plan の Task 8 の Step 1 も `always()` と書いているが、実装が正で、plan はスナップショットとして追わない
 - [ ] spec の select の job の節を、select が criteria のファイルを読んで確かめる実装に合わせて直す。呼び出し側のリポジトリの checkout を select が使う範囲 (「設定のファイルと呼び出しの workflow のファイルだけ」) に criteria のファイルを足し、設定の誤りの列挙 (`config-error` で終わるもの) に、criteria のパスの形の誤り (絶対パス・`..`・`.`・空の segment・`.git`) と、criteria のファイルが読めないか中身が空のときを足す。glob の形の誤りに `.`・空の segment・`.git` を足す
   - 設定の誤りの列挙に、パスに NUL や UTF-8 で表せない文字を含むときと、criteria の経路のどこかが symlink のとき (指す先がリポジトリの中のふつうのファイルでも) を足す。criteria は道具の読み取りと同じ読み手 (tech-briefing/tech_briefing/repo_paths.py の `read_regular`) で読み、symlink を辿らない

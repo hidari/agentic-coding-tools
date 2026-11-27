@@ -21,14 +21,15 @@ from tech_briefing.constants import (
     MARKER,
     MODEL,
 )
-from tech_briefing.protocols import MessagesClient
-from tech_briefing.shapes import as_dict, as_int
+from tech_briefing.protocols import WORKSPACE_ID_KEY, MessagesClient
+from tech_briefing.shapes import as_dict, as_int, as_list, as_str
 from tech_briefing.tools import ERROR_PREFIX, REPORT_SCHEMA, SUBMIT_REPORT, ToolBox
 
 # streaming を使わない要求の値として 16000 (仮の値)。実際の run の usage を見て決め直す
 MAX_TOKENS = 16000
 
-# 区切りはどちらも `<` を含む。入力の JSON の中の `<` はすべて < に逃がすので、入力は区切りを書けない
+# 区切りはどちらも `<` を含む。入力の JSON の中の `<` は、すべてバックスラッシュと u と 003c の6文字の JSON のエスケープに
+# 置き換えるので、入力は区切りを書けない
 UNTRUSTED_BEGIN = "<<<UNTRUSTED_DATA_BEGIN>>>"
 UNTRUSTED_END = "<<<UNTRUSTED_DATA_END>>>"
 # 区切りの中をどう読むかの規則。system と user の前置きの両方に同じ文を置き、テストが両方にあることを確かめる
@@ -135,9 +136,20 @@ class Outcome:
     failure: str | None
     tool_log: list[dict]
     usage: dict
+    # 応答ごとの model・ワークスペースの id・usage.iterations。fallback とワークスペースを run の後で追うため。
+    # 合計の usage と分けるのは、step summary の1行を合計だけに保つため
+    usage_by_response: list[dict]
 
 
 _LOG_KINDS = {"tool_use": "client", "server_tool_use": "server"}
+# server の道具の結果のブロックの type の末尾 (web_fetch_tool_result・bash_code_execution_tool_result など)。
+# client へ送り返す tool_result は先頭に _ が無いので当たらない
+_SERVER_RESULT_SUFFIX = "_tool_result"
+# 結果から残す欄。ほかの欄 (本文・stdout など) は外から来た信頼できない文章で大きいので残さず、
+# どこへ行ってどう終わったか (injection の判定と拒否の原因の切り分け) に要る値だけを残す
+_RESULT_KEYS = ("type", "url", "retrieved_at", "error_code", "return_code")
+# caller の欄 (docs の programmatic tool calling、2026-11-27 確認)。tool_id は呼んだ code execution の id
+_CALLER_KEYS = ("type", "tool_id")
 _TOKEN_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 # 上限に数える入力の側。キャッシュから読んだ分と書いた分も、要求ごとに送った入力に変わりはないので含める
 _INPUT_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
@@ -182,6 +194,50 @@ def matches_schema(value: object, schema: dict) -> bool:
     return _matches(value, schema)
 
 
+def _scalars(value: object, keys: tuple[str, ...] | None = None) -> dict:
+    """dict の文字列と数の欄だけを返す (keys を渡せばその欄だけ)。入れ子の値 (iterations の cache_creation の内訳など) と
+    真偽値は落とす。"""
+    d = as_dict(value)
+
+    def scalar(v: object) -> str | int | None:
+        text = as_str(v)
+        return text if text is not None else as_int(v)
+
+    return {k: v for k in (d if keys is None else keys) if (v := scalar(d.get(k))) is not None}
+
+
+def _log_entry(block: dict) -> dict | None:
+    """content の1ブロックを tool-log の1件にする。呼び出しと server の結果のほかは None。"""
+    btype = block.get("type")
+    kind = _LOG_KINDS.get(btype)
+    if kind is not None:
+        entry = {"kind": kind, "id": block.get("id"), "name": block.get("name"), "input": block.get("input")}
+    elif isinstance(btype, str) and btype.endswith(_SERVER_RESULT_SUFFIX):
+        content = block.get("content")
+        if isinstance(content, list):
+            # web search の成功は結果の一覧。返った行き先だけを残す
+            summary = {"urls": [u for r in content if isinstance(u := as_dict(r).get("url"), str)]}
+        else:
+            summary = _scalars(content, _RESULT_KEYS)
+        # 結果は呼び出しと別の応答に入りうる (client の道具と同じ group の取得) ので、位置ではなく tool_use_id で対にする
+        entry = {"kind": "server_result", "type": btype, "tool_use_id": block.get("tool_use_id"), "result": summary}
+    else:
+        return None
+    caller = _scalars(block.get("caller"), _CALLER_KEYS)
+    if caller:
+        entry["caller"] = caller
+    return entry
+
+
+def _response_usage(resp: dict) -> dict:
+    iterations = as_list(as_dict(resp.get("usage")).get("iterations"))
+    return {
+        "model": as_str(resp.get("model")),
+        "workspace_id": as_str(resp.get(WORKSPACE_ID_KEY)),
+        "iterations": [_scalars(it) for it in iterations if isinstance(it, dict)],
+    }
+
+
 def _add_usage(total: dict, usage: object) -> None:
     # 欠けた欄や null の欄 (API が返すかは未確認) で合計が落ちないよう、数でない値は守りとして 0 に数える
     usage = as_dict(usage)
@@ -196,9 +252,10 @@ def run_triage(client: MessagesClient, params: dict, toolbox: ToolBox, limits: L
     tool_log: list[dict] = []
     usage: dict = {key: 0 for key in _TOKEN_KEYS}
     usage["server_tool_use"] = {}
+    usage_by_response: list[dict] = []
 
     def end(report: dict | None, failure: str | None) -> Outcome:
-        return Outcome(report, failure, tool_log, usage)
+        return Outcome(report, failure, tool_log, usage, usage_by_response)
 
     rounds = 0
     while True:
@@ -210,13 +267,11 @@ def run_triage(client: MessagesClient, params: dict, toolbox: ToolBox, limits: L
             # 道具の側の例外はこの try の外で起き、想定外として呼び出し側 (internal-error) まで上がる
             return end(None, FAIL_API_ERROR)
         _add_usage(usage, resp.get("usage"))
+        usage_by_response.append(_response_usage(resp))
         content = resp["content"]
         messages.append({"role": "assistant", "content": content})
-        # モデルが出した呼び出しを順に全部残す。実行しなかった呼び出し (提出と同じ応答の道具) も含める
-        for b in content:
-            kind = _LOG_KINDS.get(b.get("type"))
-            if kind is not None:
-                tool_log.append({"kind": kind, "name": b.get("name"), "input": b.get("input")})
+        # モデルが出した呼び出しと server の道具の結果を順に全部残す。実行しなかった呼び出し (提出と同じ応答の道具) も含める
+        tool_log.extend(e for e in map(_log_entry, content) if e is not None)
         stop = resp.get("stop_reason")
         if stop == "refusal":
             # fallback (beta の server-side fallback) が効かなかった拒否が stop_reason の refusal で届く

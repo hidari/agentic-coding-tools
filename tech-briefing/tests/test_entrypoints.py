@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from fakes import FakeFetcher, FakeGitHub, FakeMessages  # noqa: E402
 from tech_briefing import jobio  # noqa: E402
 from tech_briefing.constants import BOT_LOGIN, MARKER  # noqa: E402
-from tech_briefing.protocols import CommentRef, IssueRef, YamlLoader  # noqa: E402
+from tech_briefing.protocols import WORKSPACE_ID_KEY, CommentRef, IssueRef, YamlLoader  # noqa: E402
 from tech_briefing.render import render_failure, render_report, render_too_large, render_unexpected  # noqa: E402
 from tech_briefing.selection import MAX_INPUT_CHARS  # noqa: E402
 from tech_briefing.tools import RESULT_LIMIT  # noqa: E402
@@ -307,12 +307,21 @@ class Select(Harness):
                 self.assertFalse((self.select_out / INPUT_FILE).exists())
                 self.assertIn(result, self.summary_text())
 
+    def put_readable_git_config(self):
+        # .git/config と、それを指す root の中の symlink に、読めて検査も通る設定を置く
+        self.write(self.caller / ".git" / "config", json.dumps(CONFIG))
+        (self.caller / "tb-link.yml").symlink_to(self.caller / ".git" / "config")
+
     def test_config_errors_are_red_and_do_not_touch_github(self):
         cases = {
             "missing config": {"config_path": "missing.yml"},
             "config outside caller": {"config_path": "../tb.yml"},
             "absolute config": {"config_path": str(self.caller / "tb.yml")},
             "empty config path": {"config_path": ""},
+            # 下の3つは読める設定を指す (put_readable_git_config が置く)。止めるのはパスの規則だけ
+            "dot segment config": {"config_path": "./tb.yml"},
+            "config in .git": {"config_path": ".git/config"},
+            "symlink to .git": {"config_path": "tb-link.yml"},
             "workflow of another repo": {"workflow_ref": f"other/app/{CALLER_WORKFLOW}@refs/heads/main"},
             "workflow outside workflows dir": {"workflow_ref": f"{CALLER_REPO}/tb.yml@refs/heads/main"},
             "workflow ref without ref": {"workflow_ref": f"{CALLER_REPO}/{CALLER_WORKFLOW}"},
@@ -325,6 +334,7 @@ class Select(Harness):
         for label, kwargs in cases.items():
             with self.subTest(label):
                 self.setUp()
+                self.put_readable_git_config()
                 github = FakeGitHub([issue()])
                 self.assertEqual(self.run_select(github, **kwargs), 1)
                 self.assertEqual(self.outputs(), "result=config-error\n")
@@ -366,6 +376,8 @@ class Select(Harness):
 
     def test_control_valid_inputs_reach_github(self):
         # 対照: 上の config-error は入力の誤りで起きていて、配線の誤りで常に起きているのではない
+        # (誤りの例と同じく .git/config とそれを指す symlink を置いたうえで通る)
+        self.put_readable_git_config()
         github = FakeGitHub([])
         self.assertEqual(self.run_select(github), 0)
         self.assertEqual(github.calls, [("open_issues",)])
@@ -381,13 +393,31 @@ class Triage(Harness):
         self.assertEqual(self.read_json(self.triage_out / REPORT_FILE), REPORT)
         self.assertFalse((self.triage_out / FAILURE_FILE).exists())
         log = self.read_json(self.triage_out / TOOL_LOG_FILE)
-        self.assertEqual(log["tool_log"], [{"kind": "client", "name": "submit_report", "input": REPORT}])
+        self.assertEqual(log["tool_log"], [{"kind": "client", "id": "t1", "name": "submit_report", "input": REPORT}])
         self.assertEqual(log["usage"]["input_tokens"], 10)
         self.assertIn("input_tokens", self.summary_text())
         # 入力は select が書いた input.json から組み立てる
         sent = self.messages.requests[0]["messages"][0]["content"][0]["text"]
         self.assertIn('"issue_number": 7', sent)
         self.assertIn(CRITERIA_TEXT, json.dumps(self.messages.requests[0]["system"], ensure_ascii=False))
+
+    def test_tool_log_keeps_usage_by_response_out_of_the_summary_line(self):
+        self.select_triage()
+        resp = submit_response()
+        resp["model"] = "claude-example"
+        resp[WORKSPACE_ID_KEY] = "wrkspc_example"
+        resp["usage"]["iterations"] = [{"type": "message", "model": "claude-example", "input_tokens": 10, "output_tokens": 5}]
+        self.assertEqual(self.run_triage([resp]), 0)
+        log = self.read_json(self.triage_out / TOOL_LOG_FILE)
+        self.assertEqual(
+            log["usage_by_response"],
+            [{"model": "claude-example", "workspace_id": "wrkspc_example", "iterations": resp["usage"]["iterations"]}],
+        )
+        # step summary の1行は合計の usage だけ。応答ごとの値は artifact で見る
+        summary = self.summary_text()
+        self.assertIn("input_tokens", summary)
+        for value in ("wrkspc_example", "iterations", "claude-example"):
+            self.assertNotIn(value, summary)
 
     def test_failure_writes_kind_and_tool_log(self):
         self.select_triage()
@@ -711,6 +741,50 @@ class JobIo(unittest.TestCase):
                     self.assertIsNone(jobio.read_criteria_or_none(root, rel))
         # 対照: 同じファイルを symlink を通らずに指せば読める
         self.assertEqual(jobio.read_criteria(root, "docs/real.md"), "基準")
+
+    def test_read_under_takes_canonical_paths_and_rejects_git(self):
+        root = self.tmp / "root"
+        (root / ".git").mkdir(parents=True)
+        (root / ".git" / "config").write_text("extraheader = AUTHORIZATION: token", encoding="utf-8")
+        (root / "a.yml").write_text("中身", encoding="utf-8")
+        (root / "to-git.yml").symlink_to(root / ".git" / "config")
+        (root / "to-git-dir").symlink_to(root / ".git")
+        (root / "link.yml").symlink_to(root / "a.yml")
+        # どれも実在して読める。止めるのは正規形の規則と、解決した先の .git の拒否だけ
+        for rel in ("./a.yml", ".//a.yml", ".git/config", ".GIT/config", "to-git.yml", "to-git-dir/config"):
+            with self.subTest(rel):
+                with self.assertRaises(ValueError):
+                    jobio.read_under(root, rel)
+        # 対照: 正規形のパスと、root の中のふつうのファイルを指す symlink は読める (設定の YAML は中身を LLM へ送らない)
+        self.assertEqual(jobio.read_under(root, "a.yml"), "中身")
+        self.assertEqual(jobio.read_under(root, "link.yml"), "中身")
+
+    def test_load_yaml_under_does_not_log_the_loader_error_text(self):
+        # PyYAML の例外の文は該当の行の断片を含み、Actions のログへ出る。理由は型だけを内部のログに残す
+        root = self.tmp / "root"
+        root.mkdir()
+        (root / "a.yml").write_text("x", encoding="utf-8")
+
+        # PyYAML 6.0.3 の safe_load は YAMLError ではない ValueError・KeyError・RecursionError なども上げる
+        # (`!!int` や `!!bool` の付いた値では constructor が、深い入れ子では scanner が)。約束の外の型でも落ちずに
+        # 設定の誤りとして扱う
+        for error in (ValueError, KeyError, AttributeError, RecursionError):
+            with self.subTest(error.__name__):
+
+                def broken(text):
+                    raise error("SECRET-LINE extraheader")
+
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertIsNone(jobio.load_yaml_under(root, "a.yml", broken))
+                self.assertNotIn("SECRET-LINE", err.getvalue())
+                self.assertIn("a.yml", err.getvalue())
+                self.assertIn(error.__name__, err.getvalue())
+        # 対照: パスの誤りは読み手の例外ではなく、こちらの文 (パスの値) をそのまま理由に出す
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertIsNone(jobio.load_yaml_under(root, "../a.yml", broken))
+        self.assertIn("../a.yml", err.getvalue())
 
     def test_read_under_rejects_symlink_out(self):
         root = self.tmp / "root"

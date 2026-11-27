@@ -664,12 +664,14 @@ class ServerTools(unittest.TestCase):
         # 仮の値。実物の run の usage で決め直すときはこのテストも直す
         self.assertEqual(fetch["max_uses"], 5)
         self.assertEqual(fetch["max_content_tokens"], 20000)
+        self.assertIs(fetch["use_cache"], False)
         self.assertEqual(search["type"], WEB_SEARCH_TOOL)
         self.assertEqual(search["type"], "web_search_20260209")
         self.assertEqual(search["name"], "web_search")
         self.assertEqual(search["allowed_domains"], ["docs.example.org", "nodejs.org"])
         self.assertEqual(search["max_uses"], 5)
         self.assertNotIn("url_sources", search)
+        self.assertNotIn("use_cache", search)
 
 
 if __name__ == "__main__":

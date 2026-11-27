@@ -60,10 +60,16 @@ class Fetcher(Protocol):
     def get_json(self, url: str) -> object: ...
 
 
+# 応答ヘッダの anthropic-workspace-id を、アダプタが応答の dict に足すときの鍵。ヘッダの名前をそのまま使い、
+# API の欄 (snake_case) と衝突しないようにする。ループは content だけを送り返すので、この値は要求に戻らない
+WORKSPACE_ID_KEY = "anthropic-workspace-id"
+
+
 class MessagesClient(Protocol):
     """Messages API の口。params と応答は API の JSON の形の dict で、SDK との変換はアダプタが持つ。
 
     - create(params) は1回の要求を送り、応答の dict (content / stop_reason / usage) を返す
+    - 応答ヘッダにワークスペースの id があれば、WORKSPACE_ID_KEY の鍵で応答の dict に足す
     - 再試行はアダプタが持つ。再試行のあとも失敗したら例外を上げる (ループは種類を問わず api-error にする)
     """
 
@@ -75,6 +81,8 @@ class YamlLoader(Protocol):
 
     - 呼ぶと文書を復号した値を返す。任意の Python のオブジェクトは作らない
     - 読めない文書は ValueError で知らせる (入口と本体はパーサの例外の型を名指しできないため)
+    - ValueError の文に文書の中身 (誤りの行の断片) を入れない。呼び出し側はこの文をログに出さないが、
+      出す呼び出し側が増えても漏れないようにする
     """
 
     def __call__(self, text: str) -> object: ...

@@ -55,16 +55,22 @@ def append_summary(env, text: str) -> None:
 
 
 def read_under(root: Path, rel: str) -> str:
-    """root の下のファイルを読む。絶対パス・root の外へ出る .. や symlink は ValueError。
+    """root の下のファイルを読む。正規形でないパス (repo_paths.canonical_parts の規則)・root の外を指す symlink・
+    解決した先が .git の中のものは ValueError。
 
-    root の中を指す symlink は辿る。読むのは設定と呼び出しの workflow の YAML で、中身は LLM へ送らない。
+    root の中のふつうのファイルを指す symlink は辿る。読むのは設定と呼び出しの workflow の YAML で、中身は LLM へ
+    送らない。.git を拒否するのは、.git/config を YAML として読ませると、読み手の誤りの文やログに checkout の
+    設定の断片が出うるため。
     """
-    if not isinstance(rel, str) or not rel or Path(rel).is_absolute():
+    if not isinstance(rel, str):
         raise ValueError(f"root からの相対パスではありません: {rel!r}")
+    repo_paths.canonical_parts(rel)
     base = Path(root).resolve()
     target = (base / rel).resolve()
     if not target.is_relative_to(base):
         raise ValueError(f"root の外を指しています: {rel!r}")
+    # 文字列の検査は symlink の先を見ないので、解決した先の経路にも同じ規則を当てる
+    repo_paths.canonical_parts(target.relative_to(base).as_posix())
     with open(target, encoding="utf-8") as f:
         return f.read()
 
@@ -98,11 +104,23 @@ def read_criteria_or_none(root: Path, rel: str) -> str | None:
 
 
 def load_yaml_under(root: Path, rel: str | None, loader: YamlLoader) -> object | None:
-    """root の下の YAML を loader で読む。読めなければ理由を内部のログに出して None を返す。"""
+    """root の下の YAML を loader で読む。読めなければ理由を内部のログに出して None を返す。
+
+    loader の誤りは型だけを出す。YAML のパーサの例外の文は該当の行の断片を含み、Actions のログに出るため。
+    loader が約束 (ValueError) の外の例外を上げても同じに扱う。PyYAML の constructor は YAMLError ではない
+    KeyError などを値を含む文で上げ、上へ逃がすと traceback がその文をログに出す。
+    """
     if rel is None:
         print("読むファイルを特定できませんでした", file=sys.stderr)
         return None
-    return _none_on_error(rel, lambda: loader(read_under(root, rel)))
+    text = _none_on_error(rel, lambda: read_under(root, rel))
+    if text is None:
+        return None
+    try:
+        return loader(text)
+    except Exception as e:
+        print(f"{rel} を YAML として読めませんでした: {type(e).__name__}", file=sys.stderr)
+        return None
 
 
 def caller_workflow_path(workflow_ref: str, repository: str) -> str | None:
@@ -118,7 +136,7 @@ def caller_workflow_path(workflow_ref: str, repository: str) -> str | None:
     if not path.startswith(_WORKFLOWS_DIR):
         return None
     try:
-        # 道具や criteria と同じ正規形の規則で見る (.. のほか NUL・. ・空の segment・.git も拒否する)
+        # 道具や criteria と同じ正規形の規則で見る
         repo_paths.canonical_parts(path)
     except repo_paths.PathShapeError:
         return None

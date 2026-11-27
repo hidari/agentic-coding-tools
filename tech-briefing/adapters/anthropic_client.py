@@ -7,11 +7,15 @@ Python の例、2026-11-24 確認)。再試行は SDK の既定 (2回、429・5x
 ANTHROPIC_API_KEY から読むこと、`client.beta.messages.create` が betas・fallbacks・output_config・thinking・最上位の cache_control を
 受けて BetaMessage を返すこと、BetaMessage の基底の BaseModel が `to_dict(mode=, use_api_names=,
 exclude_unset=)` を持つこと、状態コードを持つ例外が `status_code` を持つこと。版を上げたら確かめ直す。
+応答ヘッダを読むために `client.beta.messages.with_raw_response.create` を使う。同じ引数を受けて APIResponse を返し、
+`headers` (httpx の Headers) と、BetaMessage を返す `parse()` を持つ (2026-11-27 に同じ版の wheel で確かめた)。
 """
 
 import sys
 
 import anthropic
+
+from tech_briefing.protocols import WORKSPACE_ID_KEY
 
 
 class SdkMessages:
@@ -21,7 +25,8 @@ class SdkMessages:
 
     def create(self, params: dict) -> dict:
         try:
-            resp = self._client.beta.messages.create(**params)
+            raw = self._client.beta.messages.with_raw_response.create(**params)
+            resp = raw.parse()
         except Exception as e:
             # ループは例外を種類を問わず api-error にするので、原因 (固定した版の SDK が引数を知らない、など) は
             # ここで内部のログに残す。本文は API の誤りの文面を含みうるので、型と状態コードだけを出す
@@ -29,4 +34,8 @@ class SdkMessages:
             raise
         # 応答はそのまま次の要求の assistant の content に戻すので、API の名前 (from_ ではなく from) で、
         # 届いていない欄を足さない形にする
-        return resp.to_dict(mode="json", use_api_names=True, exclude_unset=True)
+        out = resp.to_dict(mode="json", use_api_names=True, exclude_unset=True)
+        workspace = raw.headers.get(WORKSPACE_ID_KEY)
+        if workspace is not None:
+            out[WORKSPACE_ID_KEY] = workspace
+        return out
