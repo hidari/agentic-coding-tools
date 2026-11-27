@@ -2,14 +2,15 @@
 
 本体とテストは標準ライブラリだけで回り、実行時の依存 (anthropic の SDK と PyYAML) はアダプタと
 入口のスクリプトだけが持つ。入口は PEP 723 で版を固定し、隣の `<script>.lock` で間接の依存まで hash で固定して、
-`uv run --locked --script` で起動される。lock の有無と鮮度は `--locked` が起動の時点で止め、ここは lock が追跡下にあって
-PEP 723 と食い違わないことを固定する。
+`uv run --locked --script` で起動される。`--locked` は起動の時点で、lock が無いときと、依存・requires-python・
+前へずらした exclude-newer が PEP 723 と食い違うときに止める。後ろへずらした exclude-newer は lock のまま黙って通るので
+(uv 0.13.4)、ここは lock が追跡下にあって PEP 723 と食い違わないことを固定する。
 
 テストが import してよいアダプタは、実行時の依存を直にも兄弟のアダプタ経由でも import しないものだけ。
 どれがそうかは adapters の ast から導くので、依存の無いアダプタが依存のある兄弟を import すれば、
-そのアダプタもテストから読めなくなる。依存の無いアダプタ (http_common・github_api・fetcher) は token と
-取得先の守りを固定するために test_adapters_stdlib が読む。依存のあるアダプタ (anthropic_client・yaml_loader) は
-読むと CI のテストに依存が増えるので読まず、守りは下の ast の検査で固定する。この検査は import 文を見るので、
+そのアダプタもテストから読めなくなる。依存の無いアダプタは token と取得先の守りを固定するために test_adapters_stdlib が
+読む。依存のあるアダプタ (どれかは test_dependent_adapters_are_the_ones_with_deps が固定する) は読むと CI のテストに
+依存が増えるので読まず、守りは下の ast の検査で固定する。この検査は import 文を見るので、
 本体・アダプタ・入口が動的な import (`__import__`・importlib) を持たないことも固定する。テストの側は
 入口のスクリプトを importlib でファイルから読む (test_entrypoints) ので、その検査の対象にしない。
 """
@@ -32,9 +33,9 @@ TB = Path(__file__).resolve().parent.parent
 REPO = TB.parent
 # 実行時の依存 (PEP 723 で入口が宣言する配布物の import 名)
 RUNTIME_DEPS = {"anthropic", "yaml"}
-# 本体はどこでも、入口は module の読み込みの時点で読んではならないもの。アダプタは丸ごと入口の関数の中でだけ読む
-NOT_AT_IMPORT_TIME = RUNTIME_DEPS | {"adapters"}
 ADAPTERS = "adapters"
+# 本体はどこでも、入口は module の読み込みの時点で読んではならないもの。アダプタは丸ごと入口の関数の中でだけ読む
+NOT_AT_IMPORT_TIME = RUNTIME_DEPS | {ADAPTERS}
 # PEP 723 の参照の実装の正規表現 (packaging.python.org の inline script metadata、2026-11-24 時点の仕様)
 _PEP723 = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
 _PIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*==[0-9][0-9A-Za-z.+!-]*")
@@ -167,8 +168,8 @@ def pep723(path: Path) -> dict:
 class Imports(unittest.TestCase):
     def test_collector_sees_imports(self):
         # 対照: 集め方が import を拾えていなければ、下の「持たない」はすべて素通りする
-        self.assertIn("anthropic", imported(parse(TB / "adapters" / "anthropic_client.py")))
-        self.assertIn("yaml", imported(parse(TB / "adapters" / "yaml_loader.py")))
+        self.assertIn("anthropic", imported(parse(TB / ADAPTERS / "anthropic_client.py")))
+        self.assertIn("yaml", imported(parse(TB / ADAPTERS / "yaml_loader.py")))
         self.assertIn("tech_briefing", imported(parse(TB / "tests" / "test_select.py")))
 
     def test_collector_resolves_full_names(self):
@@ -247,7 +248,7 @@ class Imports(unittest.TestCase):
                 tree = parse(path)
                 self.assertEqual(top_level_imported(tree) & NOT_AT_IMPORT_TIME, set())
                 # 対照: 実物のアダプタはどこかで読んでいる (読まないなら __main__ の配線が抜けている)
-                self.assertIn("adapters", imported(tree))
+                self.assertIn(ADAPTERS, imported(tree))
 
     def test_no_dynamic_imports_outside_tests(self):
         # 上の検査は import 文だけを見るので、__import__ や importlib で読む形はすり抜ける
@@ -367,7 +368,7 @@ class Names(unittest.TestCase):
         for path in files:
             with self.subTest(str(path.relative_to(TB))):
                 self.assertNotIn(path.stem, sys.stdlib_module_names)
-                self.assertNotIn(path.stem, {"anthropic", "yaml"})
+                self.assertNotIn(path.stem, RUNTIME_DEPS)
 
 
 class Pep723(unittest.TestCase):
@@ -456,6 +457,7 @@ class ScriptLock(unittest.TestCase):
                 meta = pep723(path)
                 lock = tomllib.loads(lock_of(path).read_text(encoding="utf-8"))
                 self.assertEqual(lock.get("requires-python"), meta["requires-python"])
+                # exclude-newer を後ろへずらした食い違いは --locked が止めないので、ここだけが見る (uv 0.13.4)
                 self.assertEqual(lock.get("options", {}).get("exclude-newer"), meta["tool"]["uv"]["exclude-newer"])
                 wanted = sorted((normalized(n), f"=={v}") for n, _, v in (d.partition("==") for d in meta["dependencies"]))
                 got = sorted((r["name"], r["specifier"]) for r in lock.get("manifest", {}).get("requirements", []))
@@ -474,8 +476,9 @@ class ScriptLock(unittest.TestCase):
                     name, _, version = dep.partition("==")
                     self.assertEqual(versions.get(normalized(name)), version, dep)
                     checked += 1
-                # 間接の依存も含め、どの配布物も sha256 の hash を持つ (hash まで固定するのが lock を置く理由)
+                # 間接の依存も含め、どの配布物も PyPI から取り、sha256 の hash を持つ (hash まで固定するのが lock を置く理由)
                 for p in packages:
+                    self.assertEqual(p.get("source"), {"registry": "https://pypi.org/simple"}, p["name"])
                     files = [p["sdist"]] if "sdist" in p else []
                     files += p.get("wheels", [])
                     self.assertTrue(files, p["name"])

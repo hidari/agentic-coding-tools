@@ -290,7 +290,7 @@ class Uses(unittest.TestCase):
                     seen += 1
                     _, _, ref = s["uses"].partition("@")
                     self.assertTrue(SHA_RE.fullmatch(ref), s["uses"])
-        # 0 件で緑にならないよう、checkout と artifact と uv の分があることを見る
+        # 0 件で緑にならないよう、件数が正であることを見る (どの action があるかは下のテストが見る)
         self.assertGreater(seen, 0)
 
     def test_checkout_sha_matches_ci(self):
