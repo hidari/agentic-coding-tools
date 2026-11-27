@@ -23,7 +23,7 @@ LLM にトリアージを任せたいが、Issue の本文とコメントは外�
 人の手や外部への通信が要る残り。実装はユニットテストと Fake の契約テストと配線のテストまでで、実物での走行はまだ一度もしていない。
 
 - [ ] 準備: 技術情報のトリアージ用の専用のワークスペースを Console に作って月の支出上限を掛け、リポジトリ専用の鍵を発行する。GitHub 側に environment `tech-briefing`、鍵、variable を作る。組織の web search / web fetch の許可の一覧が `official_sources` を含むことを確かめる
-  - 鍵を発行する前に、入口の3本の script を `uv lock --script` で lock し (`<script>.lock` を作ってコミットし、起動はそれを使う)、間接の依存を hash まで固定する。いまは PEP 723 の `[tool.uv]` の `exclude-newer` で解決の日付を絞っただけで、それが間接の依存に効くことは uv の docs に明記が無い
+  - [x] 鍵を発行する前に、入口の3本の script を `uv lock --script` で lock し、間接の依存を hash まで固定する。隣の `<script>.lock` を追跡下に置き、workflow は `uv run --locked --script` で起動する。`--locked` を外すと uv は古い lock を黙って書き換えて走り、lock が無ければ止まる (uv 0.13.4 で確かめた)。lock が追跡下にあって PEP 723 と食い違わないことは `test_boundaries.py` の `ScriptLock` が固定する
 - [ ] 契約テストの実物の側を手で回す。対象は Messages API、GitHub の API、取得先の registry と OSV。次を実物で確かめる
   - registry の欄の名前 (npm の `dist-tags.latest`、crates の `max_stable_version`、PyPI の `project_urls`) は記憶で書いたもので、実物で確かめていない
   - OSV を CVE で引いたとき、alias にしか無い記録が 404 になるかもしれない (未確認)

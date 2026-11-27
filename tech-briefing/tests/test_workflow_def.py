@@ -272,13 +272,13 @@ class RunSteps(unittest.TestCase):
     def test_each_job_runs_its_fixed_script(self):
         for name in ("select", "triage", "post"):
             script_runs = [s["run"] for s in steps(name) if "run" in s and "uv run" in s["run"]]
-            self.assertEqual(script_runs, [f"uv run --script tech-briefing/bin/run_{name}.py"], name)
+            self.assertEqual(script_runs, [f"uv run --locked --script tech-briefing/bin/run_{name}.py"], name)
 
     def test_triage_runs_nothing_but_the_guard_and_its_script(self):
         # LLM の job のシェルの面を、決まった2行に閉じる
         guard = steps("triage")[guard_index(steps("triage"))]["run"]
         runs = [s["run"] for s in steps("triage") if "run" in s]
-        self.assertEqual(runs, [guard, "uv run --script tech-briefing/bin/run_triage.py"])
+        self.assertEqual(runs, [guard, "uv run --locked --script tech-briefing/bin/run_triage.py"])
 
 
 class Uses(unittest.TestCase):

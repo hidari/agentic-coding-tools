@@ -1,7 +1,9 @@
 """本体・アダプタ・入口・テストの境界を ast とファイルの配置で固定する。
 
 本体とテストは標準ライブラリだけで回り、実行時の依存 (anthropic の SDK と PyYAML) はアダプタと
-入口のスクリプトだけが持つ。入口は PEP 723 で版を固定し、`uv run --script` で起動される。
+入口のスクリプトだけが持つ。入口は PEP 723 で版を固定し、隣の `<script>.lock` で間接の依存まで hash で固定して、
+`uv run --locked --script` で起動される。lock の有無と鮮度は `--locked` が起動の時点で止め、ここは lock が追跡下にあって
+PEP 723 と食い違わないことを固定する。
 
 テストが import してよいアダプタは、実行時の依存を直にも兄弟のアダプタ経由でも import しないものだけ。
 どれがそうかは adapters の ast から導くので、依存の無いアダプタが依存のある兄弟を import すれば、
@@ -15,6 +17,7 @@
 import ast
 import os
 import re
+import subprocess
 import sys
 import tomllib
 import unittest
@@ -140,8 +143,17 @@ def parse(path: Path) -> ast.Module:
 
 def workflow_scripts() -> list[Path]:
     runs = [s["run"] for job in workflow()["jobs"].values() for s in job["steps"] if "run" in s]
-    found = [m.group(1) for r in runs for m in re.finditer(r"uv run --script (\S+)", r)]
+    found = [m.group(1) for r in runs for m in re.finditer(r"uv run --locked --script (\S+)", r)]
     return sorted({REPO / f for f in found})
+
+
+def lock_of(path: Path) -> Path:
+    return path.with_name(f"{path.name}.lock")
+
+
+def normalized(name: str) -> str:
+    # lock は配布物の名前を PEP 503 の形 (小文字、[-_.] の連続を - に) で持つ
+    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def pep723(path: Path) -> dict:
@@ -228,6 +240,8 @@ class Imports(unittest.TestCase):
 
     def test_bin_scripts_import_runtime_deps_only_inside_functions(self):
         scripts = workflow_scripts()
+        # 対照: 起動の形を拾えずに0本で素通りしていない
+        self.assertEqual(len(scripts), 3)
         for path in scripts:
             with self.subTest(path.name):
                 tree = parse(path)
@@ -392,7 +406,7 @@ class Pep723(unittest.TestCase):
     def test_each_script_has_the_same_exclude_newer(self):
         # dependencies は直接の依存しか固定しない。uv の exclude-newer で、解決に考える配布をその時刻より前に絞る
         # (docs.astral.sh/uv/guides/scripts、2026-11-25 確認)。間接の依存まで効くかは docs に明記が無いので、
-        # hash までの固定は script の lock で扱う。値は anthropic 2.7.0 の wheel の公開 (2026-11-09) の後
+        # hash までの固定は隣の lock が持つ (ScriptLock)。値は anthropic 2.7.0 の wheel の公開 (2026-11-09) の後
         values = set()
         for path in workflow_scripts():
             with self.subTest(path.name):
@@ -417,6 +431,63 @@ class Pep723(unittest.TestCase):
         self.assertIsNone(_PIN.fullmatch("anthropic>=0.79"))
         self.assertIsNone(_PIN.fullmatch("anthropic"))
         self.assertIsNotNone(_PIN.fullmatch("PyYAML==6.0.3"))
+
+
+class ScriptLock(unittest.TestCase):
+    """入口の隣の lock (`uv lock --script` が作る) が追跡下にあり、PEP 723 と食い違わないこと。
+
+    lock の形は uv 0.13.4 で作って確かめたもの。依存の無い入口の lock は `[manifest]` を持たない。
+    """
+
+    def test_each_script_has_a_tracked_lock(self):
+        locks = [lock_of(p) for p in workflow_scripts()]
+        self.assertEqual(len(locks), 3)
+        out = subprocess.run(
+            ["git", "ls-files", "-z", "--", *(str(p.relative_to(REPO)) for p in locks)],
+            cwd=REPO, capture_output=True, check=True,
+        ).stdout
+        tracked = {REPO / p.decode() for p in out.split(b"\0") if p}
+        self.assertEqual(tracked, set(locks))
+
+    def test_each_lock_matches_pep723(self):
+        seen = set()
+        for path in workflow_scripts():
+            with self.subTest(path.name):
+                meta = pep723(path)
+                lock = tomllib.loads(lock_of(path).read_text(encoding="utf-8"))
+                self.assertEqual(lock.get("requires-python"), meta["requires-python"])
+                self.assertEqual(lock.get("options", {}).get("exclude-newer"), meta["tool"]["uv"]["exclude-newer"])
+                wanted = sorted((normalized(n), f"=={v}") for n, _, v in (d.partition("==") for d in meta["dependencies"]))
+                got = sorted((r["name"], r["specifier"]) for r in lock.get("manifest", {}).get("requirements", []))
+                self.assertEqual(got, wanted)
+                seen.update(n for n, _ in got)
+        # 対照: 突き合わせが空の requirements どうしで素通りしていない
+        self.assertEqual(seen, {"anthropic", "pyyaml"})
+
+    def test_each_lock_resolves_direct_deps_to_the_pins_with_hashes(self):
+        checked = 0
+        for path in workflow_scripts():
+            with self.subTest(path.name):
+                packages = tomllib.loads(lock_of(path).read_text(encoding="utf-8")).get("package", [])
+                versions = {p["name"]: p["version"] for p in packages}
+                for dep in pep723(path)["dependencies"]:
+                    name, _, version = dep.partition("==")
+                    self.assertEqual(versions.get(normalized(name)), version, dep)
+                    checked += 1
+                # 間接の依存も含め、どの配布物も sha256 の hash を持つ (hash まで固定するのが lock を置く理由)
+                for p in packages:
+                    files = [p["sdist"]] if "sdist" in p else []
+                    files += p.get("wheels", [])
+                    self.assertTrue(files, p["name"])
+                    for f in files:
+                        self.assertTrue(f.get("hash", "").startswith("sha256:"), p["name"])
+        # 対照: select の PyYAML と、triage の anthropic と PyYAML
+        self.assertEqual(checked, 3)
+
+    def test_normalized_follows_pep503(self):
+        self.assertEqual(normalized("PyYAML"), "pyyaml")
+        self.assertEqual(normalized("typing_extensions"), "typing-extensions")
+        self.assertEqual(normalized("zope.Interface__x"), "zope-interface-x")
 
 
 if __name__ == "__main__":

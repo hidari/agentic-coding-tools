@@ -1235,6 +1235,10 @@ tech-briefing/tests/test_boundaries.py::test_boundaries.Pep723.test_parser_rejec
 tech-briefing/tests/test_boundaries.py::test_boundaries.Pep723.test_pinned_versions_are_the_checked_ones
 tech-briefing/tests/test_boundaries.py::test_boundaries.Pep723.test_timestamp_shape_rejects_date_only_and_offsets
 tech-briefing/tests/test_boundaries.py::test_boundaries.Pep723.test_workflow_runs_exactly_the_bin_run_scripts
+tech-briefing/tests/test_boundaries.py::test_boundaries.ScriptLock.test_each_lock_matches_pep723
+tech-briefing/tests/test_boundaries.py::test_boundaries.ScriptLock.test_each_lock_resolves_direct_deps_to_the_pins_with_hashes
+tech-briefing/tests/test_boundaries.py::test_boundaries.ScriptLock.test_each_script_has_a_tracked_lock
+tech-briefing/tests/test_boundaries.py::test_boundaries.ScriptLock.test_normalized_follows_pep503
 tech-briefing/tests/test_boundaries.py::test_boundaries.YamlSafeLoad.test_collector_sees_other_forms
 tech-briefing/tests/test_boundaries.py::test_boundaries.YamlSafeLoad.test_only_yaml_loader_imports_yaml
 tech-briefing/tests/test_boundaries.py::test_boundaries.YamlSafeLoad.test_yaml_loader_reaches_only_allowed_attrs

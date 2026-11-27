@@ -92,7 +92,7 @@
             "TB_WORKFLOW_REPOSITORY": "${{ job.workflow_repository }}",
             "TB_WORKFLOW_SHA": "${{ job.workflow_sha }}"
           },
-          "run": "uv run --script tech-briefing/bin/run_select.py"
+          "run": "uv run --locked --script tech-briefing/bin/run_select.py"
         },
         {
           "name": "入力を渡す",
@@ -171,7 +171,7 @@
             "TB_CONFIG_PATH": "${{ inputs.config-path }}",
             "TB_CALLER_DIR": "${{ github.workspace }}/caller"
           },
-          "run": "uv run --script tech-briefing/bin/run_triage.py"
+          "run": "uv run --locked --script tech-briefing/bin/run_triage.py"
         },
         {
           "name": "報告を渡す",
@@ -255,7 +255,7 @@
             "TB_DRY_RUN": "${{ inputs.dry-run }}",
             "TB_SELECT_RESULT": "${{ needs.select.outputs.result }}"
           },
-          "run": "uv run --script tech-briefing/bin/run_post.py"
+          "run": "uv run --locked --script tech-briefing/bin/run_post.py"
         }
       ]
     }
