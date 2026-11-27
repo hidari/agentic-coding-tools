@@ -227,6 +227,9 @@ class ToolBox:
                 "allowed_domains": domains,
                 "max_uses": WEB_FETCH_MAX_USES,
                 "max_content_tokens": WEB_FETCH_MAX_CONTENT_TOKENS,
+                # 既定 (true) では最初の run でひと月前のキャッシュが返った。advisory やリリースノートは変わりやすく、
+                # 古い内容で分類を誤るより待ち時間を払う (use_cache は web_fetch_20260309 以降。docs、2026-11-27 確認)
+                "use_cache": False,
                 # 決まった処理の道具が返す registry の欄やリリースノートの中の URL を、取得の元に数えさせない
                 "url_sources": {"client_tool_results": {"type": "none"}},
             },

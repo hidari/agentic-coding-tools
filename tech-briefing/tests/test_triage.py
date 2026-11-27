@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from fakes import FakeFetcher, FakeMessages  # noqa: E402
 from tech_briefing.config import Config, FileRule  # noqa: E402
 from tech_briefing.constants import BETA, EFFORT, FALLBACKS, MODEL  # noqa: E402
+from tech_briefing.protocols import WORKSPACE_ID_KEY  # noqa: E402
 from tech_briefing.shapes import as_int  # noqa: E402
 from tech_briefing.tools import ERROR_PREFIX, REPORT_SCHEMA, ToolBox  # noqa: E402
 from tech_briefing.triage import (  # noqa: E402
@@ -269,7 +270,7 @@ class Loop(unittest.TestCase):
         self.assertEqual(len(self.client.requests), 2)
         self.assertEqual((out.report, out.failure), (None, "api-error"))
         # 途中で失敗しても、それまでの道具の呼び出しと usage は残す
-        self.assertEqual(out.tool_log, [{"kind": "client", "name": "search_files", "input": {"term": "lodash"}}])
+        self.assertEqual(out.tool_log, [{"kind": "client", "id": "t1", "name": "search_files", "input": {"term": "lodash"}}])
         self.assertEqual(out.usage["input_tokens"], 7)
 
     def test_toolbox_exception_is_not_api_error(self):
@@ -304,10 +305,11 @@ class Loop(unittest.TestCase):
         self.assertEqual(
             out.tool_log,
             [
-                {"kind": "server", "name": "web_search", "input": {"query": "lodash advisory"}},
-                {"kind": "client", "name": "search_files", "input": {"term": "lodash"}},
-                {"kind": "server", "name": "web_fetch", "input": {"url": "https://docs.example.org/a"}},
-                {"kind": "client", "name": "submit_report", "input": REPORT},
+                {"kind": "server", "id": "s1", "name": "web_search", "input": {"query": "lodash advisory"}},
+                {"kind": "client", "id": "t1", "name": "search_files", "input": {"term": "lodash"}},
+                {"kind": "server", "id": "s2", "name": "web_fetch", "input": {"url": "https://docs.example.org/a"}},
+                {"kind": "server_result", "type": "web_fetch_tool_result", "tool_use_id": "s2", "result": {}},
+                {"kind": "client", "id": "t_submit", "name": "submit_report", "input": REPORT},
             ],
         )
         self.assertEqual(
@@ -320,6 +322,196 @@ class Loop(unittest.TestCase):
                 "server_tool_use": {"web_search_requests": 3, "web_fetch_requests": 1},
             },
         )
+
+    def test_tool_log_keeps_caller_with_known_keys_only(self):
+        # dynamic filtering の中の呼び出しは caller.tool_id が code execution の server_tool_use の id を指す
+        # (docs の programmatic tool calling、2026-11-27 確認)。どの呼び出しがどこから来たかを run の後で分ける
+        nested = {
+            **server_use("s2", "web_fetch", {"url": "https://docs.example.org/a"}),
+            "caller": {"type": "code_execution_20260120", "tool_id": "s1", "note": "知らない鍵"},
+        }
+        direct = {**tool_use("t1", "search_files", {"term": "lodash"}), "caller": {"type": "direct"}}
+        first = response("tool_use", server_use("s1", "code_execution", {"code": "print(1)"}), nested, direct)
+        out = self.run_loop(first, submit())
+        self.assertEqual(
+            out.tool_log[:3],
+            [
+                {"kind": "server", "id": "s1", "name": "code_execution", "input": {"code": "print(1)"}},
+                {
+                    "kind": "server",
+                    "id": "s2",
+                    "name": "web_fetch",
+                    "input": {"url": "https://docs.example.org/a"},
+                    "caller": {"type": "code_execution_20260120", "tool_id": "s1"},
+                },
+                {"kind": "client", "id": "t1", "name": "search_files", "input": {"term": "lodash"}, "caller": {"type": "direct"}},
+            ],
+        )
+
+    def test_tool_log_summarizes_server_results_without_bodies(self):
+        # 結果のブロックの形は docs の web fetch・web search・code execution・programmatic tool calling (2026-11-27 確認)。
+        # 本文・stdout・ファイルの中身・encrypted_content は信頼できない文章で大きいので残さず、判定に要る欄だけを残す
+        secrets = ("BODY-SECRET", "ENC-SECRET", "STDOUT-SECRET", "STDERR-SECRET", "FILE-SECRET", "TITLE-SECRET")
+        fetched = {
+            "type": "web_fetch_tool_result",
+            "tool_use_id": "s1",
+            "content": {
+                "type": "web_fetch_result",
+                "url": "https://docs.example.org/a",
+                "retrieved_at": "2026-11-27T00:00:00Z",
+                "content": {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "BODY-SECRET"}},
+            },
+        }
+        refused = {
+            "type": "web_fetch_tool_result",
+            "tool_use_id": "s2",
+            "caller": {"type": "code_execution_20260120", "tool_id": "s5"},
+            "content": {"type": "web_fetch_tool_result_error", "error_code": "url_not_allowed"},
+        }
+        searched = {
+            "type": "web_search_tool_result",
+            "tool_use_id": "s3",
+            "content": [
+                {"type": "web_search_result", "url": "https://docs.example.org/b", "title": "TITLE-SECRET", "encrypted_content": "ENC-SECRET", "page_age": "x"},
+                {"type": "web_search_result", "url": None},
+            ],
+        }
+        search_failed = {
+            "type": "web_search_tool_result",
+            "tool_use_id": "s4",
+            "content": {"type": "web_search_tool_result_error", "error_code": "max_uses_exceeded"},
+        }
+        ran = {
+            "type": "bash_code_execution_tool_result",
+            "tool_use_id": "s5",
+            "content": {"type": "bash_code_execution_result", "stdout": "STDOUT-SECRET", "stderr": "STDERR-SECRET", "return_code": 1, "content": []},
+        }
+        viewed = {
+            "type": "text_editor_code_execution_tool_result",
+            "tool_use_id": "s6",
+            "content": {"type": "text_editor_code_execution_view_result", "file_type": "text", "content": "FILE-SECRET", "num_lines": 1},
+        }
+        legacy = {
+            "type": "code_execution_tool_result",
+            "tool_use_id": "s7",
+            "content": {"type": "code_execution_result", "stdout": "STDOUT-SECRET", "stderr": "", "return_code": 0, "content": []},
+        }
+        blocks = (fetched, refused, searched, search_failed, ran, viewed, legacy)
+        out = self.run_loop(response("pause_turn", *blocks), submit())
+        results = [e for e in out.tool_log if e["kind"] == "server_result"]
+        self.assertEqual(
+            results,
+            [
+                {
+                    "kind": "server_result",
+                    "type": "web_fetch_tool_result",
+                    "tool_use_id": "s1",
+                    "result": {"type": "web_fetch_result", "url": "https://docs.example.org/a", "retrieved_at": "2026-11-27T00:00:00Z"},
+                },
+                {
+                    "kind": "server_result",
+                    "type": "web_fetch_tool_result",
+                    "tool_use_id": "s2",
+                    "result": {"type": "web_fetch_tool_result_error", "error_code": "url_not_allowed"},
+                    "caller": {"type": "code_execution_20260120", "tool_id": "s5"},
+                },
+                {"kind": "server_result", "type": "web_search_tool_result", "tool_use_id": "s3", "result": {"urls": ["https://docs.example.org/b"]}},
+                {
+                    "kind": "server_result",
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "s4",
+                    "result": {"type": "web_search_tool_result_error", "error_code": "max_uses_exceeded"},
+                },
+                {
+                    "kind": "server_result",
+                    "type": "bash_code_execution_tool_result",
+                    "tool_use_id": "s5",
+                    "result": {"type": "bash_code_execution_result", "return_code": 1},
+                },
+                {
+                    "kind": "server_result",
+                    "type": "text_editor_code_execution_tool_result",
+                    "tool_use_id": "s6",
+                    "result": {"type": "text_editor_code_execution_view_result"},
+                },
+                {
+                    "kind": "server_result",
+                    "type": "code_execution_tool_result",
+                    "tool_use_id": "s7",
+                    "result": {"type": "code_execution_result", "return_code": 0},
+                },
+            ],
+        )
+        logged = json.dumps(out.tool_log, ensure_ascii=False)
+        for secret in secrets:
+            with self.subTest(secret):
+                self.assertNotIn(secret, logged)
+        # 対照: 同じ本文は API へ送り返す assistant の content には残っている (要約するのは tool-log だけ)
+        sent = json.dumps(self.client.requests[1]["messages"][-1], ensure_ascii=False)
+        for secret in secrets:
+            self.assertIn(secret, sent)
+
+    def test_server_result_arriving_in_a_later_response_pairs_by_tool_use_id(self):
+        # client の道具と同じ group の web fetch は、client の結果を送り返した次の要求の頭で実行され、結果は次の応答に入る
+        # (docs の server tools の Mixing server tools and client tools、2026-11-27 確認)
+        first = response(
+            "tool_use",
+            server_use("s1", "web_fetch", {"url": "https://docs.example.org/a"}),
+            tool_use("t1", "search_files", {"term": "lodash"}),
+        )
+        second = response(
+            "tool_use",
+            {"type": "web_fetch_tool_result", "tool_use_id": "s1", "content": {"type": "web_fetch_tool_result_error", "error_code": "url_not_accessible"}},
+            tool_use("t_submit", "submit_report", REPORT),
+        )
+        out = self.run_loop(first, second)
+        self.assertEqual(
+            [(e["kind"], e.get("id"), e.get("tool_use_id")) for e in out.tool_log],
+            [("server", "s1", None), ("client", "t1", None), ("server_result", None, "s1"), ("client", "t_submit", None)],
+        )
+        self.assertEqual(out.tool_log[2]["result"], {"type": "web_fetch_tool_result_error", "error_code": "url_not_accessible"})
+
+    def test_usage_by_response_keeps_model_workspace_and_iterations(self):
+        # fallback の有無は応答の model と usage.iterations の fallback_message でしか分からず、トップレベルの usage は
+        # 返した1回分だけを数える (docs の Refusals and fallback、2026-11-27 確認)。ワークスペースは応答ヘッダにしか無い
+        fell_back = {
+            **usage(inp=3),
+            "iterations": [
+                {"type": "message", "model": MODEL, "input_tokens": 9, "output_tokens": 0, "cache_creation": {"x": 1}},
+                {"type": "fallback_message", "model": "claude-other", "input_tokens": 3, "output_tokens": 5},
+                "壊れた要素",
+            ],
+        }
+        first = {
+            **response("pause_turn", server_use("s1", "web_search", {"query": "q"}), u=fell_back),
+            "model": "claude-other",
+            WORKSPACE_ID_KEY: "wrkspc_example",
+        }
+        # 欄の無い応答 (Fake の既定) も1件として数え、欠けた値は None にする
+        out = self.run_loop(first, submit())
+        self.assertEqual(
+            out.usage_by_response,
+            [
+                {
+                    "model": "claude-other",
+                    "workspace_id": "wrkspc_example",
+                    "iterations": [
+                        {"type": "message", "model": MODEL, "input_tokens": 9, "output_tokens": 0},
+                        {"type": "fallback_message", "model": "claude-other", "input_tokens": 3, "output_tokens": 5},
+                    ],
+                },
+                {"model": None, "workspace_id": None, "iterations": []},
+            ],
+        )
+        # 合計の usage は API の usage の欄だけを持ち、応答ごとの値を混ぜない (step summary はこちらを出す)
+        self.assertEqual(set(out.usage), {"input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "server_tool_use"})
+
+    def test_workspace_key_is_not_an_api_field(self):
+        # アダプタが応答の dict に足す鍵。API の欄 (snake_case) と衝突せず、送り返す content にも入らない
+        self.assertIn("-", WORKSPACE_ID_KEY)
+        first = {**response("pause_turn", server_use("s1", "web_search", {"query": "q"})), WORKSPACE_ID_KEY: "wrkspc_example"}
+        self.run_loop(first, submit())
+        self.assertNotIn("wrkspc_example", json.dumps(self.client.requests[1], ensure_ascii=False))
 
     def test_limits_are_the_provisional_values(self):
         # 仮の値。実物の run の usage で決め直すときはこのテストも直す (費用の天井の変更が差分に必ず出るようにするため)

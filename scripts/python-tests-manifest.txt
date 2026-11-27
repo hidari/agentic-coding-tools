@@ -1272,11 +1272,13 @@ tech-briefing/tests/test_entrypoints.py::test_entrypoints.ArtifactNames.test_tri
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.EnvKeys.test_environ_collector_sees_real_deps_reads
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.EnvKeys.test_every_declared_key_is_read
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.JobIo.test_caller_workflow_path
+tech-briefing/tests/test_entrypoints.py::test_entrypoints.JobIo.test_load_yaml_under_does_not_log_the_loader_error_text
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.JobIo.test_load_yaml_under_takes_the_yaml_loader_protocol
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.JobIo.test_load_yaml_under_turns_loader_value_error_into_none
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.JobIo.test_read_criteria_does_not_follow_symlinks
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.JobIo.test_read_criteria_or_none
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.JobIo.test_read_under_rejects_symlink_out
+tech-briefing/tests/test_entrypoints.py::test_entrypoints.JobIo.test_read_under_takes_canonical_paths_and_rejects_git
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.JobIo.test_write_json_keeps_lone_surrogate_as_escape
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.JobIo.test_write_output_rejects_newline
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.Post.test_already_marked_is_not_posted_again
@@ -1289,6 +1291,7 @@ tech-briefing/tests/test_entrypoints.py::test_entrypoints.Post.test_missing_tria
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.Post.test_target_comes_only_from_select_dir
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.Post.test_unexpected_and_too_large_are_posted_and_red
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.Select.test_config_errors_are_red_and_do_not_touch_github
+tech-briefing/tests/test_entrypoints.py::test_entrypoints.Select.test_control_git_config_fixture_does_not_break_a_valid_path
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.Select.test_control_valid_inputs_reach_github
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.Select.test_results_without_post_write_no_input
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.Select.test_triage_writes_input_and_result
@@ -1302,6 +1305,7 @@ tech-briefing/tests/test_entrypoints.py::test_entrypoints.Triage.test_entry_pass
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.Triage.test_entry_passes_the_token_limit
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.Triage.test_failure_writes_kind_and_tool_log
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.Triage.test_report_writes_report_and_tool_log
+tech-briefing/tests/test_entrypoints.py::test_entrypoints.Triage.test_tool_log_keeps_usage_by_response_out_of_the_summary_line
 tech-briefing/tests/test_entrypoints.py::test_entrypoints.Triage.test_unexpected_error_is_internal_error
 tech-briefing/tests/test_fakes_contract.py::test_fakes_contract.Conversion.test_comment
 tech-briefing/tests/test_fakes_contract.py::test_fakes_contract.Conversion.test_created_at_must_be_z_form
@@ -1494,6 +1498,7 @@ tech-briefing/tests/test_triage.py::test_triage.Loop.test_loop_limit_stops_befor
 tech-briefing/tests/test_triage.py::test_triage.Loop.test_max_tokens_with_submit_is_not_accepted
 tech-briefing/tests/test_triage.py::test_triage.Loop.test_pause_turn_appends_content_unchanged_and_resends
 tech-briefing/tests/test_triage.py::test_triage.Loop.test_refusal
+tech-briefing/tests/test_triage.py::test_triage.Loop.test_server_result_arriving_in_a_later_response_pairs_by_tool_use_id
 tech-briefing/tests/test_triage.py::test_triage.Loop.test_submit_is_accepted_even_when_tokens_are_over_the_limit
 tech-briefing/tests/test_triage.py::test_triage.Loop.test_submit_stops_without_running_sibling_tools_or_sending_again
 tech-briefing/tests/test_triage.py::test_triage.Loop.test_token_limit_at_exactly_the_limit_continues
@@ -1501,10 +1506,14 @@ tech-briefing/tests/test_triage.py::test_triage.Loop.test_token_limit_counts_cac
 tech-briefing/tests/test_triage.py::test_triage.Loop.test_token_limit_is_total_across_requests
 tech-briefing/tests/test_triage.py::test_triage.Loop.test_tool_error_result_sets_is_error
 tech-briefing/tests/test_triage.py::test_triage.Loop.test_tool_log_and_usage_cover_every_call_and_sum
+tech-briefing/tests/test_triage.py::test_triage.Loop.test_tool_log_keeps_caller_with_known_keys_only
+tech-briefing/tests/test_triage.py::test_triage.Loop.test_tool_log_summarizes_server_results_without_bodies
 tech-briefing/tests/test_triage.py::test_triage.Loop.test_tool_use_sends_only_tool_results_with_same_tools
 tech-briefing/tests/test_triage.py::test_triage.Loop.test_tool_use_with_only_server_tool_use_is_resent_like_pause_turn
 tech-briefing/tests/test_triage.py::test_triage.Loop.test_tool_use_with_unanswered_server_tool_use_continues_with_client_results_in_order
 tech-briefing/tests/test_triage.py::test_triage.Loop.test_toolbox_exception_is_not_api_error
+tech-briefing/tests/test_triage.py::test_triage.Loop.test_usage_by_response_keeps_model_workspace_and_iterations
+tech-briefing/tests/test_triage.py::test_triage.Loop.test_workspace_key_is_not_an_api_field
 tech-briefing/tests/test_triage.py::test_triage.MatchesSchema.test_report_schema_accepts_report
 tech-briefing/tests/test_triage.py::test_triage.MatchesSchema.test_unsupported_schema_is_an_error_not_a_pass
 tech-briefing/tests/test_triage.py::test_triage.MatchesSchema.test_unsupported_sub_schema_is_an_error_even_when_no_value_reaches_it

@@ -7,7 +7,7 @@
 """triage の job の入口。select の input.json と呼び出し側の設定から要求を組み、Messages API とのループを回す。
 
 書くもの: 提出された報告 (report.json) か失敗の種類だけの JSON の文字列 (failure.json) のどちらか一方と、
-道具の呼び出しの一覧と usage (tool-log.json)。想定の外の例外も internal-error として failure.json に残す。
+道具の呼び出しと server の道具の結果の要約の一覧、合計と応答ごとの usage (tool-log.json)。想定の外の例外も internal-error として failure.json に残す。
 GITHUB_TOKEN は渡されない (release notes は認証なしで引く)。
 """
 
@@ -51,7 +51,10 @@ def main(env, deps) -> int:
         jobio.write_json(out / FAILURE_FILE, FAIL_INTERNAL_ERROR)
         print(f"triage の結果: トリアージできなかった: {FAIL_INTERNAL_ERROR}")
         return 1
-    jobio.write_json(out / TOOL_LOG_FILE, {"tool_log": outcome.tool_log, "usage": outcome.usage})
+    jobio.write_json(
+        out / TOOL_LOG_FILE,
+        {"tool_log": outcome.tool_log, "usage": outcome.usage, "usage_by_response": outcome.usage_by_response},
+    )
     usage = ", ".join(f"{k}={v}" for k, v in outcome.usage.items())
     jobio.append_summary(env, f"triage の usage: {usage}")
     if outcome.report is not None:
