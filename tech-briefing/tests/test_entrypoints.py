@@ -765,8 +765,9 @@ class JobIo(unittest.TestCase):
         root.mkdir()
         (root / "a.yml").write_text("x", encoding="utf-8")
 
-        # PyYAML 6.0.3 の constructor は YAMLError ではない ValueError・KeyError・RecursionError なども上げる
-        # (`!!int` や `!!bool` の付いた値など)。約束の外の型でも落ちずに設定の誤りとして扱う
+        # PyYAML 6.0.3 の safe_load は YAMLError ではない ValueError・KeyError・RecursionError なども上げる
+        # (`!!int` や `!!bool` の付いた値では constructor が、深い入れ子では scanner が)。約束の外の型でも落ちずに
+        # 設定の誤りとして扱う
         for error in (ValueError, KeyError, AttributeError, RecursionError):
             with self.subTest(error.__name__):
 
