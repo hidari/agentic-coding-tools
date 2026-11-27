@@ -765,15 +765,20 @@ class JobIo(unittest.TestCase):
         root.mkdir()
         (root / "a.yml").write_text("x", encoding="utf-8")
 
-        def broken(text):
-            raise ValueError("SECRET-LINE extraheader")
+        # PyYAML 6.0.3 の constructor は YAMLError ではない ValueError・KeyError・RecursionError なども上げる
+        # (`!!int` や `!!bool` の付いた値など)。約束の外の型でも落ちずに設定の誤りとして扱う
+        for error in (ValueError, KeyError, AttributeError, RecursionError):
+            with self.subTest(error.__name__):
 
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            self.assertIsNone(jobio.load_yaml_under(root, "a.yml", broken))
-        self.assertNotIn("SECRET-LINE", err.getvalue())
-        self.assertIn("a.yml", err.getvalue())
-        self.assertIn("ValueError", err.getvalue())
+                def broken(text):
+                    raise error("SECRET-LINE extraheader")
+
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertIsNone(jobio.load_yaml_under(root, "a.yml", broken))
+                self.assertNotIn("SECRET-LINE", err.getvalue())
+                self.assertIn("a.yml", err.getvalue())
+                self.assertIn(error.__name__, err.getvalue())
         # 対照: パスの誤りは読み手の例外ではなく、こちらの文 (パスの値) をそのまま理由に出す
         err = io.StringIO()
         with contextlib.redirect_stderr(err):

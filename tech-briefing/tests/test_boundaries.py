@@ -297,8 +297,9 @@ class Imports(unittest.TestCase):
 
 
 YAML_LOADER = TB / ADAPTERS / "yaml_loader.py"
-# yaml_loader が yaml から使ってよい属性。load や unsafe_load は任意の Python のオブジェクトを作れる
-YAML_ALLOWED_ATTRS = {"safe_load", "YAMLError"}
+# yaml_loader が yaml から使ってよい属性。load や unsafe_load は任意の Python のオブジェクトを作れる。
+# 例外は型を問わずに受けるので、YAMLError も名指ししない
+YAML_ALLOWED_ATTRS = {"safe_load"}
 
 
 def yaml_import_forms(tree: ast.AST) -> set[str]:

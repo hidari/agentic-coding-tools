@@ -503,7 +503,8 @@ class Loop(unittest.TestCase):
                 {"model": None, "workspace_id": None, "iterations": []},
             ],
         )
-        # ワークスペースの id は送り返す要求に入らない (ループは content だけを送り返す)
+        # ワークスペースの id は送り返す要求に入らない (ループは content だけを送り返す)。鍵は API の欄 (snake_case) と衝突しない
+        self.assertIn("-", WORKSPACE_ID_KEY)
         self.assertNotIn("wrkspc_example", json.dumps(self.client.requests[1], ensure_ascii=False))
         # 合計の usage は API の usage の欄だけを持ち、応答ごとの値を混ぜない (step summary はこちらを出す)
         self.assertEqual(set(out.usage), {"input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "server_tool_use"})

@@ -195,7 +195,8 @@ def matches_schema(value: object, schema: dict) -> bool:
 
 
 def _scalars(value: object, keys: tuple[str, ...] | None = None) -> dict:
-    """dict の文字列と数の欄だけを返す (keys を渡せばその欄だけ)。入れ子の値と真偽値は落とす。"""
+    """dict の文字列と数の欄だけを返す (keys を渡せばその欄だけ)。入れ子の値 (iterations の cache_creation の内訳など) と
+    真偽値は落とす。"""
     d = as_dict(value)
 
     def scalar(v: object) -> str | int | None:
@@ -233,7 +234,6 @@ def _response_usage(resp: dict) -> dict:
     return {
         "model": as_str(resp.get("model")),
         "workspace_id": as_str(resp.get(WORKSPACE_ID_KEY)),
-        # 入れ子の欄 (cache_creation の内訳など) は落とし、数と名前だけを残す
         "iterations": [_scalars(it) for it in iterations if isinstance(it, dict)],
     }
 
