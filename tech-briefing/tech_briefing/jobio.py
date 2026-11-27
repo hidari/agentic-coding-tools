@@ -64,15 +64,13 @@ def read_under(root: Path, rel: str) -> str:
     """
     if not isinstance(rel, str):
         raise ValueError(f"root からの相対パスではありません: {rel!r}")
-    # 道具と criteria と同じ正規形の規則 (絶対パス・..・.・空の segment・NUL・.git を拒否する)
     repo_paths.canonical_parts(rel)
     base = Path(root).resolve()
     target = (base / rel).resolve()
     if not target.is_relative_to(base):
         raise ValueError(f"root の外を指しています: {rel!r}")
-    # 文字列の検査は symlink の先を見ないので、解決した先の経路でも .git を拒否する
-    if any(repo_paths.is_git_name(p) for p in target.relative_to(base).parts):
-        raise ValueError(f".git の中を指しています: {rel!r}")
+    # 文字列の検査は symlink の先を見ないので、解決した先の経路にも同じ規則を当てる (.git の中を指す symlink を止める)
+    repo_paths.canonical_parts(target.relative_to(base).as_posix())
     with open(target, encoding="utf-8") as f:
         return f.read()
 
@@ -136,7 +134,7 @@ def caller_workflow_path(workflow_ref: str, repository: str) -> str | None:
     if not path.startswith(_WORKFLOWS_DIR):
         return None
     try:
-        # 道具や criteria と同じ正規形の規則で見る (.. のほか NUL・. ・空の segment・.git も拒否する)
+        # 道具や criteria と同じ正規形の規則で見る
         repo_paths.canonical_parts(path)
     except repo_paths.PathShapeError:
         return None

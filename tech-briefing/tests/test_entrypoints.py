@@ -376,11 +376,7 @@ class Select(Harness):
 
     def test_control_valid_inputs_reach_github(self):
         # 対照: 上の config-error は入力の誤りで起きていて、配線の誤りで常に起きているのではない
-        github = FakeGitHub([])
-        self.assertEqual(self.run_select(github), 0)
-        self.assertEqual(github.calls, [("open_issues",)])
-
-    def test_control_git_config_fixture_does_not_break_a_valid_path(self):
+        # (誤りの例と同じく .git/config とそれを指す symlink を置いたうえで通る)
         self.put_readable_git_config()
         github = FakeGitHub([])
         self.assertEqual(self.run_select(github), 0)

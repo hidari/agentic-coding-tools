@@ -349,8 +349,7 @@ class Loop(unittest.TestCase):
         )
 
     def test_tool_log_summarizes_server_results_without_bodies(self):
-        # 結果のブロックの形は docs の web fetch・web search・code execution・programmatic tool calling (2026-11-27 確認)。
-        # 本文・stdout・ファイルの中身・encrypted_content は信頼できない文章で大きいので残さず、判定に要る欄だけを残す
+        # 結果のブロックの形は docs の web fetch・web search・code execution・programmatic tool calling (2026-11-27 確認)
         secrets = ("BODY-SECRET", "ENC-SECRET", "STDOUT-SECRET", "STDERR-SECRET", "FILE-SECRET", "TITLE-SECRET")
         fetched = {
             "type": "web_fetch_tool_result",
@@ -477,7 +476,8 @@ class Loop(unittest.TestCase):
         fell_back = {
             **usage(inp=3),
             "iterations": [
-                {"type": "message", "model": MODEL, "input_tokens": 9, "output_tokens": 0, "cache_creation": {"x": 1}},
+                # 入れ子の値と真偽値は落とし、空の文字列と0は残す
+                {"type": "message", "model": MODEL, "input_tokens": 9, "output_tokens": 0, "cache_creation": {"x": 1}, "flag": True, "note": ""},
                 {"type": "fallback_message", "model": "claude-other", "input_tokens": 3, "output_tokens": 5},
                 "壊れた要素",
             ],
@@ -496,22 +496,17 @@ class Loop(unittest.TestCase):
                     "model": "claude-other",
                     "workspace_id": "wrkspc_example",
                     "iterations": [
-                        {"type": "message", "model": MODEL, "input_tokens": 9, "output_tokens": 0},
+                        {"type": "message", "model": MODEL, "input_tokens": 9, "output_tokens": 0, "note": ""},
                         {"type": "fallback_message", "model": "claude-other", "input_tokens": 3, "output_tokens": 5},
                     ],
                 },
                 {"model": None, "workspace_id": None, "iterations": []},
             ],
         )
+        # ワークスペースの id は送り返す要求に入らない (ループは content だけを送り返す)
+        self.assertNotIn("wrkspc_example", json.dumps(self.client.requests[1], ensure_ascii=False))
         # 合計の usage は API の usage の欄だけを持ち、応答ごとの値を混ぜない (step summary はこちらを出す)
         self.assertEqual(set(out.usage), {"input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "server_tool_use"})
-
-    def test_workspace_key_is_not_an_api_field(self):
-        # アダプタが応答の dict に足す鍵。API の欄 (snake_case) と衝突せず、送り返す content にも入らない
-        self.assertIn("-", WORKSPACE_ID_KEY)
-        first = {**response("pause_turn", server_use("s1", "web_search", {"query": "q"})), WORKSPACE_ID_KEY: "wrkspc_example"}
-        self.run_loop(first, submit())
-        self.assertNotIn("wrkspc_example", json.dumps(self.client.requests[1], ensure_ascii=False))
 
     def test_limits_are_the_provisional_values(self):
         # 仮の値。実物の run の usage で決め直すときはこのテストも直す (費用の天井の変更が差分に必ず出るようにするため)

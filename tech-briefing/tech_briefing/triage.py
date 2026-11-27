@@ -22,7 +22,7 @@ from tech_briefing.constants import (
     MODEL,
 )
 from tech_briefing.protocols import WORKSPACE_ID_KEY, MessagesClient
-from tech_briefing.shapes import as_dict, as_int, as_list
+from tech_briefing.shapes import as_dict, as_int, as_list, as_str
 from tech_briefing.tools import ERROR_PREFIX, REPORT_SCHEMA, SUBMIT_REPORT, ToolBox
 
 # streaming を使わない要求の値として 16000 (仮の値)。実際の run の usage を見て決め直す
@@ -145,7 +145,7 @@ _LOG_KINDS = {"tool_use": "client", "server_tool_use": "server"}
 # server の道具の結果のブロックの type の末尾 (web_fetch_tool_result・bash_code_execution_tool_result など)。
 # client へ送り返す tool_result は先頭に _ が無いので当たらない
 _SERVER_RESULT_SUFFIX = "_tool_result"
-# 結果から残す欄。本文・stdout・stderr・ファイルの中身・encrypted_content は外から来た信頼できない文章で大きいので残さず、
+# 結果から残す欄。ほかの欄 (本文・stdout など) は外から来た信頼できない文章で大きいので残さず、
 # どこへ行ってどう終わったか (injection の判定と拒否の原因の切り分け) に要る値だけを残す
 _RESULT_KEYS = ("type", "url", "retrieved_at", "error_code", "return_code")
 # caller の欄 (docs の programmatic tool calling、2026-11-27 確認)。tool_id は呼んだ code execution の id
@@ -194,9 +194,15 @@ def matches_schema(value: object, schema: dict) -> bool:
     return _matches(value, schema)
 
 
-def _scalars(value: object, keys: tuple[str, ...]) -> dict:
+def _scalars(value: object, keys: tuple[str, ...] | None = None) -> dict:
+    """dict の文字列と数の欄だけを返す (keys を渡せばその欄だけ)。入れ子の値と真偽値は落とす。"""
     d = as_dict(value)
-    return {k: d[k] for k in keys if isinstance(d.get(k), (str, int))}
+
+    def scalar(v: object) -> str | int | None:
+        text = as_str(v)
+        return text if text is not None else as_int(v)
+
+    return {k: v for k in (d if keys is None else keys) if (v := scalar(d.get(k))) is not None}
 
 
 def _log_entry(block: dict) -> dict | None:
@@ -223,15 +229,12 @@ def _log_entry(block: dict) -> dict | None:
 
 
 def _response_usage(resp: dict) -> dict:
-    def text(value: object) -> str | None:
-        return value if isinstance(value, str) else None
-
     iterations = as_list(as_dict(resp.get("usage")).get("iterations"))
     return {
-        "model": text(resp.get("model")),
-        "workspace_id": text(resp.get(WORKSPACE_ID_KEY)),
+        "model": as_str(resp.get("model")),
+        "workspace_id": as_str(resp.get(WORKSPACE_ID_KEY)),
         # 入れ子の欄 (cache_creation の内訳など) は落とし、数と名前だけを残す
-        "iterations": [{k: v for k, v in it.items() if isinstance(v, (str, int))} for it in iterations if isinstance(it, dict)],
+        "iterations": [_scalars(it) for it in iterations if isinstance(it, dict)],
     }
 
 
