@@ -250,8 +250,7 @@ class Imports(unittest.TestCase):
         self.assertEqual(top_level_imported(tree), {"yaml", "anthropic", "adapters", "json"})
 
     def test_bin_scripts_import_runtime_deps_only_inside_functions(self):
-        scripts = workflow_scripts()
-        for path in scripts:
+        for path in workflow_scripts():
             with self.subTest(path.name):
                 tree = parse(path)
                 self.assertEqual(top_level_imported(tree) & NOT_AT_IMPORT_TIME, set())
@@ -395,7 +394,7 @@ class Pep723(unittest.TestCase):
                 self.assertIsInstance(deps, list)
                 for dep in deps:
                     self.assertIsNotNone(_PIN.fullmatch(dep), dep)
-                    names.add(dep.split("==")[0])
+                names.update(name for name, _ in pins(path))
         # 対照: 固定の検査が空の dependencies で素通りしていない
         self.assertEqual(names, {"anthropic", "PyYAML"})
 
@@ -447,6 +446,7 @@ class ScriptLock(unittest.TestCase):
     `--locked` は起動の時点で、lock が無いとき (rc 2) と、依存・requires-python・前へずらした exclude-newer が
     PEP 723 と食い違うとき (rc 1) に止める。後ろへずらした exclude-newer は lock のまま黙って通るので、その一致は
     ここだけが見る。lock の形も含め uv 0.13.4 で確かめた。依存の無い入口の lock は `[manifest]` を持たない。
+    どのテストが赤でも、直し方は `uv lock --script <入口>` で作り直して lock を追跡下に置くこと。
     """
 
     def test_each_script_has_a_tracked_lock(self):
