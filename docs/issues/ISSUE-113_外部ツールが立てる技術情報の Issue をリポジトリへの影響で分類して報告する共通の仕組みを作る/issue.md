@@ -20,9 +20,12 @@ LLM にトリアージを任せたいが、Issue の本文とコメントは外�
 - [x] 実装プラン (`ISSUE-113-plan.md`) を書く
 - [x] 決まった処理 (select の判定、設定と呼び出し側の検査、入力の絞り込みと置き換え、道具の許可、本文の整形と無害化、失敗の終わり方、ループの上限) と reusable workflow を実装し、ユニットテストと配線のテストで固定する
 
-人の手や外部への通信が要る残り。実装はユニットテストと Fake の契約テストと配線のテストまでで、実物での走行はまだ一度もしていない。
+人の手や外部への通信が要る残り。実装はユニットテストと Fake の契約テストと配線のテストまでで、実物では2026-11-27に最初の導入先で dry-run を2回 (select だけの1回と、テスト用の Issue で triage まで通した1回) 走らせただけである (結果は「実物で走らせる」のタスクの子)。
 
-- [ ] 準備: 技術情報のトリアージ用の専用のワークスペースを Console に作って月の支出上限を掛け、リポジトリ専用の鍵を発行する。GitHub 側に environment `tech-briefing`、鍵、variable を作る。組織の web search / web fetch の許可の一覧が `official_sources` を含むことを確かめる
+- [x] 準備: 技術情報のトリアージ用の専用のワークスペースを Console に作って月の支出上限を掛け、リポジトリ専用の鍵を発行する。GitHub 側に environment `tech-briefing`、鍵、variable を作る。組織の web search / web fetch の許可の一覧が `official_sources` を含むことを確かめる
+  - 2026-11-27に済ませた。専用のワークスペースに月の支出上限 (まず$30) を掛け、鍵はサービスアカウント1つの下にリポジトリごとに1本ずつ発行した (導入予定の3つ分)。どの鍵も Messages API に200を返し、応答ヘッダの `anthropic-workspace-id` は3本とも同じで、Admin API の読み取りには401を返した
+  - 導入予定の3つのリポジトリに、environment `tech-briefing` (deployment branch は既定のブランチの名前の1件だけ)、その secret `ANTHROPIC_API_KEY`、repository variable `TECH_BRIEFING_AUTHOR` を置いた。variable は select の job が読み、select は environment を持たないので、environment の variable ではなく repository variable に置く
+  - 組織の許可の一覧: 最初の導入先の `official_sources` を `allowed_domains` に入れた web search と web fetch の要求が200で通った。対照として、どこにも登録していないドメインを足した要求も200で通ったので、組織の側に許可の一覧は設定されていない (docs の Server tools の Domain filtering の節は、部分集合の検査を組織の側に制限があるときのこととして書いている)。組織の一覧は今は置かない (人の判断。置くと組織の他の利用の web の道具も縛られ、導入先ごとの `official_sources` を足し続ける手間が増える)
   - [x] 鍵を発行する前に、入口の3本の script を `uv lock --script` で lock し、間接の依存を hash まで固定する。隣の `<script>.lock` を追跡下に置き、workflow は `uv run --locked --script` で起動する。`--locked` を外すと uv は PEP 723 と食い違う lock を黙って書き換えて走り、lock が無くても作らずに走る。`--locked` は lock が無いとき (rc 2) と、依存・requires-python・前へずらした exclude-newer が食い違うとき (rc 1) に止める。exclude-newer を後ろへずらした食い違いは止めずに lock のまま入れる (どれも uv 0.13.4 で確かめた)。lock が追跡下にあって PEP 723 と食い違わないことは `test_boundaries.py` の `ScriptLock` が固定する
 - [ ] 契約テストの実物の側を手で回す。対象は Messages API、GitHub の API、取得先の registry と OSV。次を実物で確かめる
   - registry の欄の名前 (npm の `dist-tags.latest`、crates の `max_stable_version`、PyPI の `project_urls`) は記憶で書いたもので、実物で確かめていない
@@ -37,16 +40,31 @@ LLM にトリアージを任せたいが、Issue の本文とコメントは外�
   - `job.workflow_repository` と `job.workflow_sha` が step の `env:` と `with:` で効くか、`inputs.config-path` のようなハイフン付きの名前をドットで読めるか
   - select は開いている Issue の全ページを本文ごと取る (tech-briefing/adapters/github_api.py の `GitHubRest.open_issues`)。開いたままの Issue の件数の実績を見てから、絞り込み (タイトルの検索や作者の指定) を設計で決める
   - triage の upload が複数ファイルのとき、artifact の中の相対パスがどうなるか
-  - anthropic のアダプタは一度も実行していない。2.7.0 の credentials の自動探索と、鍵を env に置いたときの `warn_env_static_shadows_auto_discovery` を実物の走行で確かめる
+  - anthropic のアダプタの 2.7.0 の credentials の自動探索と、鍵を env に置いたときの `warn_env_static_shadows_auto_discovery` を実物の走行で確かめる
   - 無害化した本文が GitHub 上でリンク・メンション・参照にならないこと。特に `www.` と `GH-` の直後に ZWSP を入れた形と、スキームのコロンの後に ZWSP を入れた形を、実物のコメントで確かめる
   - triage が timeout したときの `needs.triage.result` の値と post の挙動。cancelled になるなら post が skip されて印が付かず、次の run から毎回 triage を呼び直す
   - run を re-run したときに、同じ名前の artifact が衝突しないか
   - stop_reason が tool_use なのに client の道具のブロックが無い応答を API が返すか。返すなら、いまのループは assistant を最後にして送り直し、400 から api-error に化けうる
   - スキーム無しの URL (`www.` で始まる形) を web_fetch が開くか
+  - 2026-11-27の最初の導入先での run の結果。select だけの dry-run は当日の Issue が無く no-issue で終わった。続けて、前日のブリーフィングの本文とコメントを写した当日のタイトルのテスト用の Issue を立て、`dry_run` を真にして回すと、select・triage・post の3つとも success だった。テスト用の Issue は閉じた
+    - `job.workflow_repository` と `job.workflow_sha` は step の `env:` で効いた (空なら止める guard は3つの job とも発火しなかった)。`with:` でも効き、共通の仕組みの checkout が呼ばれた SHA を取った。`inputs.config-path` も設定のパスとして届いた
+    - environment の secret を呼び出し側から名前で渡す経路で、鍵が triage の job に届いた (呼び出し側のリポジトリに repository secret は0件なので、environment の側から届いた)。`submit_report` を strict の client tool にし、server tool と prompt caching と effort を同じ要求に入れた形を、API は400にせず受けた。報告は4項目 (C が1、D が3) で、`submit_report` で受け取った
+    - `allowed_domains` と矛盾しない結果だった。モデルが `official_sources` に無い github.com の URL を取りにいき、許可したドメインで代わりに確かめた。ただし `url_not_allowed` で弾かれたことの出所はモデルが書いた報告の `unreachable_sources` だけで、tool-log には呼び出しの結果が残らない。`url_not_allowed` は robots.txt などの Anthropic 側の制限でも出るので、原因を `allowed_domains` に絞れてはいない (推定)。切り分けには tool-log に道具の結果を残すことが要る (下の「最初の run で分かった残りを直すか決める」のタスク)
+    - client の道具の読み取りの制限は効いた。設定の files の外のファイル (`.claude/settings.json`) は読めなかった
+    - 1回の費用: usage は入力24、キャッシュの読み177,133、キャッシュの書き込み33,738、出力5,100、web fetch 7回、web search 1回で、単価から約$0.32
+    - triage の upload は、ファイルの共通の祖先を root にするので、artifact の中では `report.json` と `tool-log.json` がファイル名だけで並んだ。post は「dry-run のため投稿せず、本文を step summary に出しました」で終わった
+    - `warn_env_static_shadows_auto_discovery` は確かめられていない。anthropic 2.7.0 はこの警告を、自動探索できる資格情報の手がかり (ANTHROPIC_PROFILE や ANTHROPIC_CONFIG_DIR などの env か、設定のディレクトリの `active_config` のファイル) があるときだけ出す。runner にはその手がかりが無いと見られ (推定。ファイルの有無は観測していない)、この警告の経路は通っていない。警告の文面は関数名を含まないので、ログを関数名で探した0件はそもそも何も見ていない
+    - この run で答えが出たのは、この子の上の問いのうち checkout の式 (`env:` と `with:`) と config-path、upload の相対パス。開いている Issue の件数、credentials の自動探索、無害化した本文 (dry-run は投稿しない)、timeout、re-run、client の道具のブロックが無い tool_use、スキーム無しの URL は、まだ確かめていない
+- [ ] 最初の run で分かった残りを直すか決める
+  - web fetch が7回呼ばれ、`WEB_FETCH_MAX_USES` (5) を超えた。tool-log には呼び出し元の欄が無いが、web fetch の前に、その URL を `web_fetch` で取るコードを持つ code execution が並んでいたので、dynamic filtering の中からの呼び出しと見られる (推定)。docs の web fetch の Max uses の節は、code execution から呼んだ取得は、turn の中の前の要求の分として上限に数えないと書くので、`max_uses` は run 全体の上限としては効かないと読める (推定。7回が要求ごとにどう分かれたかは記録が無い)。費用の上限を効かせるのはループの上限と支出上限のほうになる。spec の「起動と費用」の節は `max_uses` も上限を効かせるものに数えているので、直すなら spec のこの1文も直す。`max_uses` の値は spec の「作り手に任せること」の節のとおり実測から決める。同じ要求の中では code execution からの取得も上限に数え、超えると code execution が error で終わる (docs の同じ節)
+  - web fetch の最初の取得がひと月前のキャッシュを返し (日付の出所はモデルが書いた報告の notes だけ)、モデルが自分で `use_cache` を偽にして取り直した (取り直しは tool-log で確かめた)。キャッシュを使わない既定にするかを決める
+  - artifact の usage に `anthropic-workspace-id` と `usage.iterations` が残らないので、run からはワークスペースと fallback の有無が分からない。tool-log の usage へ足すかを決める
+  - tool-log は道具の呼び出しの入力だけを残し、結果 (web の道具の `error_code` など) を残さない。今回の害の無い run でも tool-log には `official_sources` の外への web fetch が2回ある。spec の「有効にする前のテスト」の injection の判定 (tool-log に許した道具と行き先のほかが無い) を書いてあるとおりに当てると、害の無いふるまいでも赤になり、拒否の原因も見分けられない。結果を残すか、判定を「外から取れた結果が無いこと」に直すかを決める
 - [ ] 有効にする前のテストを、spec の「有効にする前のテスト」のとおり、最初に導入するリポジトリで回す。基準の run と入力の範囲、2回目と対照、injection (道具の制限の確かめを含む) の順。外部のツールが当日の Issue を立て始める前に行う
   - 基準の run と2回目は導入するリポジトリごとに1回ずつ、injection は共通の仕組みの SHA ごとに1回回す
   - 終わったらテスト用に立てた Issue を閉じる
 - [ ] 導入の手順の skill を apm で配る形で書く。有効にする前のテストを最初のリポジトリで1回回したあとに書く
+  - spec の「設定のファイル」の節と導入の手順の2は、組織の許可の一覧があることを前提に、`official_sources` がその部分集合かを確かめると書いている。組織の側に一覧が無いと検査は効かない (準備のタスクの子)。skill には、一覧の有無を先に見る手順として書く。spec の側は下の spec を直すタスクで追う
 - [ ] 拒否のドメインの一覧と files の glob の残りを直す
   - 拒否のドメインの一覧を広げる。いまは blogspot.com・medium.com・readthedocs.io・web.archive.org・translate.goog・s3.amazonaws.com・storage.googleapis.com・codeberg.org が通る。導入の skill に「一覧は網羅ではない」と書く
   - 設定の files の glob の `*` が `/` をまたぐ (fnmatch の挙動)。導入の skill と設定の説明にそう書くか、`/` をまたがない照合に替える
@@ -77,12 +95,13 @@ LLM にトリアージを任せたいが、Issue の本文とコメントは外�
 - [ ] spec の select の job の節を、select が criteria のファイルを読んで確かめる実装に合わせて直す。呼び出し側のリポジトリの checkout を select が使う範囲 (「設定のファイルと呼び出しの workflow のファイルだけ」) に criteria のファイルを足し、設定の誤りの列挙 (`config-error` で終わるもの) に、criteria のパスの形の誤り (絶対パス・`..`・`.`・空の segment・`.git`) と、criteria のファイルが読めないか中身が空のときを足す。glob の形の誤りに `.`・空の segment・`.git` を足す
   - 設定の誤りの列挙に、パスに NUL や UTF-8 で表せない文字を含むときと、criteria の経路のどこかが symlink のとき (指す先がリポジトリの中のふつうのファイルでも) を足す。criteria は道具の読み取りと同じ読み手 (tech-briefing/tech_briefing/repo_paths.py の `read_regular`) で読み、symlink を辿らない
   - spec の「置き場とモジュールの分け方」の「アダプタと入口のスクリプトはこのリポジトリの CI のテストから import しない」を、「実行時の依存を直にか兄弟のアダプタ経由で import するアダプタ (いまは anthropic_client・yaml_loader) は CI のテストから読まない。依存の無いアダプタは読んでよい」に直す (tech-briefing/tests/test_adapters_stdlib.py が依存の無いアダプタを読み、どれを読んでよいかは tech-briefing/tests/test_boundaries.py が ast から導いて固定する)
+- [ ] spec の「設定のファイル」の節の「組織の許可の一覧の部分集合でないと validation error になる」と導入の手順の2を、組織の側に一覧があるときだけの検査に直す (準備のタスクの子で、一覧が無いと検査が効かないことを確かめた)。spec は今回は直さず、このタスクで追う
 - [ ] spec の「実装のときに確かめること」を片付ける。解消した項目は解消として spec に書き、残る項目は実物の run で確かめる
-  - 解消: `job.workflow_repository` と `job.workflow_sha` は実在する (docs.github.com の原文で確認。GitHub Enterprise Server では使えない)。ただし step の `env:` と `with:` で効くかは上の実物の run で確かめる。docs の原文だけが根拠で、実物の run では確かめていない
-  - 解消: environment の鍵は、呼び出し側が名前で渡せば呼ばれた側の job に届く (docs.github.com の reuse-workflows に "You can pass a secret by name even if it only exists in the environment" と "the environment secret takes precedence" とある)。docs の原文だけが根拠で、実物の run では確かめていない
-  - 方法は決定、実物での確かめが残る: reusable workflow の中で呼ばれた SHA と同じコードを checkout する方法は `job.workflow_repository` と `job.workflow_sha` を使う形で、どちらかが空なら checkout の前に止める guard がある (tech-briefing/tech_briefing/workflow_def.py の `_guard_step`)。呼び出しの workflow のファイルは `github.workflow_ref` から特定する (workflow_def.py の `_select_job` の env の `TB_CALLER_WORKFLOW_REF` と、tech-briefing/bin/run_select.py の `main` が呼ぶ `jobio.caller_workflow_path`)。効くかどうかは上の「実物で走らせる」のタスクの子項目と同じ
+  - 解消: `job.workflow_repository` と `job.workflow_sha` は実在する (docs.github.com の原文で確認。GitHub Enterprise Server では使えない)。step の `env:` と `with:` で効くことは、2026-11-27の実物の run で確かめた (「実物で走らせる」のタスクの子)
+  - 解消: environment の鍵は、呼び出し側が名前で渡せば呼ばれた側の job に届く (docs.github.com の reuse-workflows に "You can pass a secret by name even if it only exists in the environment" と "the environment secret takes precedence" とある)。名前で渡す経路で鍵が triage の job に届くことを、2026-11-27の実物の run で確かめた
+  - 解消: reusable workflow の中で呼ばれた SHA と同じコードを checkout する方法は `job.workflow_repository` と `job.workflow_sha` を使う形で、どちらかが空なら checkout の前に止める guard がある (tech-briefing/tech_briefing/workflow_def.py の `_guard_step`)。呼び出しの workflow のファイルは `github.workflow_ref` から特定する (workflow_def.py の `_select_job` の env の `TB_CALLER_WORKFLOW_REF` と、tech-briefing/bin/run_select.py の `main` が呼ぶ `jobio.caller_workflow_path`)。2026-11-27の実物の run で効いた (「実物で走らせる」のタスクの子)
   - 残り: web_fetch が許可したドメインからほかのドメインへのリダイレクトを追うか。実装は `allowed_domains` に `official_sources` をそのまま渡すだけで、件数を絞る処理も上限の扱いも持たない (tech-briefing/tech_briefing/tools.py の `ToolBox.server_tools`)。リダイレクトと件数の上限は docs か実物で確かめる
-  - 方法は決定、実物での確かめが残る: `submit_report` は strict の client tool にし (tech-briefing/tech_briefing/tools.py の `_tool`)、server tool と prompt caching を同じ要求に入れ、`output_config` は `effort` だけで `format` を使わない (どちらも tech-briefing/tech_briefing/triage.py の `build_params`)。この形を API が400にしないかは実物の run で確かめる
+  - 解消: `submit_report` は strict の client tool にし (tech-briefing/tech_briefing/tools.py の `_tool`)、server tool と prompt caching を同じ要求に入れ、`output_config` は `effort` だけで `format` を使わない (どちらも tech-briefing/tech_briefing/triage.py の `build_params`)。この形を API は400にせず受けた (2026-11-27の実物の run、「実物で走らせる」のタスクの子)
   - web search と `output_config.format` を同じ要求に入れると400になるかの問いは、format を使わない設計にしたので確かめない
   - 方法は決定、実物での確かめが残る: advisory は OSV の `/v1/vulns/<ID>` を引き (tech-briefing/tech_briefing/tools.py の `ToolBox._advisory`)、リリースノートは GitHub の REST の releases を `Authorization` を付けずに引く (tools.py の `ToolBox._release_notes`)。GHSA / CVE / RUSTSEC を実際に引けるか、認証なしで回せるかは上の実物の契約テストで確かめる
   - 残り: web search の dynamic filtering を持つ最新の版の名前。実装は `web_search_20260209` を使っている (tech-briefing/tech_briefing/constants.py の `WEB_SEARCH_TOOL`) が、それが最新かどうかは docs で確かめる
