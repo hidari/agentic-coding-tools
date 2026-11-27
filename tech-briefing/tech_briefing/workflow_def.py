@@ -55,6 +55,7 @@ RETENTION_DAYS = 7
 
 MECH_REPO_EXPR = "${{ job.workflow_repository }}"
 MECH_SHA_EXPR = "${{ job.workflow_sha }}"
+REPOSITORY_EXPR = "${{ github.repository }}"
 
 
 def _posted_expr(result_expr: str) -> str:
@@ -63,7 +64,8 @@ def _posted_expr(result_expr: str) -> str:
 
 
 def _script(name: str) -> str:
-    return f"uv run --script tech-briefing/bin/run_{name}.py"
+    # --locked が無いと、uv は古い lock を黙って書き換えて走る (uv 0.13.4 で確かめた)
+    return f"uv run --locked --script tech-briefing/bin/run_{name}.py"
 
 
 def _guard_step() -> dict:
@@ -122,10 +124,7 @@ def _run(name: str, env: dict) -> dict:
     }
 
 
-# env には入口か SDK が読む鍵だけを置く (読まない鍵は配線の意図を誤読させる。test_entrypoints が一致を見る)
-REPOSITORY_EXPR = "${{ github.repository }}"
-
-
+# 以下の job の env には入口か SDK が読む鍵だけを置く (読まない鍵は配線の意図を誤読させる。test_entrypoints が一致を見る)
 def _select_job() -> dict:
     env = {
         "TB_REPOSITORY": REPOSITORY_EXPR,
